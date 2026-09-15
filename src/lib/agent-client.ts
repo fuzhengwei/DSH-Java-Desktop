@@ -2,7 +2,6 @@ import { fetch } from "@tauri-apps/plugin-http";
 import type {
   ApiEnvelope,
   ConversationMessage,
-  PluginSummary,
   SessionSummary,
   ModelSetting,
   AvailableModel,
@@ -75,11 +74,6 @@ export async function listWorkspaces(port: number): Promise<WorkspaceEntry[]> {
   return request<WorkspaceEntry[]>(port, "/api/agent/workspaces");
 }
 
-export async function listProjectDirectories(port: number, path?: string): Promise<string[]> {
-  const query = path ? `?path=${encodeURIComponent(path)}` : "";
-  return request<string[]>(port, `/api/agent/workspaces/list${query}`);
-}
-
 export async function createWorkspace(port: number, name: string): Promise<WorkspaceEntry[]> {
   return request<WorkspaceEntry[]>(port, "/api/agent/workspaces", {
     method: "POST",
@@ -110,10 +104,6 @@ export async function resolveRuntimeApproval(
     method: "POST",
     body: JSON.stringify({ verdict }),
   });
-}
-
-export async function listPlugins(port: number): Promise<PluginSummary[]> {
-  return request<PluginSummary[]>(port, "/api/harness/plugins");
 }
 
 export async function listModelSettings(port: number): Promise<ModelSetting[]> {

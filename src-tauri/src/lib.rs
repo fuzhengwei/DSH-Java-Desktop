@@ -24,6 +24,12 @@ struct GitBranchState {
     detached: bool,
 }
 
+#[derive(Clone, Serialize)]
+struct WorkspaceSelection {
+    name: String,
+    path: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct AgentRuntimeRecord {
     pid: u32,
@@ -244,7 +250,7 @@ fn start_agent(
         .map_err(|error| format!("打开日志文件失败：{error}"))?;
 
     let database_url = format!(
-        "jdbc:h2:file:{};MODE=MySQL;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
+        "jdbc:h2:file:{};MODE=MySQL;CASE_INSENSITIVE_IDENTIFIERS=TRUE;AUTO_SERVER=TRUE",
         data_dir.join("deepseek-harness-java").display()
     );
 
@@ -334,12 +340,25 @@ fn project_git_branch(path: String) -> Result<GitBranchState, String> {
     })
 }
 
+#[tauri::command]
+fn pick_local_directory() -> Option<WorkspaceSelection> {
+    let selected = rfd::FileDialog::new()
+        .set_title("选择本地项目目录")
+        .pick_folder()?;
+    let path = selected.to_string_lossy().to_string();
+    let name = selected
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.clone());
+    Some(WorkspaceSelection { name, path })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, pick_local_directory])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

@@ -13,14 +13,14 @@ Tauri Rust Shell  --spawn-->  deepseek-harness-java-app.jar
         |                          |
         |        HTTP/SSE + standalone H2 profile
         v                          v
-    Conversation / Approvals / Plugins / Models
+    Conversation / Approvals / Models
 ```
 
 ## 可以直接启动 JAR 吗？
 
 可以，而且这是当前最合适的复用方式，但前提是必须由 Tauri Rust 层托管进程，而不是前端直接执行：
 
-1. `deepseek-harness-java` 的 `/api/agent/stream`、会话、审批、插件、模型等 Web 端能力都在 Spring Boot JAR 内。
+1. `deepseek-harness-java` 的 `/api/agent/stream`、会话、审批、模型等 Web 端能力都在 Spring Boot JAR 内。
 2. `standalone` profile 使用本地 H2 数据库，桌面场景不要求先部署 MySQL。
 3. Tauri Rust 层选择空闲端口、捕获日志、记录进程状态，退出时停止子进程，避免前端暴露执行命令的安全面。
 4. 运行记录写入 `<app-data-dir>/agent-runtime.json`；如果上一次桌面端异常退出，下一次启动会先清理遗留 JAR 进程，避免 H2 文件锁冲突。
@@ -54,7 +54,7 @@ npm run agent:prepare
 npm run tauri build
 ```
 
-当前桌面版包含白色 Codex 风格工作台、应用启动时自动拉起 JAR、项目创建/选择/项目下对话、消息流式输入、模型配置/同步/激活/删除、运行期工具审批和插件面板入口。设置、审批与插件入口统一放在左下角。
+当前桌面版保持最小核心：应用启动时自动拉起 JAR、项目创建/选择/项目下对话、消息流式输入、模型配置/同步/激活/删除，以及运行期工具审批。设置入口放在左下角；工具审批以对话区内的紧凑提示条处理。
 
 ## 模型配置
 

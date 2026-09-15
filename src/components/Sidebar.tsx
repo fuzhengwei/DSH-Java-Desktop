@@ -1,20 +1,14 @@
 import { useMemo, useState } from "react";
 import type { SessionSummary, WorkspaceEntry } from "../types";
 import {
-  BellIcon,
   ChevronIcon,
   ChatIcon,
-  ClockIcon,
   FolderIcon,
-  GitBranchIcon,
   PlusIcon,
-  SearchIcon,
   SettingsIcon,
-  ShieldIcon,
-  PluginIcon,
 } from "./icons";
 
-export type WorkspaceView = "conversation" | "approvals" | "plugins" | "settings" | "pulls" | "scheduled";
+export type WorkspaceView = "conversation" | "settings";
 
 type SidebarProps = {
   activeView: WorkspaceView;
@@ -23,8 +17,6 @@ type SidebarProps = {
   projects: WorkspaceEntry[];
   sessions: SessionSummary[];
   sessionProjectMap: Record<string, string>;
-  approvals: RuntimeApproval[];
-  plugins: PluginSummary[];
   creatingProject: boolean;
   projectModalOpen: boolean;
   projectName: string;
@@ -34,9 +26,9 @@ type SidebarProps = {
   onSelectSession: (sessionId: string) => void;
   onProjectModalChange: (open: boolean, name?: string) => void;
   onCreateProject: () => void;
+  onPickLocalProject: () => void;
+  onRemoveLocalProject: (path: string) => void;
 };
-
-import type { PluginSummary, RuntimeApproval } from "../types";
 
 function sessionTitle(session: SessionSummary): string {
   return session.title || session.lastMessage || session.agentId || session.sessionId || "未命名对话";
@@ -53,8 +45,6 @@ export default function Sidebar({
   projects,
   sessions,
   sessionProjectMap,
-  approvals,
-  plugins,
   creatingProject,
   projectModalOpen,
   projectName: projectModalName,
@@ -64,6 +54,8 @@ export default function Sidebar({
   onSelectSession,
   onProjectModalChange,
   onCreateProject,
+  onPickLocalProject,
+  onRemoveLocalProject,
 }: SidebarProps) {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
 
@@ -94,29 +86,12 @@ export default function Sidebar({
           <div className="brand-title">DSH Desktop <span className="brand-chevron">⌄</span></div>
           <div className="brand-subtitle">cn.xiaofuge</div>
         </div>
-        <div className="brand-actions">
-          <button className="icon-button" title="搜索"><SearchIcon className="icon-16" /></button>
-          <button className="icon-button" title="通知"><BellIcon className="icon-16" /></button>
-        </div>
       </div>
 
       <nav className="nav-group" aria-label="主导航">
         <button className={activeView === "conversation" ? "nav-item active" : "nav-item"} onClick={() => onNewConversation()}>
           <ChatIcon className="nav-icon" />
           <span>新对话</span>
-        </button>
-        <button className="nav-item" onClick={() => onViewChange("pulls")}>
-          <GitBranchIcon className="nav-icon" />
-          <span>拉取请求</span>
-        </button>
-        <button className="nav-item" onClick={() => onViewChange("scheduled")}>
-          <ClockIcon className="nav-icon" />
-          <span>已安排</span>
-        </button>
-        <button className={activeView === "plugins" ? "nav-item active" : "nav-item"} onClick={() => onViewChange("plugins")}>
-          <PluginIcon className="nav-icon" />
-          <span>插件</span>
-          {plugins.length > 0 ? <span className="nav-count">{plugins.length}</span> : null}
         </button>
       </nav>
 
@@ -152,6 +127,11 @@ export default function Sidebar({
                   <button className="icon-button" onClick={() => onNewConversation(project)} title="新建对话">
                     <PlusIcon className="icon-15" />
                   </button>
+                  {project.local ? (
+                    <button className="icon-button remove-project" onClick={() => onRemoveLocalProject(project.path)} title="移除本地项目">
+                      ×
+                    </button>
+                  ) : null}
                 </div>
 
                 {expanded ? (
@@ -204,11 +184,6 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
-        <button className={activeView === "approvals" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("approvals")}>
-          <ShieldIcon className="icon-16" />
-          <span>审批</span>
-          {approvals.length > 0 ? <span className="nav-count">{approvals.length}</span> : null}
-        </button>
         <button className={activeView === "settings" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("settings")}>
           <SettingsIcon className="icon-16" />
           <span>设置</span>
@@ -218,9 +193,9 @@ export default function Sidebar({
 
       {projectModalOpen ? (
         <div className="modal-overlay" onClick={() => onProjectModalChange(false)}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal project-modal" onClick={(event) => event.stopPropagation()}>
             <h3>新建项目</h3>
-            <p>项目会在智能体服务的 workspaces 目录下创建。</p>
+            <p>可以创建新的智能体工作区，也可以直接绑定本地已有工程。</p>
             <input
               value={projectModalName}
               autoFocus
@@ -232,10 +207,13 @@ export default function Sidebar({
               }}
             />
             <div className="modal-actions">
-              <button className="ghost-action" onClick={() => onProjectModalChange(false)}>取消</button>
-              <button className="primary-action compact" onClick={onCreateProject} disabled={creatingProject || !projectModalName.trim()}>
-                {creatingProject ? "创建中…" : "创建"}
-              </button>
+              <button className="ghost-action" onClick={onPickLocalProject}>选择本地项目</button>
+              <div className="modal-action-group">
+                <button className="ghost-action" onClick={() => onProjectModalChange(false)}>取消</button>
+                <button className="primary-action compact" onClick={onCreateProject} disabled={creatingProject || !projectModalName.trim()}>
+                  {creatingProject ? "创建中…" : "创建"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

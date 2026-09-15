@@ -9,11 +9,6 @@ export type AgentServiceState = {
   message: string;
 };
 
-export type GitBranchState = {
-  branch: string;
-  detached: boolean;
-};
-
 export type ApiEnvelope<T> = {
   code?: string;
   info?: string;
@@ -32,13 +27,27 @@ export type SessionSummary = {
 export type WorkspaceEntry = {
   name: string;
   path: string;
+  local?: boolean;
 };
 
 export type ConversationMessage = {
   role: string;
   content: string;
   reasoning?: string;
+  toolName?: string;
+  callId?: string;
+  arguments?: Record<string, unknown>;
+  result?: string;
+  status?: string;
+  durationMs?: number;
   createdAt?: string;
+};
+
+export type AgentActivity = {
+  id: string;
+  label: string;
+  detail?: string;
+  state: "running" | "done" | "error";
 };
 
 export type PendingApproval = {
@@ -97,11 +106,4 @@ export type ModelDraft = {
   apiKeyRef: string;
   protocol: string;
   enabled: boolean;
-};
-
-export type PluginSummary = {
-  pluginId?: string;
-  name?: string;
-  version?: string;
-  status?: string;
 };

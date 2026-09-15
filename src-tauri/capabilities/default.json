@@ -7,9 +7,7 @@
     "core:default",
     {
       "identifier": "http:default",
-      "scope": {
-        "allow": [{ "url": "http://127.0.0.1:*/*" }]
-      }
+      "allow": [{ "url": "http://127.0.0.1:*/*" }]
     }
   ]
 }
