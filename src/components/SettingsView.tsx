@@ -21,6 +21,7 @@ type SettingsViewProps = {
   onDelete: (channelCode: string) => void;
   onEdit: (model: ModelSetting) => void;
   onToggleModel: (model: ModelSetting) => void;
+  onReconnect: () => void;
 };
 
 export default function SettingsView({
@@ -43,6 +44,7 @@ export default function SettingsView({
   onDelete,
   onEdit,
   onToggleModel,
+  onReconnect,
 }: SettingsViewProps) {
   const [showForm, setShowForm] = useState(false);
   const modelOptions = Array.from(new Set([
@@ -78,6 +80,13 @@ export default function SettingsView({
               <h2>智能体服务连接</h2>
               <p>服务由桌面端托管。模型渠道、API Key 和模型同步在「模型设置」中管理。</p>
             </div>
+            <button
+              className="ghost-action compact"
+              onClick={onReconnect}
+              disabled={serviceStatus === "starting"}
+            >
+              {serviceStatus === "starting" ? "连接中…" : "重新连接"}
+            </button>
           </div>
           <div className="settings-runtime-strip standalone">
             <div className={`settings-runtime-dot ${serviceStatus === "running" ? "online" : "offline"}`} />

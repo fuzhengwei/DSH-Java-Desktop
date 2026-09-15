@@ -2,10 +2,12 @@ import { useMemo, useState } from "react";
 import type { SessionSummary, WorkspaceEntry } from "../types";
 import {
   ChevronIcon,
-  ChatIcon,
   FolderIcon,
+  FolderPlusIcon,
+  EditIcon,
   PlusIcon,
   SettingsIcon,
+  XIcon,
 } from "./icons";
 
 export type WorkspaceView = "conversation" | "settings";
@@ -20,14 +22,25 @@ type SidebarProps = {
   creatingProject: boolean;
   projectModalOpen: boolean;
   projectName: string;
+  editingProject?: {
+    path: string;
+    name: string;
+    local?: boolean;
+  } | null;
+  savingProject?: boolean;
   onViewChange: (view: WorkspaceView) => void;
   onSelectProject: (project: WorkspaceEntry) => void;
+  onSelectDefaultWorkspace: () => void;
   onNewConversation: (project?: WorkspaceEntry) => void;
   onSelectSession: (sessionId: string) => void;
-  onProjectModalChange: (open: boolean, name?: string) => void;
+  onProjectModalChange: (open: boolean, name?: string, editingProject?: SidebarProps["editingProject"]) => void;
   onCreateProject: () => void;
-  onPickLocalProject: () => void;
-  onRemoveLocalProject: (path: string) => void;
+  onPickLocalProject: (parentPath: string) => void;
+  onAddLocalProject: (parentPath: string) => void;
+  onEditProject: (project: WorkspaceEntry) => void;
+  onRenameProject: (name: string) => void;
+  onRemoveProject: (project: WorkspaceEntry) => void;
+  onRemoveLocalProject: (project: WorkspaceEntry) => void;
 };
 
 function sessionTitle(session: SessionSummary): string {
@@ -36,6 +49,19 @@ function sessionTitle(session: SessionSummary): string {
 
 function projectName(project: WorkspaceEntry): string {
   return project.name || project.path.split("/").filter(Boolean).pop() || "项目";
+}
+
+function sessionTime(session: SessionSummary): string {
+  const value = session.updatedAt || session.createdAt;
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
 export default function Sidebar({
@@ -48,13 +74,20 @@ export default function Sidebar({
   creatingProject,
   projectModalOpen,
   projectName: projectModalName,
+  editingProject,
+  savingProject,
   onViewChange,
   onSelectProject,
+  onSelectDefaultWorkspace,
   onNewConversation,
   onSelectSession,
   onProjectModalChange,
   onCreateProject,
   onPickLocalProject,
+  onAddLocalProject,
+  onEditProject,
+  onRenameProject,
+  onRemoveProject,
   onRemoveLocalProject,
 }: SidebarProps) {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
@@ -62,7 +95,7 @@ export default function Sidebar({
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, SessionSummary[]>();
     for (const session of sessions) {
-      const id = session.agentId || session.sessionId || "";
+      const id = session.sessionId || session.agentId || "";
       const projectPath = sessionProjectMap[id] || "__unassigned__";
       const list = groups.get(projectPath) || [];
       list.push(session);
@@ -70,6 +103,24 @@ export default function Sidebar({
     }
     return groups;
   }, [sessionProjectMap, sessions]);
+
+  const groupedLocalProjects = useMemo(() => {
+    const groups = new Map<string, WorkspaceEntry[]>();
+    for (const project of projects) {
+      if (!project.local || !project.parentPath) continue;
+      const list = groups.get(project.parentPath) || [];
+      list.push(project);
+      groups.set(project.parentPath, list);
+    }
+    return groups;
+    }, [projects]);
+
+  const topLevelProjects = useMemo(() => (
+    projects.filter((project) => !project.local || !project.parentPath)
+  ), [projects]);
+  const editingProjectChildren = editingProject
+    ? groupedLocalProjects.get(editingProject.path) || []
+    : [];
 
   const isProjectExpanded = (path: string, hasSessions: boolean) => {
     if (path === activeProjectPath) return true;
@@ -80,17 +131,19 @@ export default function Sidebar({
   const unassignedSessions = groupedSessions.get("__unassigned__") || [];
   return (
     <aside className="sidebar">
-      <div className="brand">
+      <div className="brand" title="DSH Java Desktop">
         <img className="brand-mark" src="/dsh-icon.png" alt="DSH" />
         <div>
-          <div className="brand-title">DSH Desktop <span className="brand-chevron">⌄</span></div>
-          <div className="brand-subtitle">cn.xiaofuge</div>
+          <div className="brand-title">
+            DSH
+          </div>
+          <div className="brand-subtitle">Java Desktop</div>
         </div>
       </div>
 
       <nav className="nav-group" aria-label="主导航">
-        <button className={activeView === "conversation" ? "nav-item active" : "nav-item"} onClick={() => onNewConversation()}>
-          <ChatIcon className="nav-icon" />
+        <button className="new-chat-button" title="开始新对话" aria-label="开始新对话" onClick={() => onNewConversation()}>
+          <PlusIcon className="icon-14" />
           <span>新对话</span>
         </button>
       </nav>
@@ -103,13 +156,14 @@ export default function Sidebar({
           </button>
         </div>
         <div className="project-list">
-          {projects.length === 0 ? (
+          {topLevelProjects.length === 0 ? (
             <div className="empty-note">还没有项目。创建后可以按项目组织对话。</div>
           ) : null}
 
-          {projects.map((project) => {
+          {topLevelProjects.map((project) => {
             const projectSessions = groupedSessions.get(project.path) || [];
             const expanded = isProjectExpanded(project.path, projectSessions.length > 0);
+            const childProjects = groupedLocalProjects.get(project.path) || [];
             return (
               <div key={project.path} className="project-node">
                 <div className={project.path === activeProjectPath ? "project-row active" : "project-row"}>
@@ -127,18 +181,45 @@ export default function Sidebar({
                   <button className="icon-button" onClick={() => onNewConversation(project)} title="新建对话">
                     <PlusIcon className="icon-15" />
                   </button>
-                  {project.local ? (
-                    <button className="icon-button remove-project" onClick={() => onRemoveLocalProject(project.path)} title="移除本地项目">
-                      ×
-                    </button>
-                  ) : null}
+                  <button className="icon-button add-project" onClick={() => onAddLocalProject(project.path)} title="添加工程">
+                    <FolderPlusIcon className="icon-14" />
+                  </button>
+                  <button className="icon-button" onClick={() => onEditProject(project)} title="编辑项目">
+                    <EditIcon className="icon-14" />
+                  </button>
+                  <button className="icon-button remove-project" onClick={() => onRemoveProject(project)} title="删除项目">
+                    <XIcon className="icon-14" />
+                  </button>
+                  {projectSessions.length > 0 ? <span className="nav-count">{projectSessions.length}</span> : null}
                 </div>
+
+                {childProjects.length > 0 ? (
+                  <div className="child-project-list">
+                    {childProjects.map((childProject) => (
+                      <div
+                        key={childProject.path}
+                        className={childProject.path === activeProjectPath ? "child-project-row active" : "child-project-row"}
+                      >
+                        <button className="project-main" onClick={() => onSelectProject(childProject)} title={childProject.path}>
+                          <FolderIcon className="icon-14" />
+                          <span>{projectName(childProject)}</span>
+                        </button>
+                        <button className="icon-button" onClick={() => onEditProject(childProject)} title="编辑工程">
+                          <EditIcon className="icon-12" />
+                        </button>
+                        <button className="icon-button remove-project" onClick={() => onRemoveLocalProject(childProject)} title="移除工程">
+                          <XIcon className="icon-14" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
 
                 {expanded ? (
                   <div className="project-sessions">
                     {projectSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
                     {projectSessions.map((session) => {
-                      const id = session.agentId || session.sessionId || "";
+                      const id = session.sessionId || session.agentId || "";
                       return (
                         <button
                           key={id}
@@ -146,6 +227,7 @@ export default function Sidebar({
                           onClick={() => onSelectSession(id)}
                         >
                           <span className="session-title">{sessionTitle(session)}</span>
+                          {sessionTime(session) ? <span className="session-time">{sessionTime(session)}</span> : null}
                         </button>
                       );
                     })}
@@ -155,31 +237,39 @@ export default function Sidebar({
             );
           })}
 
-          {unassignedSessions.length > 0 ? (
-            <div className="project-node">
-              <div className={activeProjectPath === "" ? "project-row active" : "project-row"}>
-                <button className="project-expander" onClick={() => setExpandedProjects((current) => ({ ...current, __unassigned__: !expandedProjects.__unassigned__ }))}>
+          <div className="project-node">
+            <div className={activeProjectPath === "" && activeView === "conversation" ? "project-row active" : "project-row"}>
+              {unassignedSessions.length > 0 ? (
+                <button
+                  className="project-expander"
+                  onClick={() => setExpandedProjects((current) => ({ ...current, __unassigned__: !expandedProjects.__unassigned__ }))}
+                  title={expandedProjects.__unassigned__ ? "折叠" : "展开"}
+                >
                   <ChevronIcon className={`icon-14 chevron ${expandedProjects.__unassigned__ ? "expanded" : ""}`} />
                 </button>
-                <button className="project-main" onClick={() => onNewConversation()}>
-                  <FolderIcon className="icon-16" />
-                  <span>默认工作区</span>
-                </button>
-              </div>
-              {expandedProjects.__unassigned__ ? (
-                <div className="project-sessions">
-                  {unassignedSessions.map((session) => {
-                    const id = session.agentId || session.sessionId || "";
-                    return (
-                      <button key={id} className={id === activeSessionId ? "session-item active" : "session-item"} onClick={() => onSelectSession(id)}>
-                        <span className="session-title">{sessionTitle(session)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
+              ) : (
+                <span className="project-expander placeholder" aria-hidden="true" />
+              )}
+              <button className="project-main" onClick={onSelectDefaultWorkspace} title="切换到默认工作区">
+                <FolderIcon className="icon-16" />
+                <span>默认工作区</span>
+              </button>
+              {unassignedSessions.length > 0 ? <span className="nav-count">{unassignedSessions.length}</span> : null}
             </div>
-          ) : null}
+            {expandedProjects.__unassigned__ ? (
+              <div className="project-sessions">
+                {unassignedSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
+                {unassignedSessions.map((session) => {
+                  const id = session.sessionId || session.agentId || "";
+                  return (
+                    <button key={id} className={id === activeSessionId ? "session-item active" : "session-item"} onClick={() => onSelectSession(id)}>
+                      <span className="session-title">{sessionTitle(session)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -194,24 +284,57 @@ export default function Sidebar({
       {projectModalOpen ? (
         <div className="modal-overlay" onClick={() => onProjectModalChange(false)}>
           <div className="modal project-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>新建项目</h3>
-            <p>可以创建新的智能体工作区，也可以直接绑定本地已有工程。</p>
+            <h3>{editingProject ? "编辑项目" : "新建项目"}</h3>
+            <p>{editingProject ? "修改名称后保存；本地工程仅修改显示名，不会移动磁盘目录。" : "创建新的智能体项目；创建后可在项目下添加多个本地工程文件夹。"}</p>
             <input
               value={projectModalName}
               autoFocus
               placeholder="例如：mall-admin"
               onChange={(event) => onProjectModalChange(true, event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter") onCreateProject();
+                if (event.key === "Enter") (editingProject ? onRenameProject(projectModalName) : onCreateProject());
                 if (event.key === "Escape") onProjectModalChange(false);
               }}
             />
+            {editingProjectChildren.length > 0 ? (
+              <div className="modal-child-project-list" aria-label="已选工程列表">
+                {editingProjectChildren.map((childProject) => (
+                  <div
+                    key={childProject.path}
+                    className={childProject.path === activeProjectPath ? "child-project-row active" : "child-project-row"}
+                    title={childProject.path}
+                  >
+                    <button className="project-main" onClick={() => onSelectProject(childProject)}>
+                      <FolderIcon className="icon-14" />
+                      <span>{projectName(childProject)}</span>
+                    </button>
+                    <button
+                      className="icon-button remove-project"
+                      onClick={() => onRemoveLocalProject(childProject)}
+                      title="移除工程"
+                      aria-label={`移除 ${projectName(childProject)}`}
+                    >
+                      <XIcon className="icon-14" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
             <div className="modal-actions">
-              <button className="ghost-action" onClick={onPickLocalProject}>选择本地项目</button>
+              <button
+                className="ghost-action"
+                onClick={() => onPickLocalProject(editingProject?.path || activeProjectPath)}
+              >
+                选择当前项目工程
+              </button>
               <div className="modal-action-group">
                 <button className="ghost-action" onClick={() => onProjectModalChange(false)}>取消</button>
-                <button className="primary-action compact" onClick={onCreateProject} disabled={creatingProject || !projectModalName.trim()}>
-                  {creatingProject ? "创建中…" : "创建"}
+                <button
+                  className="primary-action compact"
+                  onClick={() => (editingProject ? onRenameProject(projectModalName) : onCreateProject())}
+                  disabled={creatingProject || savingProject || !projectModalName.trim()}
+                >
+                  {creatingProject || savingProject ? "保存中…" : editingProject ? "保存" : "创建"}
                 </button>
               </div>
             </div>

@@ -1,6 +1,11 @@
 export type ServiceStatus = "stopped" | "running" | "starting" | "stopping";
 
-export type ApprovalMode = "REQUEST_APPROVAL" | "AUTO_APPROVE" | "FULL_OPEN";
+export type ApprovalMode =
+  | "REQUEST_APPROVAL"
+  | "AUTO_APPROVE"
+  | "FULL_OPEN";
+
+export type ReasoningEffort = "low" | "medium" | "high";
 
 export type AgentServiceState = {
   status: string;
@@ -20,6 +25,7 @@ export type SessionSummary = {
   sessionId?: string;
   title?: string;
   lastMessage?: string;
+  modelCode?: string;
   updatedAt?: string;
   createdAt?: string;
 };
@@ -28,6 +34,7 @@ export type WorkspaceEntry = {
   name: string;
   path: string;
   local?: boolean;
+  parentPath?: string;
 };
 
 export type ConversationMessage = {

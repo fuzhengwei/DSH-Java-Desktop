@@ -25,6 +25,12 @@ struct GitBranchState {
 }
 
 #[derive(Clone, Serialize)]
+struct GitBranchesState {
+    current: String,
+    branches: Vec<String>,
+}
+
+#[derive(Clone, Serialize)]
 struct WorkspaceSelection {
     name: String,
     path: String,
@@ -341,16 +347,88 @@ fn project_git_branch(path: String) -> Result<GitBranchState, String> {
 }
 
 #[tauri::command]
-fn pick_local_directory() -> Option<WorkspaceSelection> {
-    let selected = rfd::FileDialog::new()
+fn project_git_branches(path: String) -> Result<GitBranchesState, String> {
+    read_git_branches(&path)
+}
+
+#[tauri::command]
+fn switch_project_git_branch(path: String, branch: String) -> Result<GitBranchesState, String> {
+    if !PathBuf::from(&path).is_dir() {
+        return Err(format!("项目目录不存在：{path}"));
+    }
+    if branch.trim().is_empty() || branch.starts_with('-') {
+        return Err("无效的 Git 分支".to_string());
+    }
+
+    let checkout = Command::new("git")
+        .args(["-C", &path, "checkout", &branch])
+        .output()
+        .map_err(|error| format!("切换 Git 分支失败：{error}"))?;
+    if !checkout.status.success() {
+        return Err(String::from_utf8_lossy(&checkout.stderr).trim().to_string());
+    }
+
+    read_git_branches(&path)
+}
+
+fn read_git_branches(path: &str) -> Result<GitBranchesState, String> {
+    if !PathBuf::from(path).is_dir() {
+        return Err(format!("项目目录不存在：{path}"));
+    }
+
+    let inside = Command::new("git")
+        .args(["-C", path, "rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map_err(|error| format!("读取 Git 状态失败：{error}"))?;
+    if !inside.status.success() {
+        return Ok(GitBranchesState { current: String::new(), branches: Vec::new() });
+    }
+
+    let branch_output = Command::new("git")
+        .args(["-C", path, "branch", "--show-current"])
+        .output()
+        .map_err(|error| format!("读取 Git 分支失败：{error}"))?;
+    let current = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+    if current.is_empty() {
+        return Ok(GitBranchesState { current: String::new(), branches: Vec::new() });
+    }
+
+    let list_output = Command::new("git")
+        .args(["-C", path, "branch", "--format=%(refname:short)"])
+        .output()
+        .map_err(|error| format!("读取 Git 分支列表失败：{error}"))?;
+    if !list_output.status.success() {
+        return Err(String::from_utf8_lossy(&list_output.stderr).trim().to_string());
+    }
+
+    let mut branches = String::from_utf8_lossy(&list_output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    branches.sort();
+    branches.dedup();
+
+    Ok(GitBranchesState { current, branches })
+}
+
+#[tauri::command]
+fn pick_local_directory() -> Vec<WorkspaceSelection> {
+    rfd::FileDialog::new()
         .set_title("选择本地项目目录")
-        .pick_folder()?;
-    let path = selected.to_string_lossy().to_string();
-    let name = selected
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| path.clone());
-    Some(WorkspaceSelection { name, path })
+        .pick_folders()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|selected| {
+            let path = selected.to_string_lossy().to_string();
+            let name = selected
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            WorkspaceSelection { name, path }
+        })
+        .collect()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -358,7 +436,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, pick_local_directory])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, pick_local_directory])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

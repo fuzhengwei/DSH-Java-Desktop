@@ -81,6 +81,19 @@ export async function createWorkspace(port: number, name: string): Promise<Works
   });
 }
 
+export async function renameWorkspace(port: number, name: string, newName: string): Promise<WorkspaceEntry[]> {
+  return request<WorkspaceEntry[]>(port, `/api/agent/workspaces/${encodeURIComponent(name)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName }),
+  });
+}
+
+export async function deleteWorkspace(port: number, name: string): Promise<WorkspaceEntry[]> {
+  return request<WorkspaceEntry[]>(port, `/api/agent/workspaces/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
 export async function listMessages(
   port: number,
   sessionId: string,
@@ -167,6 +180,7 @@ export async function streamAgentMessage(
     message: string;
     channelCode?: string;
     approvalMode?: string;
+    reasoningEffort?: string;
     cwd?: string;
   },
   onEvent: (event: StreamEvent) => void,
