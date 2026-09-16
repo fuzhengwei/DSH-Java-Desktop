@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ArrowLeftIcon, ShieldIcon } from "./icons";
+import PluginsSettings from "./PluginsSettings";
 import type {
   AgentServiceState,
   ApprovalMode,
@@ -9,7 +10,7 @@ import type {
   ReasoningEffort,
 } from "../types";
 
-export type SettingsSection = "models" | "service" | "preferences";
+export type SettingsSection = "models" | "service" | "preferences" | "plugins";
 
 type SettingsViewProps = {
   service: AgentServiceState | null;
@@ -108,6 +109,7 @@ export default function SettingsView({
 
   const sections: Array<{ id: SettingsSection; title: string; description: string; badge?: string }> = [
     { id: "models", title: "模型设置", description: "渠道、API Key 与激活", badge: String(modelSettings.length) },
+    { id: "plugins", title: "插件管理", description: "安装、启停与参数配置" },
     { id: "service", title: "智能体服务", description: "连接状态与本地 Runtime" },
     { id: "preferences", title: "对话偏好", description: "审批、沙箱与推理" },
   ];
@@ -144,6 +146,10 @@ export default function SettingsView({
         </nav>
 
         <main className="settings-content">
+          {activeSection === "plugins" ? (
+            <PluginsSettings servicePort={service?.port ?? null} />
+          ) : null}
+
           {activeSection === "service" ? (
             <section className="settings-panel service-panel">
               <div className="settings-panel-head">

@@ -28,6 +28,7 @@ export type SessionSummary = {
   modelCode?: string;
   updatedAt?: string;
   createdAt?: string;
+  workspaceId?: string;
 };
 
 export type WorkspaceEntry = {
@@ -102,6 +103,44 @@ export type ChannelPreset = {
   authScheme?: string;
   modelSuggestions?: string[];
   regionGroup?: string;
+};
+
+export type PluginStatus =
+  | "REGISTERED"
+  | "ACTIVE"
+  | "FAILED"
+  | "DISABLED"
+  | "UNINSTALLED";
+
+export type HarnessPlugin = {
+  pluginId: string;
+  displayName?: string;
+  pluginVersion?: string;
+  runtimeType?: string;
+  installMode?: string;
+  sourcePath?: string;
+  entrypoint?: string;
+  status?: PluginStatus;
+  installedAt?: string;
+};
+
+export type PluginCandidate = {
+  valid?: boolean;
+  pluginId?: string;
+  displayName?: string;
+  pluginVersion?: string;
+  runtimeType?: string;
+  sourcePath?: string;
+  entrypoint?: string;
+  artifactId?: string;
+  author?: string;
+  description?: string;
+  message?: string;
+};
+
+export type PluginConfigItem = {
+  key?: string;
+  value?: string;
 };
 
 export type ModelDraft = {

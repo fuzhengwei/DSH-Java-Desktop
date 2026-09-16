@@ -24,6 +24,8 @@ type ConversationViewProps = {
   onCreateSession?: () => void;
   onDraftChange: (value: string) => void;
   onSend: () => void;
+  sentHistory: string[];
+  onHistoryEntry: (value: string) => void;
   onStopGeneration: () => void;
   approvalMode: ApprovalMode;
   onApprovalModeChange: (mode: ApprovalMode) => void;
@@ -225,6 +227,8 @@ export default function ConversationView({
   onCreateSession,
   onDraftChange,
   onSend,
+  sentHistory,
+  onHistoryEntry,
   onStopGeneration,
   approvalMode,
   onApprovalModeChange,
@@ -240,8 +244,68 @@ export default function ConversationView({
   const messageListRef = useRef<HTMLDivElement>(null);
   const followOutputRef = useRef(true);
   const composingRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [canJumpLatest, setCanJumpLatest] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  // 输入历史：historyCursor 指向 sentHistory 下标，history.length 表示未进入浏览状态
+  const [historyCursor, setHistoryCursorState] = useState(sentHistory.length);
+  const historyCursorRef = useRef(sentHistory.length);
+  const setHistoryCursor = (value: number) => {
+    historyCursorRef.current = value;
+    setHistoryCursorState(value);
+  };
+  const draftBackupRef = useRef("");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const sentHistoryRef = useRef(sentHistory);
+  sentHistoryRef.current = sentHistory;
+  const historyBrowsing = historyCursor < sentHistory.length;
+
+  const exitHistoryBrowsing = () => {
+    setHistoryCursor(sentHistoryRef.current.length);
+  };
+
+  const setDraftAndCaret = (value: string) => {
+    onDraftChange(value);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const caret = value.length;
+        textarea.selectionStart = caret;
+        textarea.selectionEnd = caret;
+        textarea.scrollTop = textarea.scrollHeight;
+      }
+    });
+  };
+
+  /** ↑ 键：往更早的历史翻。仅在“输入框为空 / 已在浏览历史 / 光标在第一行行首”时触发。 */
+  const recallHistory = (textarea: HTMLTextAreaElement, forward: boolean): boolean => {
+    const history = sentHistoryRef.current;
+    if (history.length === 0) return false;
+    const browsing = historyCursorRef.current < history.length;
+    if (!browsing) {
+      const empty = draftRef.current.trim() === "";
+      const atEdge = forward
+        ? textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length
+        : textarea.selectionStart === 0 && textarea.selectionEnd === 0 && !textarea.value.slice(0, textarea.selectionStart).includes("\n");
+      if (!empty && !atEdge) return false;
+      // 进入浏览前备份当前草稿，↓ 到底时恢复
+      draftBackupRef.current = draftRef.current;
+    }
+
+    let next = forward ? historyCursorRef.current + 1 : historyCursorRef.current - 1;
+    if (forward && next >= history.length) {
+      // 翻过最新一条：恢复备份的草稿并退出浏览
+      setHistoryCursor(history.length);
+      setDraftAndCaret(draftBackupRef.current);
+      return true;
+    }
+    next = Math.max(0, Math.min(history.length - 1, next));
+    if (next === historyCursorRef.current) return browsing; // 已到端点，浏览中也要拦截默认行为
+    setHistoryCursor(next);
+    setDraftAndCaret(history[next]);
+    return true;
+  };
 
   const renderMarkdown = (value: string) => (
     <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -250,6 +314,12 @@ export default function ConversationView({
   );
 
   const lastMessage = messages[messages.length - 1];
+  const sendFromComposer = () => {
+    const text = draftRef.current.trim();
+    exitHistoryBrowsing();
+    if (text) onHistoryEntry(text);
+    onSend();
+  };
   const runningTool = [...messages].reverse().find((message) => (
     message.role === "tool" && message.status === "running"
   ));
@@ -330,6 +400,15 @@ export default function ConversationView({
           </span>
         </div>
       ) : null}
+      {historyBrowsing && !streaming ? (
+        <div className="conversation-status history-hint">
+          <span className="history-hint-key">↑</span>
+          <span className="history-hint-key">↓</span>
+          <span>
+            浏览历史消息 {historyCursor + 1}/{sentHistory.length} · Esc 返回草稿
+          </span>
+        </div>
+      ) : null}
       {approvals.length > 0 ? (
         <div className="runtime-approval" aria-live="polite">
           <div className="runtime-approval-main">
@@ -366,10 +445,14 @@ export default function ConversationView({
       ) : null}
       <div className={variant === "hero" ? "prompt-shell hero" : "prompt-shell chat"}>
         <textarea
+          ref={textareaRef}
           value={draft}
-          placeholder="描述任务，或粘贴需求上下文"
+          placeholder="描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"
           disabled={streaming}
-          onChange={(event) => onDraftChange(event.target.value)}
+          onChange={(event) => {
+            exitHistoryBrowsing();
+            onDraftChange(event.target.value);
+          }}
           onCompositionStart={() => {
             composingRef.current = true;
           }}
@@ -377,9 +460,23 @@ export default function ConversationView({
             composingRef.current = false;
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !composingRef.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+            const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+            if (composing) return;
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              onSend();
+              sendFromComposer();
+              return;
+            }
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              if (recallHistory(event.currentTarget, event.key === "ArrowDown")) {
+                event.preventDefault();
+              }
+              return;
+            }
+            if (event.key === "Escape" && historyBrowsing) {
+              event.preventDefault();
+              setHistoryCursor(sentHistoryRef.current.length);
+              setDraftAndCaret(draftBackupRef.current);
             }
           }}
         />
@@ -413,16 +510,24 @@ export default function ConversationView({
                   }}
                 >
                   <option value="">默认工作区</option>
-                  {projects.map((project) => (
-                    <option key={project.path} value={project.path}>
-                      {project.name}
-                    </option>
-                  ))}
+                  {projects.map((project) => {
+                    // 隶属于某项目的本地工程不单独列出，跟随其父项目作为对话背景
+                    if (project.local && project.parentPath) return null;
+                    const children = projects.filter((item) => item.local && item.parentPath === project.path);
+                    return (
+                      <option key={project.path} value={project.path}>
+                        {project.name}
+                        {children.length > 0 ? `（${children.map((item) => item.name).join("、")}）` : ""}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
             <div className="branch-controls">
               {projects.map((project) => {
+                // 子工程不单独展示分支切换，跟随父项目
+                if (project.local && project.parentPath) return null;
                 const branch = projectBranches[project.path] || "";
                 const branches = projectBranchOptions[project.path] || [];
                 if (!branch || branches.length === 0) return null;
@@ -526,7 +631,7 @@ export default function ConversationView({
             </div>
             <button
               className={streaming ? "composer-action stop" : "composer-action send"}
-              onClick={streaming ? onStopGeneration : onSend}
+              onClick={streaming ? onStopGeneration : sendFromComposer}
               disabled={!serviceReady || (!streaming && !draft.trim())}
               title={streaming ? "停止生成" : "发送"}
               aria-label={streaming ? "停止生成" : "发送"}

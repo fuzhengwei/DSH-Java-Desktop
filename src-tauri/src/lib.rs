@@ -36,6 +36,25 @@ struct WorkspaceSelection {
     path: String,
 }
 
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct GitChangeSummary {
+    is_repo: bool,
+    branch: String,
+    insertions: u64,
+    deletions: u64,
+    files: Vec<GitChangedFile>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitChangedFile {
+    status: String,
+    path: String,
+    insertions: Option<u64>,
+    deletions: Option<u64>,
+}
+
 #[derive(Deserialize, Serialize)]
 struct AgentRuntimeRecord {
     pid: u32,
@@ -414,6 +433,127 @@ fn read_git_branches(path: &str) -> Result<GitBranchesState, String> {
 }
 
 #[tauri::command]
+fn project_git_changes(path: String) -> Result<GitChangeSummary, String> {
+    let mut summary = GitChangeSummary::default();
+    if !PathBuf::from(&path).is_dir() {
+        return Err(format!("项目目录不存在：{path}"));
+    }
+
+    let inside = Command::new("git")
+        .args(["-C", &path, "rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map_err(|error| format!("读取 Git 状态失败：{error}"))?;
+    if !inside.status.success() {
+        return Ok(summary);
+    }
+    summary.is_repo = true;
+
+    let branch_output = Command::new("git")
+        .args(["-C", &path, "branch", "--show-current"])
+        .output()
+        .map_err(|error| format!("读取 Git 分支失败：{error}"))?;
+    summary.branch = String::from_utf8_lossy(&branch_output.stdout).trim().to_string();
+
+    // 已跟踪文件的增删行（工作区 + 暂存区，相对 HEAD）
+    let numstat = Command::new("git")
+        .args(["-C", &path, "diff", "HEAD", "--numstat"])
+        .output()
+        .map_err(|error| format!("读取 Git 变更失败：{error}"))?;
+    let mut changed: std::collections::HashMap<String, (u64, u64)> = std::collections::HashMap::new();
+    for line in String::from_utf8_lossy(&numstat.stdout).lines() {
+        let mut parts = line.split('\t');
+        let (Some(add), Some(del), Some(file)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let insertions = add.parse::<u64>().unwrap_or(0);
+        let deletions = del.parse::<u64>().unwrap_or(0);
+        summary.insertions += insertions;
+        summary.deletions += deletions;
+        changed.insert(file.to_string(), (insertions, deletions));
+    }
+
+    // 文件状态（M/A/D/R/untracked）
+    let status = Command::new("git")
+        .args(["-C", &path, "status", "--porcelain=v1"])
+        .output()
+        .map_err(|error| format!("读取 Git 状态失败：{error}"))?;
+    let mut untracked: Vec<String> = Vec::new();
+    for line in String::from_utf8_lossy(&status.stdout).lines() {
+        if line.len() < 4 {
+            continue;
+        }
+        let code = &line[..2];
+        let raw_path = line[3..].trim();
+        // 重命名格式 "old -> new"，取新路径
+        let file_path = raw_path.rsplit(" -> ").next().unwrap_or(raw_path);
+        let status_code = if code == "??" {
+            "A".to_string()
+        } else if code.contains('D') {
+            "D".to_string()
+        } else if code.contains('R') {
+            "R".to_string()
+        } else if code.contains('A') {
+            "A".to_string()
+        } else {
+            "M".to_string()
+        };
+        if code == "??" {
+            // 未跟踪文件计入真实行数（视为全部新增）
+            let full = PathBuf::from(&path).join(file_path);
+            if full.is_file() {
+                let lines = fs::read(&full)
+                    .map(|bytes| bytes.iter().filter(|byte| **byte == b'\n').count() as u64 + 1)
+                    .unwrap_or(0);
+                summary.insertions += lines;
+                summary.files.push(GitChangedFile {
+                    status: status_code,
+                    path: file_path.to_string(),
+                    insertions: Some(lines),
+                    deletions: None,
+                });
+                continue;
+            }
+            untracked.push(file_path.to_string());
+            continue;
+        }
+        let (insertions, deletions) = changed.get(file_path).copied().unwrap_or((0, 0));
+        summary.files.push(GitChangedFile {
+            status: status_code,
+            path: file_path.to_string(),
+            insertions: Some(insertions),
+            deletions: Some(deletions),
+        });
+    }
+    for file_path in untracked {
+        summary.files.push(GitChangedFile {
+            status: "A".to_string(),
+            path: file_path,
+            insertions: None,
+            deletions: None,
+        });
+    }
+
+    // 变更多的排前面
+    summary.files.sort_by(|a, b| {
+        (b.insertions.unwrap_or(0) + b.deletions.unwrap_or(0))
+            .cmp(&(a.insertions.unwrap_or(0) + a.deletions.unwrap_or(0)))
+    });
+
+    Ok(summary)
+}
+
+#[tauri::command]
+fn send_notification(title: String, body: String) -> Result<(), String> {
+    notify_rust::Notification::new()
+        .summary(&title)
+        .body(&body)
+        .appname("DSH Java Desktop")
+        .show()
+        .map(|_| ())
+        .map_err(|error| format!("发送系统通知失败：{error}"))
+}
+
+#[tauri::command]
 fn pick_local_directory() -> Vec<WorkspaceSelection> {
     rfd::FileDialog::new()
         .set_title("选择本地项目目录")
@@ -436,7 +576,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, pick_local_directory])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

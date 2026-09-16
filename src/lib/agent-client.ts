@@ -2,10 +2,13 @@ import { fetch } from "@tauri-apps/plugin-http";
 import type {
   ApiEnvelope,
   ConversationMessage,
+  HarnessPlugin,
   SessionSummary,
   ModelSetting,
   AvailableModel,
   ChannelPreset,
+  PluginCandidate,
+  PluginConfigItem,
   RuntimeApproval,
   WorkspaceEntry,
 } from "../types";
@@ -65,7 +68,7 @@ async function request<T>(port: number, path: string, init?: RequestInit): Promi
 
 export async function listSessions(
   port: number,
-  limit = 30,
+  limit = 200,
 ): Promise<SessionSummary[]> {
   return request<SessionSummary[]>(port, `/api/harness/console/sessions?limit=${limit}&offset=0`);
 }
@@ -163,6 +166,94 @@ export async function deleteModelSetting(port: number, channelCode: string): Pro
   });
 }
 
+// ── 插件管理 ───────────────────────────────
+
+const PLUGIN_API = "/api/harness/plugins";
+
+export async function listPlugins(port: number): Promise<HarnessPlugin[]> {
+  return request<HarnessPlugin[]>(port, PLUGIN_API);
+}
+
+export async function analyzePluginJar(port: number, file: File): Promise<PluginCandidate> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await fetch(`${baseUrl(port)}${PLUGIN_API}/analyze-jar`, {
+    method: "POST",
+    body: form,
+  });
+  const payload = (await response.json().catch(() => null)) as ApiEnvelope<PluginCandidate> | null;
+  if (!response.ok || payload?.code !== "00000") {
+    throw new Error(payload?.info || `JAR 分析失败：HTTP ${response.status}`);
+  }
+  return payload.data as PluginCandidate;
+}
+
+export async function analyzePluginMaven(port: number, pomXml: string): Promise<PluginCandidate[]> {
+  const result = await request<PluginCandidate[]>(port, `${PLUGIN_API}/analyze-maven`, {
+    method: "POST",
+    body: JSON.stringify({ pomXml }),
+  });
+  return Array.isArray(result) ? result : [];
+}
+
+export async function installPlugin(port: number, candidate: PluginCandidate): Promise<void> {
+  await request(port, `${PLUGIN_API}/install`, {
+    method: "POST",
+    body: JSON.stringify({
+      pluginId: candidate.pluginId,
+      displayName: candidate.displayName,
+      pluginVersion: candidate.pluginVersion,
+      runtimeType: candidate.runtimeType,
+      sourcePath: candidate.sourcePath,
+      entrypoint: candidate.entrypoint,
+    }),
+  });
+}
+
+export async function activatePlugin(port: number, pluginId: string): Promise<void> {
+  await request(port, `${PLUGIN_API}/activate`, {
+    method: "POST",
+    body: JSON.stringify({ pluginId }),
+  });
+}
+
+export async function enablePlugin(port: number, pluginId: string): Promise<void> {
+  await request(port, `${PLUGIN_API}/${encodeURIComponent(pluginId)}/enable`, {
+    method: "POST",
+  });
+}
+
+export async function disablePlugin(port: number, pluginId: string): Promise<void> {
+  await request(port, `${PLUGIN_API}/${encodeURIComponent(pluginId)}/disable`, {
+    method: "POST",
+  });
+}
+
+export async function uninstallPlugin(port: number, pluginId: string): Promise<void> {
+  await request(port, `${PLUGIN_API}/${encodeURIComponent(pluginId)}/uninstall`, {
+    method: "POST",
+  });
+}
+
+export async function listPluginConfig(port: number, pluginId: string): Promise<PluginConfigItem[]> {
+  const result = await request<PluginConfigItem[]>(
+    port,
+    `${PLUGIN_API}/${encodeURIComponent(pluginId)}/config`,
+  );
+  return Array.isArray(result) ? result : [];
+}
+
+export async function savePluginConfig(
+  port: number,
+  pluginId: string,
+  configs: PluginConfigItem[],
+): Promise<void> {
+  await request(port, `${PLUGIN_API}/${encodeURIComponent(pluginId)}/config`, {
+    method: "POST",
+    body: JSON.stringify({ configs }),
+  });
+}
+
 export type StreamEvent =
   | { type: "meta"; payload: unknown }
   | { type: "chunk"; payload: unknown }
@@ -200,11 +291,34 @@ export async function streamAgentMessage(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+
+  // SSE 解析状态：标准允许一条消息拆成多行 data:，需要累积到空行再 dispatch
   let eventName = "";
+  let dataLines: string[] = [];
+
+  const dispatchEvent = () => {
+    if (dataLines.length === 0) {
+      eventName = "";
+      return;
+    }
+    const raw = dataLines.join("\n").trim();
+    dataLines = [];
+    const name = eventName;
+    eventName = "";
+    if (!raw) return;
+    try {
+      const payload = JSON.parse(raw);
+      onEvent({ type: (name || "chunk") as StreamEvent["type"], payload });
+    } catch {
+      onEvent({ type: "chunk", payload: { text: raw } });
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) {
+      // 流结束时如果还有未 dispatch 的 data，补一次
+      if (dataLines.length > 0) dispatchEvent();
       break;
     }
 
@@ -216,17 +330,14 @@ export async function streamAgentMessage(
       if (line.startsWith("event:")) {
         eventName = line.slice(6).trim();
       } else if (line.startsWith("data:")) {
-        const raw = line.slice(5).trim();
-        try {
-          const payload = raw ? JSON.parse(raw) : {};
-          onEvent({
-            type: (eventName || "chunk") as StreamEvent["type"],
-            payload,
-          });
-        } catch {
-          onEvent({ type: "chunk", payload: { text: raw } });
-        }
+        // 去掉 "data:" 前缀，保留空格（标准允许 data: xxx 或 data:xxx）
+        const value = line.slice(5).replace(/^ /, "");
+        dataLines.push(value);
+      } else if (line.trim() === "") {
+        // 空行表示一条 SSE 消息结束
+        dispatchEvent();
       }
+      // 其他行（如 :comment、id:、retry:）忽略
     }
   }
 }

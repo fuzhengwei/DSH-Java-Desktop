@@ -17,3 +17,4 @@ serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-http = "2"
 rfd = "0.15"
+notify-rust = "4"

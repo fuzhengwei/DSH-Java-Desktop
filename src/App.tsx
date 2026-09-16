@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import ConversationView from "./components/ConversationView";
 import Sidebar, { type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
+import InfoRail from "./components/InfoRail";
+import { SlidersIcon } from "./components/icons";
 import {
   activateModelSetting,
   deleteModelSetting,
@@ -59,6 +61,31 @@ function readDraftSessions(): SessionSummary[] {
   try {
     const drafts = JSON.parse(localStorage.getItem("dsh-draft-sessions") || "[]");
     return Array.isArray(drafts) ? drafts.filter((item): item is SessionSummary => Boolean(item && typeof item === "object")) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** 用户手动改过的会话标题：{ 任一 sessionId/agentId: 标题 }，优先于服务端 title 展示。 */
+function readCustomSessionTitles(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem("dsh-session-custom-titles") || "{}");
+    if (!raw || typeof raw !== "object") return {};
+    const cleaned: Record<string, string> = {};
+    for (const [id, title] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof title === "string" && title.trim()) cleaned[id] = title;
+    }
+    return cleaned;
+  } catch {
+    return {};
+  }
+}
+
+/** 前端本地删除（隐藏）的会话 id 列表；服务端暂无删除接口，靠它在列表中过滤。 */
+function readHiddenSessionIds(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem("dsh-hidden-session-ids") || "[]");
+    return Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string" && Boolean(id)) : [];
   } catch {
     return [];
   }
@@ -128,7 +155,20 @@ function writeSessionMessages(sessionId: string, messages: ConversationMessage[]
   }
 }
 
-function normalizeConversationMessage(message: unknown): ConversationMessage | null {
+const PROMPT_HISTORY_LIMIT = 100;
+
+function readPromptHistory(): string[] {
+  try {
+    const history = JSON.parse(localStorage.getItem("dsh-prompt-history") || "[]");
+    return Array.isArray(history)
+      ? history.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(-PROMPT_HISTORY_LIMIT)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export function normalizeConversationMessage(message: unknown): ConversationMessage | null {
   if (!message || typeof message !== "object") return null;
   const raw = message as Record<string, unknown>;
   const role = typeof raw.role === "string" ? raw.role : "";
@@ -157,8 +197,16 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
         normalized.toolName = typeof item.toolName === "string" ? item.toolName : normalized.toolName;
         normalized.callId = typeof item.callId === "string" ? item.callId : normalized.callId;
         const args = item.argsRaw ?? item.args ?? item.arguments;
-        normalized.arguments = args && typeof args === "object" && !Array.isArray(args)
-          ? args as Record<string, unknown>
+        let parsedArgs: unknown = args;
+        if (typeof args === "string") {
+          try {
+            parsedArgs = JSON.parse(args);
+          } catch {
+            parsedArgs = null;
+          }
+        }
+        normalized.arguments = parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)
+          ? parsedArgs as Record<string, unknown>
           : typeof args === "string" ? { input: args } : normalized.arguments;
         normalized.status = typeof item.status === "string" ? item.status : normalized.status;
         normalized.result = typeof item.result === "string" ? item.result : normalized.result;
@@ -229,8 +277,11 @@ function visibleUserMessage(value: string): string {
   return value;
 }
 
-function sessionTitle(session: SessionSummary): string {
-  const rawTitle = session.title || session.lastMessage || session.agentId || session.sessionId || "新对话";
+export function sessionTitle(session: SessionSummary, customTitles?: Record<string, string>): string {
+  const customTitle = [session.sessionId, session.agentId]
+    .map((id) => (id && customTitles ? customTitles[id] : ""))
+    .find((title) => Boolean(title && title.trim()));
+  const rawTitle = customTitle || session.title || session.lastMessage || session.agentId || session.sessionId || "新对话";
   return visibleMessageText(visibleUserMessage(rawTitle)) || "新对话";
 }
 
@@ -254,6 +305,8 @@ export default function App() {
   const [serviceError, setServiceError] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [draftSessions, setDraftSessions] = useState<SessionSummary[]>(readDraftSessions);
+  const [customSessionTitles, setCustomSessionTitles] = useState<Record<string, string>>(readCustomSessionTitles);
+  const [hiddenSessionIds, setHiddenSessionIds] = useState<string[]>(readHiddenSessionIds);
   const [projects, setProjects] = useState<WorkspaceEntry[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState("");
   const [sessionProjectMap, setSessionProjectMap] = useState<Record<string, string>>({});
@@ -270,8 +323,27 @@ export default function App() {
   const [savingModel, setSavingModel] = useState(false);
   const [syncingModels, setSyncingModels] = useState(false);
   const [draft, setDraft] = useState("");
-  const [streaming, setStreaming] = useState(false);
-  const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
+  const [promptHistory, setPromptHistory] = useState<string[]>(readPromptHistory);
+  const appendPromptHistory = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setPromptHistory((current) => {
+      const next = [...current.filter((item) => item !== trimmed), trimmed].slice(-PROMPT_HISTORY_LIMIT);
+      try {
+        localStorage.setItem("dsh-prompt-history", JSON.stringify(next));
+      } catch {
+        // 存储失败不影响主流程
+      }
+      return next;
+    });
+  }, []);
+  type SessionRunState = {
+    startedAt: number;
+    title: string;
+    agentId: string;
+    sessionId?: string;
+  };
+  const [sessionRuns, setSessionRuns] = useState<Record<string, SessionRunState>>({});
   const [lastRunDurations, setLastRunDurations] = useState<Record<string, number>>({});
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>(readApprovalMode);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(readReasoningEffort);
@@ -283,20 +355,43 @@ export default function App() {
   const [projectBranches, setProjectBranches] = useState<Record<string, string>>({});
   const [projectBranchOptions, setProjectBranchOptions] = useState<Record<string, string[]>>({});
   const [switchingBranchPath, setSwitchingBranchPath] = useState("");
+  const [railOpen, setRailOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const sessionMessagesRef = useRef<Map<string, ConversationMessage[]>>(new Map());
+  const sessionRunsRef = useRef<Record<string, SessionRunState>>({});
   const connectingRef = useRef<Promise<void> | null>(null);
   const activeSessionRef = useRef(activeSessionId);
+  const streaming = Boolean(sessionRuns[activeSessionId]);
+  const anyStreaming = Object.keys(sessionRuns).length > 0;
 
   const port = service?.port ?? null;
   const serviceReady = serviceStatus === "running" && Boolean(port);
   const combinedSessions = useMemo(() => {
-    const persistedIds = new Set(sessions.map(sessionKey));
-    return [
+    // 同一会话在服务端和 draft 里可能分别用 sessionId / agentId 记录，
+    // 去重时要检查任一 ID 是否已存在，避免重复出现
+    const persistedIds = new Set<string>();
+    for (const session of sessions) {
+      if (session.agentId) persistedIds.add(session.agentId);
+      if (session.sessionId) persistedIds.add(session.sessionId);
+    }
+    const merged = [
       ...sessions,
-      ...draftSessions.filter((session) => sessionKey(session) && !persistedIds.has(sessionKey(session))),
+      ...draftSessions.filter((session) => {
+        const agentId = session.agentId || "";
+        const sessionId = session.sessionId || "";
+        const hasAnyId = Boolean(agentId || sessionId);
+        return hasAnyId && !persistedIds.has(agentId) && !persistedIds.has(sessionId);
+      }),
     ];
-  }, [draftSessions, sessions]);
+    if (hiddenSessionIds.length === 0) return merged;
+    // 本地删除的会话不再展示（服务端暂无删除接口，靠隐藏列表过滤）
+    const hidden = new Set(hiddenSessionIds);
+    return merged.filter((session) => !(
+      (session.sessionId && hidden.has(session.sessionId))
+      || (session.agentId && hidden.has(session.agentId))
+    ));
+  }, [draftSessions, hiddenSessionIds, sessions]);
   const activeSession = combinedSessions.find((session) => (
     session.agentId === activeSessionId || session.sessionId === activeSessionId
   ));
@@ -323,7 +418,31 @@ export default function App() {
         listRuntimeApprovals(servicePort),
       ]);
 
-    if (sessionsResult.status === "fulfilled") setSessions(sessionsResult.value);
+    if (sessionsResult.status === "fulfilled") {
+      const loadedSessions = sessionsResult.value;
+      setSessions(loadedSessions);
+      // 重启/刷新后服务端返回的会话可能只有 sessionId，而映射当初只按草稿阶段的 agentId 记录，
+      // 导致分组时按 sessionId 查不到项目、被错误归入"默认工作区"。这里做两级回填：
+      // 1) 服务端 SessionHeader 持久化的 workspaceId（即会话创建时的 cwd / 项目路径）是权威来源；
+      // 2) 本地映射里已存在的归属则补齐到同会话的其他 ID（agentId <-> sessionId）。
+      setSessionProjectMap((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const session of loadedSessions) {
+          const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
+          // 服务端记录的 cwd 优先；本地已映射值次之（老会话服务端 cwd 可能为 null）
+          const projectPath = session.workspaceId || ids.map((id) => next[id]).find(Boolean);
+          if (!projectPath) continue;
+          for (const id of ids) {
+            if (next[id] !== projectPath) {
+              next[id] = projectPath;
+              changed = true;
+            }
+          }
+        }
+        return changed ? next : current;
+      });
+    }
     if (projectsResult.status === "fulfilled") {
       setProjects(projectsResult.value);
       setActiveProjectPath((current) => current || projectsResult.value[0]?.path || "");
@@ -342,7 +461,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setSessionProjectMap(JSON.parse(localStorage.getItem("dsh-session-project-map") || "{}"));
+    // 加载历史映射时剔除空串脏数据：旧版本曾把空值写入映射，会阻断回填逻辑
+    const storedMap = JSON.parse(localStorage.getItem("dsh-session-project-map") || "{}") as Record<string, string>;
+    const cleanedMap: Record<string, string> = {};
+    for (const [id, path] of Object.entries(storedMap)) {
+      if (typeof path === "string" && path) cleanedMap[id] = path;
+    }
+    if (Object.keys(cleanedMap).length !== Object.keys(storedMap).length) {
+      localStorage.setItem("dsh-session-project-map", JSON.stringify(cleanedMap));
+    }
+    setSessionProjectMap(cleanedMap);
     setLocalProjects(JSON.parse(localStorage.getItem("dsh-local-projects") || "[]"));
     setDraftSessions(readDraftSessions());
   }, []);
@@ -351,6 +479,14 @@ export default function App() {
     localStorage.setItem("dsh-active-session-id", activeSessionId);
     activeSessionRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  useEffect(() => {
+    sessionRunsRef.current = sessionRuns;
+  }, [sessionRuns]);
+
+  useEffect(() => {
+    sessionMessagesRef.current.set(activeSessionId, messages);
+  }, [activeSessionId, messages]);
 
   useEffect(() => {
     localStorage.setItem("dsh-session-project-map", JSON.stringify(sessionProjectMap));
@@ -367,6 +503,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
   }, [draftSessions]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-session-custom-titles", JSON.stringify(customSessionTitles));
+  }, [customSessionTitles]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-hidden-session-ids", JSON.stringify(hiddenSessionIds));
+  }, [hiddenSessionIds]);
 
   useEffect(() => {
     localStorage.setItem("dsh-approval-mode", approvalMode);
@@ -481,7 +625,7 @@ export default function App() {
   }, [activeSessionId, combinedSessions, messages.length, port, streaming]);
 
   useEffect(() => {
-    if (!port || !streaming) return;
+    if (!port || !anyStreaming) return;
     let cancelled = false;
     const loadApprovals = async () => {
       try {
@@ -498,7 +642,41 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [port, streaming]);
+  }, [port, anyStreaming]);
+
+  const aliasesForSession = useCallback((sessionId: string): string[] => {
+    const run = sessionRunsRef.current[sessionId];
+    const aliasSet = new Set<string>([sessionId]);
+    if (run?.agentId) aliasSet.add(run.agentId);
+    if (run?.sessionId) aliasSet.add(run.sessionId);
+    return [...aliasSet];
+  }, []);
+
+  const updateMessagesForAliases = useCallback((
+    aliases: string[],
+    updater: (current: ConversationMessage[]) => ConversationMessage[],
+  ) => {
+    for (const alias of aliases) {
+      const currentMessages = sessionMessagesRef.current.get(alias) || [];
+      const next = updater(currentMessages);
+      sessionMessagesRef.current.set(alias, next);
+      writeSessionMessages(alias, next);
+      if (alias === activeSessionRef.current) {
+        setMessages(next);
+      }
+    }
+  }, []);
+
+  const notifyRunFinished = useCallback((sessionId: string, run: SessionRunState | undefined, failed: boolean, errorMessage?: string) => {
+    const focused = typeof document !== "undefined" && document.visibilityState === "visible" && document.hasFocus();
+    const viewing = focused && activeSessionRef.current === sessionId;
+    if (viewing) return;
+    const title = failed ? "对话执行出错" : "对话已完成";
+    const body = run?.title
+      ? (failed ? `「${run.title}」：${errorMessage || "执行失败"}` : `「${run.title}」已生成回复`)
+      : (failed ? (errorMessage || "执行失败") : "已生成回复");
+    void invoke("send_notification", { title, body }).catch(() => undefined);
+  }, []);
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (!port) return;
@@ -510,12 +688,42 @@ export default function App() {
       setActiveSessionId(sessionId);
       setActiveView("conversation");
     } catch {
-      const cachedMessages = readSessionMessages(sessionId);
+      const cachedMessages = sessionMessagesRef.current.get(sessionId) || readSessionMessages(sessionId);
+      sessionMessagesRef.current.set(sessionId, cachedMessages);
       setMessages(cachedMessages);
       setActiveSessionId(sessionId);
       setActiveView("conversation");
     }
   }, [port]);
+
+  // 切到一个正在后台运行的会话时，本地缓存可能落后于服务端，补一次服务端消息拉取
+  useEffect(() => {
+    if (!port || !sessionRuns[activeSessionId]) return;
+    const run = sessionRuns[activeSessionId];
+    const targetId = run.sessionId || run.agentId;
+    if (!targetId) return;
+    let cancelled = false;
+    const aliases = aliasesForSession(activeSessionId);
+    const timer = window.setTimeout(() => {
+      void listMessages(port, targetId)
+        .then((loaded) => {
+          if (cancelled) return;
+          const normalized = loaded
+            .map(normalizeConversationMessage)
+            .filter((message): message is ConversationMessage => Boolean(message));
+          if (normalized.length === 0) return;
+          const currentCount = sessionMessagesRef.current.get(activeSessionId)?.length || 0;
+          if (normalized.length > currentCount) {
+            updateMessagesForAliases(aliases, () => normalized);
+          }
+        })
+        .catch(() => undefined);
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [activeSessionId, aliasesForSession, port, sessionRuns, updateMessagesForAliases]);
 
   const resolveApproval = useCallback(async (approvalId: string, verdict: "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY") => {
     if (!port || resolvingApprovalId) return;
@@ -545,38 +753,45 @@ export default function App() {
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
-    if (!port || !text || streaming) return;
+    const originSessionId = activeSessionId;
+    if (!port || !text || sessionRunsRef.current[originSessionId]) return;
     if (!activeModel) {
       setActiveView("settings");
       setError("请先配置并激活一个可用模型");
       return;
     }
 
-    const runAgentId = activeSession?.agentId || activeSessionId;
+    const runAgentId = activeSession?.agentId || originSessionId;
+    const runTitle = text.length > 42 ? `${text.slice(0, 42)}…` : text;
 
     const controller = new AbortController();
-    abortRef.current = controller;
+    abortControllersRef.current.set(originSessionId, controller);
     let resolvedSessionId = "";
-    let timedOut = false;
+    // 用 ref 避免 watchdog 回调和 finally 块之间的竞态：
+    // abort() 是同步触发 fetch reject，如果 done 事件刚好在 abort 前到达，
+    // 普通变量可能读到错误的 timedOut 值
+    const timedOutRef = { current: false };
     const watchdog = window.setTimeout(() => {
-      timedOut = true;
+      timedOutRef.current = true;
       controller.abort();
     }, 300_000);
-    setStreaming(true);
     const startedAt = Date.now();
-    setStreamStartedAt(startedAt);
-    setLastRunDurations((current) => ({ ...current, [activeSessionId]: 0 }));
+    const run: SessionRunState = { startedAt, title: runTitle, agentId: runAgentId };
+    setSessionRuns((current) => ({ ...current, [originSessionId]: run }));
+    setLastRunDurations((current) => ({ ...current, [originSessionId]: 0 }));
     setError("");
     setDraft("");
     setApprovals([]);
-    setSessionProjectMap((current) => ({
-      ...current,
-      [activeSessionId]: activeProjectPath,
-    }));
+    setSessionProjectMap((current) => {
+      const inherited = current[originSessionId];
+      // 优先沿用已有归属；仅在缺失时退回当前激活项目，避免切项目后误改原会话归属
+      const projectPath = inherited !== undefined ? inherited : activeProjectPath;
+      return { ...current, [originSessionId]: projectPath };
+    });
     const createdAt = new Date().toISOString();
     const userMessage: ConversationMessage = { role: "user", content: text, createdAt };
     const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "", createdAt };
-    setMessages((current) => [...current, userMessage, assistantMessage]);
+    updateMessagesForAliases([originSessionId], (current) => [...current, userMessage, assistantMessage]);
 
     try {
       await streamAgentMessage(
@@ -590,9 +805,10 @@ export default function App() {
           reasoningEffort,
         },
         (event) => {
+          const aliases = aliasesForSession(originSessionId);
           if (event.type === "chunk" || event.type === "reasoning") {
             const delta = payloadText(event.payload);
-            setMessages((current) => {
+            updateMessagesForAliases(aliases, (current) => {
               let targetIndex = -1;
               for (let index = current.length - 1; index >= 0; index -= 1) {
                 if (current[index].role === "assistant") {
@@ -612,7 +828,7 @@ export default function App() {
             const payload = payloadRecord(event.payload);
             const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
             const callId = typeof payload.callId === "string" ? payload.callId : `${toolName}-${Date.now()}`;
-            setMessages((current) => {
+            updateMessagesForAliases(aliases, (current) => {
               const next = [...current];
               const toolMessage: ConversationMessage = {
                 role: "tool",
@@ -635,7 +851,7 @@ export default function App() {
             const payload = payloadRecord(event.payload);
             const callId = typeof payload.callId === "string" ? payload.callId : "";
             const failed = payload.status === "error" || payload.status === "failed";
-            setMessages((current) => current.map((message) => (
+            updateMessagesForAliases(aliases, (current) => current.map((message) => (
               message.role === "tool" && (!callId || message.callId === callId)
                 ? {
                     ...message,
@@ -651,7 +867,7 @@ export default function App() {
             if (sessionId) resolvedSessionId = sessionId;
             const normalized = messagesFromPayload(event.payload);
             if (normalized && normalized.length > 0) {
-              setMessages((current) => {
+              updateMessagesForAliases(aliases, (current) => {
                 // 服务端 done 载荷经常不完整（缺中间文字/工具行），直接替换会把内容"吞掉"。
                 // 只有当它比当前内容更丰富（条数更多或总文本更长）时才采用，否则保留流式累计的结果。
                 const richness = (list: ConversationMessage[]) => list.reduce(
@@ -678,62 +894,100 @@ export default function App() {
         },
         controller.signal,
       );
-      const persistedSessionId = resolvedSessionId || activeSessionId;
-      setSessionProjectMap((current) => ({
-        ...current,
-        [runAgentId]: activeProjectPath,
-        [persistedSessionId]: activeProjectPath,
-      }));
+      const persistedSessionId = resolvedSessionId || originSessionId;
+      setSessionProjectMap((current) => {
+        const inherited = current[originSessionId];
+        // 优先沿用会话创建时已记录的归属项目；仅在缺失时退回当前激活项目。
+        // 这样重启后 loadWorkspaceData 自动选中首个项目，也不会误改已有会话的归属。
+        const projectPath = inherited !== undefined ? inherited : activeProjectPath;
+        return {
+          ...current,
+          [runAgentId]: projectPath,
+          [persistedSessionId]: projectPath,
+        };
+      });
       setDraftSessions((current) => current.map((session) => (
         sessionKey(session) === runAgentId || session.sessionId === resolvedSessionId
           ? {
               ...session,
               agentId: session.agentId || runAgentId,
               sessionId: resolvedSessionId || session.sessionId,
-              title: text.length > 42 ? `${text.slice(0, 42)}…` : text,
+              title: runTitle,
               updatedAt: new Date().toISOString(),
             }
           : session
       )));
-      if (resolvedSessionId && resolvedSessionId !== activeSessionId) {
-        setActiveSessionId(resolvedSessionId);
+      if (resolvedSessionId && resolvedSessionId !== originSessionId) {
+        // 服务端分配了新 sessionId：迁移该会话的运行状态与消息缓存到新 id，
+        // 并把所有别名指向同一份消息列表，后续切回任一 id 都能看到完整内容。
+        const sharedMessages = sessionMessagesRef.current.get(originSessionId) || [];
+        sessionMessagesRef.current.set(resolvedSessionId, sharedMessages);
+        writeSessionMessages(resolvedSessionId, sharedMessages);
+        setSessionRuns((current) => {
+          if (!current[originSessionId]) return current;
+          const next = { ...current };
+          next[resolvedSessionId] = { ...next[originSessionId], sessionId: resolvedSessionId };
+          return next;
+        });
+        const controllerForRun = abortControllersRef.current.get(originSessionId);
+        if (controllerForRun) {
+          abortControllersRef.current.set(resolvedSessionId, controllerForRun);
+        }
+        if (activeSessionRef.current === originSessionId) {
+          setActiveSessionId(resolvedSessionId);
+        }
       }
       await loadWorkspaceData(port);
+      notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], false);
     } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") {
-        if (timedOut) {
-          setError("智能体长时间未返回结果，已自动停止");
-        }
+      const isAbort = caught instanceof DOMException && caught.name === "AbortError";
+      const message = caught instanceof Error ? caught.message : String(caught);
+      if (isAbort && !timedOutRef.current) {
+        // 用户手动停止：静默结束，不报错、不通知
       } else {
-        setError(caught instanceof Error ? caught.message : String(caught));
+        const finalMessage = isAbort ? "智能体长时间未返回结果，已自动停止" : message;
+        if (activeSessionRef.current === originSessionId || activeSessionRef.current === resolvedSessionId) {
+          setError(finalMessage);
+        }
+        notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], true, finalMessage);
       }
     } finally {
       window.clearTimeout(watchdog);
-      setStreaming(false);
-      setStreamStartedAt(null);
       // 兜底：无论 done 载荷是否完整，结束时都不允许有工具停留在"执行中"
-      setMessages((current) => current.map((message) => (
+      updateMessagesForAliases(aliasesForSession(originSessionId), (current) => current.map((message) => (
         message.role === "tool" && message.status === "running"
           ? { ...message, status: "success" }
           : message
       )));
-      setLastRunDurations((current) => ({
-        ...current,
-        [resolvedSessionId || activeSessionId]: Date.now() - startedAt,
-      }));
-      abortRef.current = null;
+      const duration = Date.now() - startedAt;
+      setLastRunDurations((current) => {
+        const next = { ...current, [originSessionId]: duration };
+        if (resolvedSessionId) next[resolvedSessionId] = duration;
+        return next;
+      });
+      setSessionRuns((current) => {
+        const next = { ...current };
+        delete next[originSessionId];
+        if (resolvedSessionId) delete next[resolvedSessionId];
+        return next;
+      });
+      abortControllersRef.current.delete(originSessionId);
+      if (resolvedSessionId) abortControllersRef.current.delete(resolvedSessionId);
     }
   }, [
     activeModel,
     activeSession,
     activeProjectPath,
-    activeSelectedProjects,
     activeSessionId,
+    aliasesForSession,
+    approvalMode,
     draft,
     loadWorkspaceData,
+    notifyRunFinished,
     outgoingMessage,
     port,
-    streaming,
+    reasoningEffort,
+    updateMessagesForAliases,
   ]);
 
   const createProject = useCallback(async () => {
@@ -908,10 +1162,12 @@ export default function App() {
     setActiveSessionId(sessionId);
     setMessages([]);
     setDraftSessions((current) => [draftSession, ...current]);
-    setSessionProjectMap((current) => ({
-      ...current,
-      [sessionId]: project ? project.path : "",
-    }));
+    setSessionProjectMap((current) => {
+      const inherited = current[sessionId];
+      // 新建对话属于明确的项目切换，允许覆盖；空值表示回到默认工作区。
+      const projectPath = project ? project.path : inherited !== undefined ? inherited : "";
+      return { ...current, [sessionId]: projectPath };
+    });
     setActiveView("conversation");
   }, []);
 
@@ -920,7 +1176,7 @@ export default function App() {
       setLocalProjects((current) => current.filter((item) => item.path !== project.path));
       return;
     }
-    if (!port || !window.confirm(`确定删除项目「${project.name}」吗？项目目录将被删除。`)) return;
+    if (!port) return;
     setError("");
     try {
       const latest = await deleteWorkspace(port, project.name);
@@ -935,6 +1191,97 @@ export default function App() {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
   }, [activeProjectPath, port, startConversation]);
+
+  const renameSession = useCallback((session: SessionSummary, nextTitle: string) => {
+    const title = nextTitle.trim();
+    if (!title) return;
+    setCustomSessionTitles((current) => {
+      const next = { ...current };
+      // 同一会话的所有别名都写入，保证按任一 id 都能查到自定义标题
+      for (const id of [session.sessionId, session.agentId]) {
+        if (id) next[id] = title;
+      }
+      return next;
+    });
+    // 草稿会话同步改 title，避免重新加载时旧标题盖回展示
+    setDraftSessions((current) => current.map((item) => (
+      (item.sessionId && item.sessionId === session.sessionId)
+        || (item.agentId && item.agentId === session.agentId)
+        ? { ...item, title, updatedAt: new Date().toISOString() }
+        : item
+    )));
+  }, []);
+
+  const deleteSession = useCallback((session: SessionSummary) => {
+    const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const isActive = idSet.has(activeSessionRef.current);
+
+    // 运行中的会话先停止
+    for (const id of ids) {
+      abortControllersRef.current.get(id)?.abort();
+      abortControllersRef.current.delete(id);
+    }
+    setSessionRuns((current) => {
+      const next = { ...current };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+
+    // 草稿会话直接移除；服务端会话记入隐藏列表（服务端暂无删除接口）
+    setDraftSessions((current) => current.filter((item) => !(
+      (item.sessionId && idSet.has(item.sessionId)) || (item.agentId && idSet.has(item.agentId))
+    )));
+    setSessions((current) => current.filter((item) => !(
+      (item.sessionId && idSet.has(item.sessionId)) || (item.agentId && idSet.has(item.agentId))
+    )));
+    setHiddenSessionIds((current) => [...new Set([...current, ...ids])]);
+
+    // 清理本地缓存与归属映射
+    setCustomSessionTitles((current) => {
+      const next = { ...current };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+    setSessionProjectMap((current) => {
+      const next = { ...current };
+      for (const id of ids) delete next[id];
+      return next;
+    });
+    try {
+      const cache = JSON.parse(localStorage.getItem("dsh-session-messages") || "{}") as Record<string, unknown>;
+      let changed = false;
+      for (const id of ids) {
+        if (id in cache) {
+          delete cache[id];
+          changed = true;
+        }
+      }
+      if (changed) localStorage.setItem("dsh-session-messages", JSON.stringify(cache));
+    } catch {
+      // 缓存清理失败不影响主流程
+    }
+    for (const id of ids) sessionMessagesRef.current.delete(id);
+
+    // 删除的是当前会话时，切到剩余会话里的第一个；没有则开新对话
+    if (isActive) {
+      const remaining = combinedSessions.find((item) => {
+        const itemIds = [item.sessionId, item.agentId].filter((id): id is string => Boolean(id));
+        return itemIds.length > 0 && !itemIds.some((id) => idSet.has(id));
+      });
+      const nextId = remaining?.sessionId || remaining?.agentId;
+      if (nextId) {
+        setActiveSessionId(nextId);
+        setMessages(sessionMessagesRef.current.get(nextId) || readSessionMessages(nextId));
+      } else {
+        const freshId = newSessionId();
+        setActiveSessionId(freshId);
+        setMessages([]);
+        setSessionProjectMap((current) => ({ ...current, [freshId]: activeProjectPath }));
+      }
+    }
+  }, [activeProjectPath, combinedSessions]);
 
   const pickLocalProject = useCallback(async (parentPath: string) => {
     try {
@@ -1081,6 +1428,7 @@ export default function App() {
         activeSessionId={activeSessionId}
         activeProjectPath={activeProjectPath}
         streaming={streaming}
+        runningSessionIds={Object.keys(sessionRuns)}
         projects={combinedProjects}
         sessions={combinedSessions}
         sessionProjectMap={sessionProjectMap}
@@ -1090,6 +1438,9 @@ export default function App() {
         onViewChange={setActiveView}
         onSelectDefaultWorkspace={selectDefaultWorkspace}
         onSelectSession={(id) => void selectSession(id)}
+        sessionCustomTitles={customSessionTitles}
+        onRenameSession={renameSession}
+        onDeleteSession={deleteSession}
         onNewConversation={() => startConversation(activeProject)}
         editingProject={editingProject}
         savingProject={savingProject}
@@ -1119,12 +1470,13 @@ export default function App() {
       />
 
       <main className="main-panel">
+        <div className="main-panel-content">
         {!(activeView === "conversation" && messages.length === 0) ? (
           <header className="topbar">
             <div>
               <h1>
                 {activeView === "conversation"
-                  ? sessionTitle(activeSession || { agentId: activeSessionId })
+                  ? sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles)
                   : "工作台"}
               </h1>
               <p>
@@ -1132,8 +1484,31 @@ export default function App() {
                 {modelChoices.length > 0 ? `${modelChoices.length} 个模型可用` : "未配置模型"}
               </p>
             </div>
+            <div className="topbar-actions">
+              <button
+                type="button"
+                className={railOpen ? "topbar-icon-btn active" : "topbar-icon-btn"}
+                onClick={() => setRailOpen((open) => !open)}
+                title="信息栏"
+                aria-label="信息栏"
+              >
+                <SlidersIcon className="topbar-icon" />
+                {anyStreaming ? <span className="topbar-icon-dot" /> : null}
+              </button>
+            </div>
           </header>
-        ) : null}
+        ) : (
+          <button
+            type="button"
+            className={railOpen ? "topbar-icon-btn rail-trigger active" : "topbar-icon-btn rail-trigger"}
+            onClick={() => setRailOpen((open) => !open)}
+            title="信息栏"
+            aria-label="信息栏"
+          >
+            <SlidersIcon className="topbar-icon" />
+            {anyStreaming ? <span className="topbar-icon-dot" /> : null}
+          </button>
+        )}
 
         {error ? <div className="error-banner">{error}</div> : null}
 
@@ -1150,7 +1525,7 @@ export default function App() {
             projectBranches={projectBranches}
             projectBranchOptions={projectBranchOptions}
             switchingBranchPath={switchingBranchPath}
-            streamStartedAt={streamStartedAt}
+            streamStartedAt={sessionRuns[activeSessionId]?.startedAt ?? null}
             runDurationMs={lastRunDurations[activeSessionId]}
             onSelectProject={selectProject}
             onSelectDefaultWorkspace={selectDefaultWorkspace}
@@ -1158,7 +1533,9 @@ export default function App() {
             onCreateSession={() => startConversation(activeProject)}
             onDraftChange={setDraft}
             onSend={() => void sendMessage()}
-            onStopGeneration={() => abortRef.current?.abort()}
+            sentHistory={promptHistory}
+            onHistoryEntry={appendPromptHistory}
+            onStopGeneration={() => abortControllersRef.current.get(activeSessionId)?.abort()}
             approvalMode={approvalMode}
             onApprovalModeChange={setApprovalMode}
             reasoningEffort={reasoningEffort}
@@ -1171,7 +1548,17 @@ export default function App() {
             onResolveApproval={(approvalId, verdict) => void resolveApproval(approvalId, verdict)}
           />
         ) : null}
+        </div>
 
+        <InfoRail
+          open={railOpen}
+          onClose={() => setRailOpen(false)}
+          servicePort={port}
+          serviceReady={serviceReady}
+          sessions={combinedSessions}
+          activeProject={activeProject}
+          activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
+        />
       </main>
     </div>
   );
