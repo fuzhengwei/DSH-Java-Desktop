@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { SessionSummary, WorkspaceEntry } from "../types";
-import { sanitizeDisplayName } from "../lib/text";
+import { sanitizeDisplayName, truncateSessionTitle } from "../lib/text";
 import {
   ChevronIcon,
   FolderIcon,
@@ -55,12 +55,15 @@ function sessionTitle(session: SessionSummary, customTitles?: Record<string, str
   const customTitle = [session.sessionId, session.agentId]
     .map((id) => (id && customTitles ? customTitles[id] : ""))
     .find((title) => Boolean(title && title.trim()));
-  const raw = customTitle || session.title || session.lastMessage || session.agentId || session.sessionId || "未命名对话";
-  const withoutHiddenContext = raw
-    .replace(/<hidden-context>[\s\S]*?<\/hidden-context>/gi, "")
-    .replace(/\n?\[当前选择的工程\][\s\S]*$/i, "")
-    .trim();
-  return withoutHiddenContext || "未命名对话";
+  // 用户手动改过的标题原样展示；否则把 title/lastMessage 压成缩略信息
+  if (customTitle && customTitle.trim()) return customTitle.trim();
+  const raw = session.title || session.lastMessage || "";
+  const summarized = truncateSessionTitle(
+    raw
+      .replace(/<hidden-context>[\s\S]*?<\/hidden-context>/gi, "")
+      .replace(/\n?\[当前选择的工程\][\s\S]*$/i, ""),
+  );
+  return summarized || session.agentId || session.sessionId || "新对话";
 }
 
 function sessionIds(session: SessionSummary): string[] {
@@ -142,6 +145,15 @@ export default function Sidebar({
       const list = groups.get(projectPath) || [];
       list.push(session);
       groups.set(projectPath, list);
+    }
+    // 组内按更新时间倒序：新建/最近活跃的对话排在最上面
+    const timeOf = (session: SessionSummary) => {
+      const value = session.updatedAt || session.createdAt || "";
+      const time = new Date(value).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+    for (const list of groups.values()) {
+      list.sort((a, b) => timeOf(b) - timeOf(a));
     }
     return groups;
   }, [sessionProjectMap, sessions]);

@@ -1471,7 +1471,9 @@ select:focus-visible {
 .conversation-scroll {
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 18px 0 12px;
 }
 
@@ -1479,6 +1481,7 @@ select:focus-visible {
   display: grid;
   gap: 16px;
   width: min(820px, calc(100% - 58px));
+  min-width: 0;
   margin-inline: auto;
 }
 
@@ -2090,6 +2093,7 @@ select:focus-visible {
 .message {
   display: flex;
   width: 100%;
+  min-width: 0;
 }
 
 .message.user {
@@ -2115,10 +2119,13 @@ select:focus-visible {
 .message.assistant .message-body {
   max-width: 94%;
   min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .message.tool .message-body {
   max-width: 94%;
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .message.activity .message-body,
@@ -2412,6 +2419,8 @@ select:focus-visible {
 
 .message-content {
   overflow-wrap: anywhere;
+  min-width: 0;
+  max-width: 100%;
   color: var(--text);
   font-size: 14px;
   line-height: 1.75;
@@ -2495,6 +2504,8 @@ select:focus-visible {
   color: #c7254e;
   font-family: var(--mono);
   font-size: 12.5px;
+  overflow-wrap: break-word;
+  word-break: break-all;
 }
 
 .message-content pre {
@@ -2513,7 +2524,9 @@ select:focus-visible {
   background: transparent;
   color: #3f3f46;
   font-size: 12.5px;
-  white-space: pre;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .message-content table {
@@ -2523,6 +2536,8 @@ select:focus-visible {
   border-radius: 10px;
   font-size: 13px;
   overflow: hidden;
+  table-layout: fixed;
+  word-break: break-all;
 }
 
 .message-content th,

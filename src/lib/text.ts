@@ -21,3 +21,17 @@ export function sanitizeDisplayName(name: string): string {
     .trim();
   return cleaned || name;
 }
+
+/** 会话标题缩略展示的最大长度，超出部分以省略号截断 */
+export const SESSION_TITLE_MAX_LENGTH = 24;
+
+/**
+ * 把会话标题压缩为缩略信息：折叠连续空白、取单行、超长截断。
+ * 用于会话列表与顶栏标题，保证「新对话」发出首条消息后的名称简洁一致。
+ */
+export function truncateSessionTitle(title: string, maxLength = SESSION_TITLE_MAX_LENGTH): string {
+  const cleaned = title.replace(/\s+/g, " ").trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= maxLength) return cleaned;
+  return `${cleaned.slice(0, maxLength)}…`;
+}

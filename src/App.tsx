@@ -5,6 +5,7 @@ import Sidebar, { type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
 import InfoRail from "./components/InfoRail";
 import { SlidersIcon } from "./components/icons";
+import { truncateSessionTitle } from "./lib/text";
 import {
   activateModelSetting,
   deleteModelSetting,
@@ -281,8 +282,11 @@ export function sessionTitle(session: SessionSummary, customTitles?: Record<stri
   const customTitle = [session.sessionId, session.agentId]
     .map((id) => (id && customTitles ? customTitles[id] : ""))
     .find((title) => Boolean(title && title.trim()));
-  const rawTitle = customTitle || session.title || session.lastMessage || session.agentId || session.sessionId || "新对话";
-  return visibleMessageText(visibleUserMessage(rawTitle)) || "新对话";
+  // 用户手动改过的标题原样展示；否则把 title/lastMessage 压成缩略信息
+  if (customTitle && customTitle.trim()) return customTitle.trim();
+  const rawTitle = session.title || session.lastMessage || "";
+  const summarized = truncateSessionTitle(visibleMessageText(visibleUserMessage(rawTitle)));
+  return summarized || session.agentId || session.sessionId || "新对话";
 }
 
 function messagesFromPayload(payload: unknown): ConversationMessage[] | null {
@@ -362,6 +366,9 @@ export default function App() {
   const sessionRunsRef = useRef<Record<string, SessionRunState>>({});
   const connectingRef = useRef<Promise<void> | null>(null);
   const activeSessionRef = useRef(activeSessionId);
+  const activeProjectPathRef = useRef(activeProjectPath);
+  const draftSessionsRef = useRef(draftSessions);
+  const sessionProjectMapRef = useRef(sessionProjectMap);
   const streaming = Boolean(sessionRuns[activeSessionId]);
   const anyStreaming = Object.keys(sessionRuns).length > 0;
 
@@ -392,6 +399,10 @@ export default function App() {
       || (session.agentId && hidden.has(session.agentId))
     ));
   }, [draftSessions, hiddenSessionIds, sessions]);
+  const combinedSessionsRef = useRef(combinedSessions);
+  useEffect(() => {
+    combinedSessionsRef.current = combinedSessions;
+  }, [combinedSessions]);
   const activeSession = combinedSessions.find((session) => (
     session.agentId === activeSessionId || session.sessionId === activeSessionId
   ));
@@ -430,8 +441,9 @@ export default function App() {
         const next = { ...current };
         for (const session of loadedSessions) {
           const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
-          // 服务端记录的 cwd 优先；本地已映射值次之（老会话服务端 cwd 可能为 null）
-          const projectPath = session.workspaceId || ids.map((id) => next[id]).find(Boolean);
+          // 本地映射优先（发送消息时已按会话归属写入并与服务端 cwd 对齐）；
+          // 服务端 workspaceId 仅作兜底，用于补齐本地缺失的老会话归属
+          const projectPath = ids.map((id) => next[id]).find(Boolean) || session.workspaceId;
           if (!projectPath) continue;
           for (const id of ids) {
             if (next[id] !== projectPath) {
@@ -481,6 +493,18 @@ export default function App() {
   }, [activeSessionId]);
 
   useEffect(() => {
+    activeProjectPathRef.current = activeProjectPath;
+  }, [activeProjectPath]);
+
+  useEffect(() => {
+    draftSessionsRef.current = draftSessions;
+  }, [draftSessions]);
+
+  useEffect(() => {
+    sessionProjectMapRef.current = sessionProjectMap;
+  }, [sessionProjectMap]);
+
+  useEffect(() => {
     sessionRunsRef.current = sessionRuns;
   }, [sessionRuns]);
 
@@ -503,6 +527,25 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
   }, [draftSessions]);
+
+  // 清理僵尸 draft：id 与服务端会话撞车被去重过滤、永远不可见的草稿，
+  // 留着只会干扰「新对话」的复用判断
+  useEffect(() => {
+    if (sessions.length === 0 || draftSessions.length === 0) return;
+    const persistedIds = new Set<string>();
+    for (const session of sessions) {
+      if (session.agentId) persistedIds.add(session.agentId);
+      if (session.sessionId) persistedIds.add(session.sessionId);
+    }
+    const zombies = draftSessions.filter((draft) => {
+      const agentId = draft.agentId || "";
+      const sessionId = draft.sessionId || "";
+      return (agentId && persistedIds.has(agentId)) || (sessionId && persistedIds.has(sessionId));
+    });
+    if (zombies.length > 0) {
+      setDraftSessions((current) => current.filter((draft) => !zombies.includes(draft)));
+    }
+  }, [draftSessions, sessions]);
 
   useEffect(() => {
     localStorage.setItem("dsh-session-custom-titles", JSON.stringify(customSessionTitles));
@@ -739,17 +782,19 @@ export default function App() {
     }
   }, [loadWorkspaceData, port, resolvingApprovalId]);
 
-  const activeSelectedProjects = useMemo(() => (
-    localProjects.filter((project) => project.parentPath === activeProjectPath)
-  ), [activeProjectPath, localProjects]);
+  // 当前会话归属项目下挂载的工程；归属缺失时退回激活项目
+  const sessionSelectedProjects = useMemo(() => {
+    const sessionProjectPath = sessionProjectMap[activeSessionId] ?? activeProjectPath;
+    return localProjects.filter((project) => project.parentPath === sessionProjectPath);
+  }, [activeProjectPath, activeSessionId, localProjects, sessionProjectMap]);
 
   const outgoingMessage = useMemo(() => {
-    if (activeSelectedProjects.length === 0) return draft.trim();
-    const context = activeSelectedProjects
+    if (sessionSelectedProjects.length === 0) return draft.trim();
+    const context = sessionSelectedProjects
       .map((project) => `- ${project.name}: ${project.path}`)
       .join("\n");
-    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n${HIDDEN_CONTEXT_CLOSE}`;
-  }, [activeSelectedProjects, draft]);
+    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${sessionSelectedProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+  }, [sessionSelectedProjects, draft]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
@@ -762,7 +807,7 @@ export default function App() {
     }
 
     const runAgentId = activeSession?.agentId || originSessionId;
-    const runTitle = text.length > 42 ? `${text.slice(0, 42)}…` : text;
+    const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(text))) || text;
 
     const controller = new AbortController();
     abortControllersRef.current.set(originSessionId, controller);
@@ -782,12 +827,10 @@ export default function App() {
     setError("");
     setDraft("");
     setApprovals([]);
-    setSessionProjectMap((current) => {
-      const inherited = current[originSessionId];
-      // 优先沿用已有归属；仅在缺失时退回当前激活项目，避免切项目后误改原会话归属
-      const projectPath = inherited !== undefined ? inherited : activeProjectPath;
-      return { ...current, [originSessionId]: projectPath };
-    });
+    // 会话归属以其创建时记录的项目为准（sessionProjectMap），而不是发送瞬间的激活项目，
+    // 否则切过项目下拉框后发消息会把服务端 workspaceId 写错，loadWorkspaceData 回填时会话被挪走
+    const sessionProjectPath = sessionProjectMapRef.current[originSessionId] ?? activeProjectPath;
+    setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPath }));
     const createdAt = new Date().toISOString();
     const userMessage: ConversationMessage = { role: "user", content: text, createdAt };
     const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "", createdAt };
@@ -800,9 +843,13 @@ export default function App() {
           agentId: runAgentId,
           message: outgoingMessage,
           channelCode: activeModel.channelCode,
-          cwd: activeProjectPath || undefined,
+          cwd: sessionProjectPath || undefined,
           approvalMode,
           reasoningEffort,
+          // 会话归属项目下挂载的工程目录作为沙箱额外可写根，自动审批模式下也可直接写入
+          sandboxRoots: sessionSelectedProjects.length > 0
+            ? sessionSelectedProjects.map((project) => project.path)
+            : undefined,
         },
         (event) => {
           const aliases = aliasesForSession(originSessionId);
@@ -976,6 +1023,7 @@ export default function App() {
     }
   }, [
     activeModel,
+    sessionSelectedProjects,
     activeSession,
     activeProjectPath,
     activeSessionId,
@@ -1152,6 +1200,27 @@ export default function App() {
   }, []);
 
   const startConversation = useCallback((project?: WorkspaceEntry) => {
+    // 顶部「新对话」不传 project 时，归属当前激活项目；项目行的 + 号则明确归属该项目
+    const projectPath = project ? project.path : activeProjectPathRef.current;
+    // 仅复用「真正空白且可见」的新对话：没有 sessionId（从未持久化到服务端）、
+    // 标题仍是占位文案（发过消息的会话 title 会被替换成消息摘要）、
+    // 且确实在会话列表中展示（僵尸 draft——id 与服务端会话撞车被去重过滤、
+    // 永远不可见——不能复用，否则点了就像没反应）。
+    const existingEmptyDraft = draftSessionsRef.current.find((session) => {
+      const id = session.agentId || "";
+      if (!id || session.sessionId) return false;
+      const belongsTo = sessionProjectMapRef.current[id] ?? "";
+      const untouched = (session.title || "新对话") === "新对话";
+      const visible = combinedSessionsRef.current.some((item) => item.agentId === id);
+      return belongsTo === projectPath && untouched && visible;
+    });
+    if (existingEmptyDraft) {
+      const existingId = existingEmptyDraft.agentId || "";
+      setActiveSessionId(existingId);
+      setMessages(sessionMessagesRef.current.get(existingId) || []);
+      setActiveView("conversation");
+      return;
+    }
     const sessionId = newSessionId();
     const draftSession: SessionSummary = {
       agentId: sessionId,
@@ -1161,13 +1230,10 @@ export default function App() {
     };
     setActiveSessionId(sessionId);
     setMessages([]);
+    sessionMessagesRef.current.set(sessionId, []);
+    writeSessionMessages(sessionId, []);
     setDraftSessions((current) => [draftSession, ...current]);
-    setSessionProjectMap((current) => {
-      const inherited = current[sessionId];
-      // 新建对话属于明确的项目切换，允许覆盖；空值表示回到默认工作区。
-      const projectPath = project ? project.path : inherited !== undefined ? inherited : "";
-      return { ...current, [sessionId]: projectPath };
-    });
+    setSessionProjectMap((current) => ({ ...current, [sessionId]: projectPath }));
     setActiveView("conversation");
   }, []);
 

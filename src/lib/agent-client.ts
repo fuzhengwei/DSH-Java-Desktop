@@ -273,6 +273,8 @@ export async function streamAgentMessage(
     approvalMode?: string;
     reasoningEffort?: string;
     cwd?: string;
+    /** 项目下授权的工程目录，workspace-write 沙箱据此放行 */
+    sandboxRoots?: string[];
   },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
