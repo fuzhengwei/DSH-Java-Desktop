@@ -1532,22 +1532,10 @@ select:focus-visible {
   50% { opacity: 1; transform: scale(1); }
 }
 
-.conversation-status.history-hint {
-  color: var(--text-secondary, var(--text-muted));
-}
-
+/* 历史浏览提示已合并进输入框 placeholder，不再单独占用状态条 */
+.conversation-status.history-hint,
 .history-hint-key {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: 4px;
-  border: 1px solid rgba(20, 20, 20, .14);
-  background: rgba(20, 20, 20, .04);
-  font-size: 9px;
-  line-height: 1;
+  display: none;
 }
 
 .conversation-scroll.home {
@@ -1753,53 +1741,33 @@ select:focus-visible {
   font-family: var(--font);
 }
 
-/* 覆盖层：把已确认的 @工程名 渲染为标签；与 textarea 严格同字重同排版 */
-.mention-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.mention-overlay-text {
-  padding: 18px 18px 10px;
-  color: transparent;
-  font-size: 15px;
-  line-height: 24px;
-  font-family: inherit;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.mention-chip-token {
-  display: inline-flex;
+/* 引用标签条：输入框上方独立一行（不遮挡输入区，已替代旧的覆盖层方案） */
+.mention-banner {
+  display: flex;
   align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  margin: 0 1px;
-  border-radius: 7px;
-  background: var(--selection);
-  box-shadow: inset 0 0 0 1px var(--selection-border);
-  color: var(--sidebar-accent);
-  font-size: 13px;
-  line-height: 20px;
-  vertical-align: 1px;
-}
-
-.mention-chip-token .icon-12 {
-  flex-shrink: 0;
-}
-
-/* 工具栏标签 */
-.mention-chips {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
-  min-width: 0;
+  padding: 10px 14px 0;
 }
 
+.mention-banner-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  color: inherit;
+  opacity: .65;
+  transition: background .15s ease, opacity .15s ease;
+}
+
+.mention-banner-remove:hover:not(:disabled) {
+  background: rgba(66, 92, 240, .16);
+  opacity: 1;
+}
+
+/* 消息气泡内的只读标签 */
 .mention-chip {
   display: inline-flex;
   align-items: center;
@@ -1823,23 +1791,6 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.mention-chip-remove {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-  color: inherit;
-  opacity: .65;
-  transition: background .15s ease, opacity .15s ease;
-}
-
-.mention-chip-remove:hover:not(:disabled) {
-  background: rgba(66, 92, 240, .16);
-  opacity: 1;
 }
 
 /* 弹层 */
@@ -1994,7 +1945,7 @@ select:focus-visible {
 .project-chip,
 .branch-chip {
   appearance: none;
-  max-width: 150px;
+  max-width: 140px;
   min-height: 24px;
   padding: 2px 18px 2px 0;
   border: 0;
@@ -2007,6 +1958,7 @@ select:focus-visible {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+  overflow: hidden;
   cursor: pointer;
 }
 

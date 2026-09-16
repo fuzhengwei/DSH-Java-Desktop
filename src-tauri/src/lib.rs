@@ -554,6 +554,31 @@ fn send_notification(title: String, body: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    let lower = url.trim().to_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("仅支持打开 http/https 链接".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&url).status();
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd").args(["/C", "start", "", &url]).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&url).status();
+
+    result
+        .map_err(|error| format!("调用系统浏览器失败：{error}"))
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("系统浏览器返回错误状态：{status}"))
+            }
+        })
+}
+
+#[tauri::command]
 fn pick_local_directory() -> Vec<WorkspaceSelection> {
     rfd::FileDialog::new()
         .set_title("选择本地项目目录")
@@ -576,7 +601,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

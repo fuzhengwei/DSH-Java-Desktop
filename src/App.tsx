@@ -252,8 +252,13 @@ function payloadText(payload: unknown): string {
 const HIDDEN_CONTEXT_OPEN = "<hidden-context>";
 const HIDDEN_CONTEXT_CLOSE = "</hidden-context>";
 
+/** 去掉输入框 @ 标签内嵌的零宽空格（U+200B）——只是编辑器内部的边界标记，不进消息/提示词 */
+function stripInvisibleChars(value: string): string {
+  return value.replace(/​/g, "");
+}
+
 function visibleMessageText(value: string): string {
-  let text = value;
+  let text = stripInvisibleChars(value);
   const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
   if (openIndex >= 0) {
     const closeIndex = text.indexOf(HIDDEN_CONTEXT_CLOSE, openIndex);
@@ -801,15 +806,16 @@ export default function App() {
   const contextProjects = draftMentions.length > 0 ? draftMentions : sessionSelectedProjects;
 
   const outgoingMessage = useMemo(() => {
-    if (contextProjects.length === 0) return draft.trim();
+    const cleanDraft = stripInvisibleChars(draft).trim();
+    if (contextProjects.length === 0) return cleanDraft;
     const context = contextProjects
       .map((project) => `- ${project.name}: ${project.path}`)
       .join("\n");
-    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+    return `${cleanDraft}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
   }, [contextProjects, draft]);
 
   const sendMessage = useCallback(async () => {
-    const text = draft.trim();
+    const text = stripInvisibleChars(draft).trim();
     const originSessionId = activeSessionId;
     if (!port || !text || sessionRunsRef.current[originSessionId]) return;
     if (!activeModel) {
