@@ -16,6 +16,7 @@ type SidebarProps = {
   activeView: WorkspaceView;
   activeSessionId: string;
   activeProjectPath: string;
+  streaming?: boolean;
   projects: WorkspaceEntry[];
   sessions: SessionSummary[];
   sessionProjectMap: Record<string, string>;
@@ -29,7 +30,6 @@ type SidebarProps = {
   } | null;
   savingProject?: boolean;
   onViewChange: (view: WorkspaceView) => void;
-  onSelectProject: (project: WorkspaceEntry) => void;
   onSelectDefaultWorkspace: () => void;
   onNewConversation: (project?: WorkspaceEntry) => void;
   onSelectSession: (sessionId: string) => void;
@@ -83,6 +83,7 @@ export default function Sidebar({
   activeView,
   activeSessionId,
   activeProjectPath,
+  streaming = false,
   projects,
   sessions,
   sessionProjectMap,
@@ -92,7 +93,6 @@ export default function Sidebar({
   editingProject,
   savingProject,
   onViewChange,
-  onSelectProject,
   onSelectDefaultWorkspace,
   onNewConversation,
   onSelectSession,
@@ -139,9 +139,8 @@ export default function Sidebar({
     : [];
 
   const isProjectExpanded = (path: string, hasSessions: boolean) => {
-    if (path === activeProjectPath) return true;
     if (expandedProjects[path] !== undefined) return expandedProjects[path];
-    return hasSessions;
+    return path === activeProjectPath || hasSessions;
   };
 
   const unassignedSessions = groupedSessions.get("__unassigned__") || [];
@@ -179,10 +178,9 @@ export default function Sidebar({
           {topLevelProjects.map((project) => {
             const projectSessions = groupedSessions.get(project.path) || [];
             const expanded = isProjectExpanded(project.path, projectSessions.length > 0);
-            const childProjects = groupedLocalProjects.get(project.path) || [];
             return (
               <div key={project.path} className="project-node">
-                <div className={project.path === activeProjectPath ? "project-row active" : "project-row"}>
+                <div className="project-row">
                   <button
                     className="project-expander"
                     onClick={() => setExpandedProjects((current) => ({ ...current, [project.path]: !expanded }))}
@@ -190,7 +188,7 @@ export default function Sidebar({
                   >
                     <ChevronIcon className={`icon-14 chevron ${expanded ? "expanded" : ""}`} />
                   </button>
-                  <button className="project-main" onClick={() => onSelectProject(project)}>
+                  <button className="project-main" onClick={() => setExpandedProjects((current) => ({ ...current, [project.path]: !expanded }))} title={expanded ? "折叠" : "展开"}>
                     <FolderIcon className="icon-16" />
                     <span>{projectName(project)}</span>
                   </button>
@@ -209,41 +207,25 @@ export default function Sidebar({
                   {projectSessions.length > 0 ? <span className="nav-count">{projectSessions.length}</span> : null}
                 </div>
 
-                {childProjects.length > 0 ? (
-                  <div className="child-project-list">
-                    {childProjects.map((childProject) => (
-                      <div
-                        key={childProject.path}
-                        className={childProject.path === activeProjectPath ? "child-project-row active" : "child-project-row"}
-                      >
-                        <button className="project-main" onClick={() => onSelectProject(childProject)} title={childProject.path}>
-                          <FolderIcon className="icon-14" />
-                          <span>{projectName(childProject)}</span>
-                        </button>
-                        <button className="icon-button" onClick={() => onEditProject(childProject)} title="编辑工程">
-                          <EditIcon className="icon-12" />
-                        </button>
-                        <button className="icon-button remove-project" onClick={() => onRemoveLocalProject(childProject)} title="移除工程">
-                          <XIcon className="icon-14" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-
                 {expanded ? (
                   <div className="project-sessions">
                     {projectSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
                     {projectSessions.map((session) => {
                       const id = session.sessionId || session.agentId || "";
+                      const active = sessionIsActive(session, activeSessionId);
+                      const running = active && streaming;
                       return (
                         <button
                           key={id}
-                          className={sessionIsActive(session, activeSessionId) ? "session-item active" : "session-item"}
+                          className={active ? "session-item active" : "session-item"}
                           onClick={() => onSelectSession(id)}
                         >
                           <span className="session-title">{sessionTitle(session)}</span>
-                          {sessionTime(session) ? <span className="session-time">{sessionTime(session)}</span> : null}
+                          {running ? (
+                            <span className="session-running-dot" title="对话进行中" aria-label="对话进行中" />
+                          ) : sessionTime(session) ? (
+                            <span className="session-time">{sessionTime(session)}</span>
+                          ) : null}
                         </button>
                       );
                     })}
@@ -254,7 +236,7 @@ export default function Sidebar({
           })}
 
           <div className="project-node">
-            <div className={activeProjectPath === "" && activeView === "conversation" ? "project-row active" : "project-row"}>
+            <div className="project-row">
               {unassignedSessions.length > 0 ? (
                 <button
                   className="project-expander"
@@ -317,13 +299,13 @@ export default function Sidebar({
                 {editingProjectChildren.map((childProject) => (
                   <div
                     key={childProject.path}
-                    className={childProject.path === activeProjectPath ? "child-project-row active" : "child-project-row"}
+                    className="child-project-row"
                     title={childProject.path}
                   >
-                    <button className="project-main" onClick={() => onSelectProject(childProject)}>
+                    <span className="project-main">
                       <FolderIcon className="icon-14" />
                       <span>{projectName(childProject)}</span>
-                    </button>
+                    </span>
                     <button
                       className="icon-button remove-project"
                       onClick={() => onRemoveLocalProject(childProject)}

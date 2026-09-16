@@ -760,7 +760,7 @@ export default function App() {
     if (!name || project.name === name) return true;
     if (!port || project.local) {
       setLocalProjects((current) => current.map((item) => (
-        item.path === project.path && item.parentPath === project.path ? { ...item, name } : item
+        item.path === project.path ? { ...item, name } : item
       )));
       return true;
     }
@@ -936,10 +936,7 @@ export default function App() {
     }
   }, [activeProjectPath, port, startConversation]);
 
-  const pickLocalProject = useCallback(async (
-    parentPath: string,
-    options?: { keepModalOpen?: boolean },
-  ) => {
+  const pickLocalProject = useCallback(async (parentPath: string) => {
     try {
       const selected = await invoke<WorkspaceEntry[]>("pick_local_directory");
       const entries = (selected || [])
@@ -955,24 +952,15 @@ export default function App() {
         ...current.filter((project) => !entries.some((entry) => entry.path === project.path)),
         ...entries,
       ]);
-      if (!options?.keepModalOpen) {
-        setActiveProjectPath(entries[0].path);
-        setProjectModalOpen(false);
-        setActiveView("conversation");
-        startConversation(entries[0]);
-      }
+      setActiveView("conversation");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
     }
-  }, [startConversation]);
+  }, []);
 
   const removeLocalProject = useCallback((project: WorkspaceEntry) => {
     setLocalProjects((current) => current.filter((item) => item.path !== project.path));
-    if (activeProjectPath === project.path) {
-      setActiveProjectPath(projects[0]?.path || "");
-      startConversation(projects[0]);
-    }
-  }, [activeProjectPath, projects, startConversation]);
+  }, []);
 
   const selectProject = useCallback((project: WorkspaceEntry) => {
     setActiveProjectPath(project.path);
@@ -1092,6 +1080,7 @@ export default function App() {
         activeView={activeView}
         activeSessionId={activeSessionId}
         activeProjectPath={activeProjectPath}
+        streaming={streaming}
         projects={combinedProjects}
         sessions={combinedSessions}
         sessionProjectMap={sessionProjectMap}
@@ -1099,7 +1088,6 @@ export default function App() {
         projectModalOpen={projectModalOpen}
         projectName={projectName}
         onViewChange={setActiveView}
-        onSelectProject={selectProject}
         onSelectDefaultWorkspace={selectDefaultWorkspace}
         onSelectSession={(id) => void selectSession(id)}
         onNewConversation={() => startConversation(activeProject)}
@@ -1111,7 +1099,7 @@ export default function App() {
           setEditingProject(project || null);
         }}
         onCreateProject={() => void createProject()}
-        onPickLocalProject={(parentPath) => void pickLocalProject(parentPath, { keepModalOpen: true })}
+        onPickLocalProject={(parentPath) => void pickLocalProject(parentPath)}
         onAddLocalProject={(parentPath) => void pickLocalProject(parentPath)}
         onEditProject={(project) => {
           editProject(project);
