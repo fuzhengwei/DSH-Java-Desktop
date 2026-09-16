@@ -42,6 +42,8 @@ export type ConversationMessage = {
   role: string;
   content: string;
   reasoning?: string;
+  /** 用户消息中 @ 提及的工程（本地缓存与展示用） */
+  mentions?: WorkspaceEntry[];
   toolName?: string;
   callId?: string;
   arguments?: Record<string, unknown>;

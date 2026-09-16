@@ -183,6 +183,14 @@ export function normalizeConversationMessage(message: unknown): ConversationMess
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : raw.occurredAt as string | undefined,
   };
   if (parsedContent.reasoning) normalized.reasoning = parsedContent.reasoning;
+  if (Array.isArray(raw.mentions)) {
+    const mentions = raw.mentions.filter((item): item is WorkspaceEntry => Boolean(
+      item && typeof item === "object"
+      && typeof (item as Record<string, unknown>).name === "string"
+      && typeof (item as Record<string, unknown>).path === "string",
+    ));
+    if (mentions.length > 0) normalized.mentions = mentions;
+  }
 
   if (Array.isArray(raw.blocks)) {
     let reasoning = "";
@@ -788,13 +796,17 @@ export default function App() {
     return localProjects.filter((project) => project.parentPath === sessionProjectPath);
   }, [activeProjectPath, activeSessionId, localProjects, sessionProjectMap]);
 
+  // 输入框中 @ 引用的工程（优先于"归属项目下挂载工程"作为对话上下文）
+  const [draftMentions, setDraftMentions] = useState<WorkspaceEntry[]>([]);
+  const contextProjects = draftMentions.length > 0 ? draftMentions : sessionSelectedProjects;
+
   const outgoingMessage = useMemo(() => {
-    if (sessionSelectedProjects.length === 0) return draft.trim();
-    const context = sessionSelectedProjects
+    if (contextProjects.length === 0) return draft.trim();
+    const context = contextProjects
       .map((project) => `- ${project.name}: ${project.path}`)
       .join("\n");
-    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${sessionSelectedProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
-  }, [sessionSelectedProjects, draft]);
+    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+  }, [contextProjects, draft]);
 
   const sendMessage = useCallback(async () => {
     const text = draft.trim();
@@ -832,7 +844,13 @@ export default function App() {
     const sessionProjectPath = sessionProjectMapRef.current[originSessionId] ?? activeProjectPath;
     setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPath }));
     const createdAt = new Date().toISOString();
-    const userMessage: ConversationMessage = { role: "user", content: text, createdAt };
+    const userMessage: ConversationMessage = {
+      role: "user",
+      content: text,
+      createdAt,
+      mentions: draftMentions.length > 0 ? draftMentions : undefined,
+    };
+    setDraftMentions([]);
     const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "", createdAt };
     updateMessagesForAliases([originSessionId], (current) => [...current, userMessage, assistantMessage]);
 
@@ -846,9 +864,9 @@ export default function App() {
           cwd: sessionProjectPath || undefined,
           approvalMode,
           reasoningEffort,
-          // 会话归属项目下挂载的工程目录作为沙箱额外可写根，自动审批模式下也可直接写入
-          sandboxRoots: sessionSelectedProjects.length > 0
-            ? sessionSelectedProjects.map((project) => project.path)
+          // @ 引用工程（无引用时退回会话归属项目下挂载的工程）作为沙箱额外可写根
+          sandboxRoots: contextProjects.length > 0
+            ? contextProjects.map((project) => project.path)
             : undefined,
         },
         (event) => {
@@ -1023,7 +1041,8 @@ export default function App() {
     }
   }, [
     activeModel,
-    sessionSelectedProjects,
+    contextProjects,
+    draftMentions,
     activeSession,
     activeProjectPath,
     activeSessionId,
@@ -1599,6 +1618,8 @@ export default function App() {
             onCreateSession={() => startConversation(activeProject)}
             onDraftChange={setDraft}
             onSend={() => void sendMessage()}
+            mentions={draftMentions}
+            onMentionsChange={setDraftMentions}
             sentHistory={promptHistory}
             onHistoryEntry={appendPromptHistory}
             onStopGeneration={() => abortControllersRef.current.get(activeSessionId)?.abort()}

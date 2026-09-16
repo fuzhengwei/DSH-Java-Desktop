@@ -1721,7 +1721,7 @@ select:focus-visible {
   border-radius: 24px;
   background: rgba(255,255,255,.98);
   box-shadow: 0 10px 34px rgba(20,20,20,.06);
-  overflow: hidden;
+  /* 不设 overflow: hidden——@ 工程弹层要向上溢出显示 */
   transition: border-color .18s ease, box-shadow .18s ease;
 }
 
@@ -1740,6 +1740,186 @@ select:focus-visible {
   line-height: 24px;
 }
 
+/* ---- @ 工程提及 ---- */
+.composer-input {
+  position: relative;
+  border-radius: 24px 24px 0 0;
+  overflow: visible;
+}
+
+.composer-input textarea {
+  position: relative;
+  z-index: 1;
+  font-family: var(--font);
+}
+
+/* 覆盖层：把已确认的 @工程名 渲染为标签；与 textarea 严格同字重同排版 */
+.mention-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.mention-overlay-text {
+  padding: 18px 18px 10px;
+  color: transparent;
+  font-size: 15px;
+  line-height: 24px;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mention-chip-token {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 7px;
+  margin: 0 1px;
+  border-radius: 7px;
+  background: var(--selection);
+  box-shadow: inset 0 0 0 1px var(--selection-border);
+  color: var(--sidebar-accent);
+  font-size: 13px;
+  line-height: 20px;
+  vertical-align: 1px;
+}
+
+.mention-chip-token .icon-12 {
+  flex-shrink: 0;
+}
+
+/* 工具栏标签 */
+.mention-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mention-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  min-height: 26px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 8px;
+  background: var(--selection);
+  box-shadow: inset 0 0 0 1px var(--selection-border);
+  color: var(--sidebar-accent);
+  font-size: 11px;
+}
+
+.mention-chip.static {
+  padding: 3px 8px;
+  cursor: default;
+}
+
+.mention-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 5px;
+  color: inherit;
+  opacity: .65;
+  transition: background .15s ease, opacity .15s ease;
+}
+
+.mention-chip-remove:hover:not(:disabled) {
+  background: rgba(66, 92, 240, .16);
+  opacity: 1;
+}
+
+/* 弹层 */
+.mention-popup {
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 30;
+  width: min(360px, calc(100% - 24px));
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 40px rgba(21, 21, 26, .14), inset 0 0 0 1px var(--border-strong);
+}
+
+.mention-popup-title {
+  padding: 6px 8px 4px;
+  color: var(--text-subtle);
+  font-size: 11px;
+}
+
+.mention-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  transition: background .12s ease;
+}
+
+.mention-item.active {
+  background: var(--surface-2);
+}
+
+.mention-item .icon-14 {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.mention-item-name {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.mention-item-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-subtle);
+  font-size: 11px;
+}
+
+.mention-empty {
+  padding: 14px 10px;
+  color: var(--text-subtle);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* 历史消息中的标签 */
+.message-mentions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
 .prompt-toolbar {
   display: flex;
   align-items: center;
@@ -1747,6 +1927,8 @@ select:focus-visible {
   flex-wrap: wrap;
   row-gap: 8px;
   padding: 8px 10px 10px 14px;
+  border-radius: 0 0 24px 24px;
+  overflow: hidden;
 }
 
 .prompt-leading,
@@ -3011,6 +3193,8 @@ select:focus-visible {
 
 .remove-project:hover { color: var(--danger); background: var(--danger-bg); }
 
+.icon-10 { width: 10px; height: 10px; }
+.icon-12 { width: 12px; height: 12px; }
 .icon-14 { width: 14px; height: 14px; }
 .icon-15 { width: 15px; height: 15px; }
 .icon-16 { width: 16px; height: 16px; }

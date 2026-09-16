@@ -1,8 +1,8 @@
 import type { ApprovalMode, AvailableModel, ConversationMessage, ReasoningEffort, RuntimeApproval, WorkspaceEntry } from "../types";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon } from "./icons";
+import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, XIcon } from "./icons";
 
 type ConversationViewProps = {
   serviceReady: boolean;
@@ -24,6 +24,9 @@ type ConversationViewProps = {
   onCreateSession?: () => void;
   onDraftChange: (value: string) => void;
   onSend: () => void;
+  /** 输入框中 @ 引用的工程（App 侧用于拼上下文与消息展示） */
+  mentions: WorkspaceEntry[];
+  onMentionsChange: (projects: WorkspaceEntry[]) => void;
   sentHistory: string[];
   onHistoryEntry: (value: string) => void;
   onStopGeneration: () => void;
@@ -129,6 +132,53 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3);
 }
 
+/** 从草稿文本中解析已确认的工程提及：@名称（名称后紧跟空格/换行/文本结尾） */
+function parseMentionEntries(value: string, candidates: WorkspaceEntry[]): { name: string; start: number; end: number }[] {
+  const entries: { name: string; start: number; end: number }[] = [];
+  for (const project of candidates) {
+    if (!project.name) continue;
+    let searchFrom = 0;
+    const token = `@${project.name}`;
+    while (searchFrom < value.length) {
+      const index = value.indexOf(token, searchFrom);
+      if (index < 0) break;
+      const end = index + token.length;
+      const tail = value[end];
+      if (end === value.length || tail === " " || tail === "\n" || tail === "\t") {
+        entries.push({ name: project.name, start: index, end });
+      }
+      searchFrom = end;
+    }
+  }
+  entries.sort((a, b) => a.start - b.start);
+  return entries;
+}
+
+/** 去掉草稿中已确认提及的 @ 文本，得到干净的正文 */
+function stripMentionTokens(value: string, entries: { start: number; end: number }[]): string {
+  if (entries.length === 0) return value;
+  let result = "";
+  let cursor = 0;
+  for (const entry of entries) {
+    result += value.slice(cursor, entry.start);
+    cursor = entry.end;
+    // 吃掉提及后紧跟的一个空格，避免留下双空格
+    if (value[cursor] === " ") cursor += 1;
+  }
+  result += value.slice(cursor);
+  return result;
+}
+
+/** 输入中的触发词：光标前最后一个 @ 开始的连续非空白片段（不含空格，支持中文） */
+function detectMentionTrigger(value: string, caret: number): { start: number; query: string } | null {
+  const beforeCaret = value.slice(0, caret);
+  const atIndex = beforeCaret.lastIndexOf("@");
+  if (atIndex < 0) return null;
+  const query = beforeCaret.slice(atIndex + 1);
+  if (/[\s@]/.test(query)) return null;
+  return { start: atIndex, query };
+}
+
 function messageTokenCount(message: ConversationMessage): number {
   const argumentText = message.arguments ? JSON.stringify(message.arguments) : "";
   return estimateTokens([message.content, message.reasoning, message.result, argumentText]
@@ -227,6 +277,8 @@ export default function ConversationView({
   onCreateSession,
   onDraftChange,
   onSend,
+  mentions: mentionsProp,
+  onMentionsChange,
   sentHistory,
   onHistoryEntry,
   onStopGeneration,
@@ -260,6 +312,131 @@ export default function ConversationView({
   const sentHistoryRef = useRef(sentHistory);
   sentHistoryRef.current = sentHistory;
   const historyBrowsing = historyCursor < sentHistory.length;
+
+  // ---- @ 工程提及 ----
+  // draft 中的 @工程名 在输入框渲染为标签；确认选择/删词/手动输入/历史恢复都会同步到 mentionChips
+  const [mentionChips, setMentionChips] = useState<WorkspaceEntry[]>([]);
+  const [mentionTrigger, setMentionTrigger] = useState<{ start: number; query: string } | null>(null);
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState(false);
+  const mentionListRef = useRef<HTMLDivElement>(null);
+  const chipsRef = useRef(mentionChips);
+  chipsRef.current = mentionChips;
+  const mentionTriggerRef = useRef(mentionTrigger);
+  mentionTriggerRef.current = mentionTrigger;
+
+  // 可供 @ 提及的候选：仅当前项目下挂载的本地工程文件夹
+  const mentionCandidates = useMemo(() => projects.filter((project) => (
+    project.local && project.parentPath === activeProject?.path
+  )), [activeProject, projects]);
+
+  // 草稿变化时与文本中的 @ 标记对账：名字还在文本里才保留标签，否则移除
+  const syncMentionsFromText = useCallback((value: string) => {
+    setMentionChips((current) => current.filter((chip) => value.includes(`@${chip.name}`)));
+  }, []);
+  const syncMentionsRef = useRef(syncMentionsFromText);
+  syncMentionsRef.current = syncMentionsFromText;
+
+  // 候选工程变化（切项目/增删工程）时刷新标签对应的工程信息，丢弃已不存在的
+  useEffect(() => {
+    setMentionChips((current) => current
+      .map((chip) => mentionCandidates.find((project) => project.path === chip.path) || null)
+      .filter((chip): chip is WorkspaceEntry => Boolean(chip)));
+  }, [mentionCandidates]);
+
+  const mentionResults = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const query = mentionTrigger.query.trim().toLowerCase();
+    return mentionCandidates.filter((project) => (
+      !mentionChips.some((chip) => chip.path === project.path)
+      && (!query || project.name.toLowerCase().includes(query) || project.path.toLowerCase().includes(query))
+    ));
+  }, [mentionCandidates, mentionChips, mentionTrigger]);
+
+  // 候选为空（项目未挂载工程 / 默认工作区）时不弹层，@ 视为普通字符，避免"弹个空框"
+  const mentionOpen = Boolean(mentionTrigger && !mentionDismissed && !streaming && mentionCandidates.length > 0);
+  const mentionOpenRef = useRef(mentionOpen);
+  mentionOpenRef.current = mentionOpen;
+
+  // 标签变化同步给 App（发送时拼上下文、存到消息上）
+  useEffect(() => {
+    onMentionsChange(mentionChips);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionChips]);
+
+  // App 侧外部清空（如发送成功后）
+  useEffect(() => {
+    if (mentionsProp.length === 0 && chipsRef.current.length > 0) {
+      setMentionChips([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionsProp]);
+
+  useEffect(() => {
+    setMentionActiveIndex(0);
+  }, [mentionTrigger?.start, mentionTrigger?.query]);
+
+  useEffect(() => {
+    if (!mentionOpen) return;
+    const list = mentionListRef.current;
+    const active = list?.querySelector(".mention-item.active");
+    if (active instanceof HTMLElement) active.scrollIntoView({ block: "nearest" });
+  }, [mentionActiveIndex, mentionOpen]);
+
+  const closeMention = () => setMentionTrigger(null);
+
+  /** 从弹层确认一个工程：在原位置留下 @名称 文本并登记标签，光标移到其后 */
+  const confirmMention = (project: WorkspaceEntry) => {
+    const trigger = mentionTriggerRef.current;
+    const textarea = textareaRef.current;
+    if (!trigger) return;
+    const value = draftRef.current;
+    const caret = textarea ? textarea.selectionStart : value.length;
+    const token = `@${project.name} `;
+    const next = value.slice(0, trigger.start) + token + value.slice(caret);
+    const caretAfter = trigger.start + token.length;
+    setMentionChips((current) => (
+      current.some((chip) => chip.path === project.path) ? current : [...current, project]
+    ));
+    setMentionTrigger(null);
+    setMentionDismissed(false);
+    onDraftChange(next);
+    requestAnimationFrame(() => {
+      const target = textareaRef.current;
+      if (target) {
+        target.focus();
+        target.selectionStart = caretAfter;
+        target.selectionEnd = caretAfter;
+      }
+    });
+  };
+
+  const removeMentionChip = (project: WorkspaceEntry) => {
+    // 同时移除文本中的 @名称，标签与文本保持一致
+    const entries = parseMentionEntries(draftRef.current, mentionCandidates)
+      .filter((entry) => entry.name === project.name);
+    if (entries.length > 0) {
+      const next = stripMentionTokens(draftRef.current, entries);
+      onDraftChange(next);
+    }
+    setMentionChips((current) => current.filter((chip) => chip.path !== project.path));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  };
+
+  /** 浏览历史时解析草稿中的 @ 文本，恢复标签 */
+  const restoreMentionsFromText = (value: string) => {
+    const entries = parseMentionEntries(value, mentionCandidates);
+    const found = entries
+      .map((entry) => mentionCandidates.find((project) => project.name === entry.name))
+      .filter((project): project is WorkspaceEntry => Boolean(project));
+    // 去重（同名只保留一次）
+    const seen = new Set<string>();
+    setMentionChips(found.filter((project) => {
+      if (seen.has(project.path)) return false;
+      seen.add(project.path);
+      return true;
+    }));
+  };
 
   const exitHistoryBrowsing = () => {
     setHistoryCursor(sentHistoryRef.current.length);
@@ -295,15 +472,17 @@ export default function ConversationView({
 
     let next = forward ? historyCursorRef.current + 1 : historyCursorRef.current - 1;
     if (forward && next >= history.length) {
-      // 翻过最新一条：恢复备份的草稿并退出浏览
+      // 翻过最新一条：恢复备份的草稿并退出浏览，同时恢复草稿对应的标签
       setHistoryCursor(history.length);
       setDraftAndCaret(draftBackupRef.current);
+      restoreMentionsFromText(draftBackupRef.current);
       return true;
     }
     next = Math.max(0, Math.min(history.length - 1, next));
     if (next === historyCursorRef.current) return browsing; // 已到端点，浏览中也要拦截默认行为
     setHistoryCursor(next);
     setDraftAndCaret(history[next]);
+    restoreMentionsFromText(history[next]);
     return true;
   };
 
@@ -318,6 +497,7 @@ export default function ConversationView({
     const text = draftRef.current.trim();
     exitHistoryBrowsing();
     if (text) onHistoryEntry(text);
+    closeMention();
     onSend();
   };
   const runningTool = [...messages].reverse().find((message) => (
@@ -444,44 +624,170 @@ export default function ConversationView({
         </div>
       ) : null}
       <div className={variant === "hero" ? "prompt-shell hero" : "prompt-shell chat"}>
-        <textarea
-          ref={textareaRef}
-          value={draft}
-          placeholder="描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"
-          disabled={streaming}
-          onChange={(event) => {
-            exitHistoryBrowsing();
-            onDraftChange(event.target.value);
-          }}
-          onCompositionStart={() => {
-            composingRef.current = true;
-          }}
-          onCompositionEnd={() => {
-            composingRef.current = false;
-          }}
-          onKeyDown={(event) => {
-            const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-            if (composing) return;
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              sendFromComposer();
-              return;
-            }
-            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-              if (recallHistory(event.currentTarget, event.key === "ArrowDown")) {
-                event.preventDefault();
+        <div className="composer-input">
+          <textarea
+            ref={textareaRef}
+            value={draft}
+            placeholder={mentionCandidates.length > 0
+              ? "描述任务，输入 @ 可引用当前项目下的工程（↑ 键调出历史消息）"
+              : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
+            disabled={streaming}
+            onChange={(event) => {
+              exitHistoryBrowsing();
+              const value = event.target.value;
+              const caret = event.target.selectionStart;
+              onDraftChange(value);
+              syncMentionsRef.current(value);
+              const trigger = detectMentionTrigger(value, caret);
+              if (trigger) {
+                // 光标落在已确认标签的 @ 文本内时，不重新打开弹层
+                const insideConfirmed = parseMentionEntries(value, mentionCandidates)
+                  .some((entry) => trigger.start >= entry.start && trigger.start < entry.end);
+                if (insideConfirmed) {
+                  setMentionTrigger(null);
+                } else {
+                  // Esc 关闭后同一触发词不再自动弹出；换一个触发词（@ 位置变化）重新弹出
+                  setMentionDismissed((dismissed) => (
+                    dismissed && mentionTriggerRef.current?.start === trigger.start ? dismissed : false
+                  ));
+                  setMentionTrigger(trigger);
+                }
+              } else {
+                setMentionTrigger(null);
+                setMentionDismissed(false);
               }
-              return;
-            }
-            if (event.key === "Escape" && historyBrowsing) {
-              event.preventDefault();
-              setHistoryCursor(sentHistoryRef.current.length);
-              setDraftAndCaret(draftBackupRef.current);
-            }
-          }}
-        />
+            }}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              composingRef.current = false;
+            }}
+            onKeyDown={(event) => {
+              const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+              if (composing) return;
+              // @ 弹层打开时优先处理弹层导航
+              if (mentionOpenRef.current) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  setMentionActiveIndex((index) => (index + 1) % mentionResults.length);
+                  return;
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setMentionActiveIndex((index) => (index - 1 + mentionResults.length) % mentionResults.length);
+                  return;
+                }
+                if (event.key === "Enter" || event.key === "Tab") {
+                  event.preventDefault();
+                  const target = mentionResults[mentionActiveIndex] || mentionResults[0];
+                  if (target) confirmMention(target);
+                  return;
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeMention();
+                  setMentionDismissed(true);
+                  return;
+                }
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendFromComposer();
+                return;
+              }
+              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                if (recallHistory(event.currentTarget, event.key === "ArrowDown")) {
+                  event.preventDefault();
+                }
+                return;
+              }
+              if (event.key === "Escape" && historyBrowsing) {
+                event.preventDefault();
+                setHistoryCursor(sentHistoryRef.current.length);
+                setDraftAndCaret(draftBackupRef.current);
+                restoreMentionsFromText(draftBackupRef.current);
+              }
+            }}
+          />
+          {mentionChips.length > 0 ? (
+            <div className="mention-overlay" aria-hidden="true">
+              <div className="mention-overlay-text">
+                {(() => {
+                  const chipPaths = new Set(mentionChips.map((chip) => chip.path));
+                  const candidates = mentionCandidates.filter((project) => chipPaths.has(project.path));
+                  const entries = parseMentionEntries(draft, candidates);
+                  const chipsByName = new Map(mentionChips.map((chip) => [chip.name, chip]));
+                  const nodes: ReactNode[] = [];
+                  let cursor = 0;
+                  entries.forEach((entry, index) => {
+                    nodes.push(<span key={`text-${index}`}>{draft.slice(cursor, entry.start)}</span>);
+                    const chip = chipsByName.get(entry.name);
+                    if (chip) {
+                      nodes.push(
+                        <span key={`chip-${index}`} className="mention-chip-token" title={chip.path}>
+                          <FolderIcon className="icon-12" />
+                          {chip.name}
+                        </span>,
+                      );
+                    }
+                    cursor = entry.end;
+                  });
+                  nodes.push(<span key="text-tail">{draft.slice(cursor)}</span>);
+                  return nodes;
+                })()}
+              </div>
+            </div>
+          ) : null}
+          {mentionOpen ? (
+            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择工程">
+              <div className="mention-popup-title">引用工程</div>
+              {mentionResults.length === 0 ? (
+                <div className="mention-empty">没有匹配的工程</div>
+              ) : null}
+              {mentionResults.map((project, index) => (
+                <button
+                  key={project.path}
+                  type="button"
+                  role="option"
+                  aria-selected={index === mentionActiveIndex}
+                  className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    confirmMention(project);
+                  }}
+                  onMouseEnter={() => setMentionActiveIndex(index)}
+                >
+                  <FolderIcon className="icon-14" />
+                  <span className="mention-item-name">{project.name}</span>
+                  <span className="mention-item-path" title={project.path}>{project.path}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="prompt-toolbar">
           <div className="prompt-leading">
+            {mentionChips.length > 0 ? (
+              <div className="mention-chips" aria-label="已引用的工程">
+                {mentionChips.map((chip) => (
+                  <span key={chip.path} className="mention-chip" title={chip.path}>
+                    <FolderIcon className="icon-12" />
+                    <span className="mention-chip-name">{chip.name}</span>
+                    <button
+                      type="button"
+                      className="mention-chip-remove"
+                      aria-label={`移除 ${chip.name}`}
+                      title={`移除 ${chip.name}`}
+                      disabled={streaming}
+                      onClick={() => removeMentionChip(chip)}
+                    >
+                      <XIcon className="icon-10" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
             <div className="composer-project">
               <button
                 className="composer-project-add"
@@ -783,6 +1089,16 @@ const MessageItem = memo(function MessageItem({
                 </summary>
                 <pre>{reasoningText}</pre>
               </details>
+            ) : null}
+            {message.role === "user" && message.mentions && message.mentions.length > 0 ? (
+              <div className="message-mentions">
+                {message.mentions.map((project) => (
+                  <span key={project.path} className="mention-chip static" title={project.path}>
+                    <FolderIcon className="icon-12" />
+                    <span className="mention-chip-name">{project.name}</span>
+                  </span>
+                ))}
+              </div>
             ) : null}
             {contentText ? (
               <div className="message-content">{renderMarkdown(contentText)}</div>
