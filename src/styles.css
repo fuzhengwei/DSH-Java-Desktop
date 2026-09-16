@@ -2067,20 +2067,29 @@ select:focus-visible {
 
 .context-ring-bg {
   fill: none;
-  stroke: var(--surface-3);
-  stroke-width: 2;
+  stroke: #e8e8e8;
+  stroke-width: 2.5;
 }
 
 .context-ring-fg {
   fill: none;
-  stroke: var(--accent);
-  stroke-width: 2;
+  stroke: #7cb3f0;
+  stroke-width: 2.5;
   stroke-linecap: round;
   transition: stroke-dasharray .2s ease, stroke .2s ease;
 }
 
-.context-ring-fg.warn { stroke: var(--warning); }
-.context-ring-fg.danger { stroke: var(--danger); }
+.context-ring-fg.warn { stroke: #f0c46c; }
+.context-ring-fg.danger { stroke: #e88a8a; }
+
+.context-ring-label {
+  position: absolute;
+  font-size: 7px;
+  font-weight: 600;
+  color: var(--text-muted);
+  pointer-events: none;
+  line-height: 1;
+}
 
 .context-ring-tooltip {
   position: absolute;

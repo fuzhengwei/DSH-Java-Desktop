@@ -521,6 +521,7 @@ export default function ConversationView({
                   strokeDashoffset="0"
                 />
               </svg>
+              <span className="context-ring-label">{Math.round(contextPercent)}%</span>
               <div className="context-ring-tooltip">{contextTooltip}</div>
             </div>
             <button
