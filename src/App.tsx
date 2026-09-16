@@ -1011,8 +1011,13 @@ export default function App() {
       await loadWorkspaceData(port);
       notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], false);
     } catch (caught) {
-      const isAbort = caught instanceof DOMException && caught.name === "AbortError";
       const message = caught instanceof Error ? caught.message : String(caught);
+      // Tauri plugin-http 取消请求时不一定抛标准 AbortError，
+      // 常见文案还有 "Request cancelled" / "canceled" 等，需要一并识别，
+      // 否则用户手动停止会被当成普通错误显示出来。
+      const isAbort =
+        (caught instanceof DOMException && caught.name === "AbortError")
+        || /request cancell?ed|\babort(?:ed)?\b/i.test(message);
       if (isAbort && !timedOutRef.current) {
         // 用户手动停止：静默结束，不报错、不通知
       } else {
