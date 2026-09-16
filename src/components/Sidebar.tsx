@@ -44,7 +44,22 @@ type SidebarProps = {
 };
 
 function sessionTitle(session: SessionSummary): string {
-  return session.title || session.lastMessage || session.agentId || session.sessionId || "未命名对话";
+  const raw = session.title || session.lastMessage || session.agentId || session.sessionId || "未命名对话";
+  const withoutHiddenContext = raw
+    .replace(/<hidden-context>[\s\S]*?<\/hidden-context>/gi, "")
+    .replace(/\n?\[当前选择的工程\][\s\S]*$/i, "")
+    .trim();
+  return withoutHiddenContext || "未命名对话";
+}
+
+function sessionIds(session: SessionSummary): string[] {
+  return [session.sessionId, session.agentId].filter((value, index, values): value is string => (
+    Boolean(value) && values.indexOf(value) === index
+  ));
+}
+
+function sessionIsActive(session: SessionSummary, activeSessionId: string): boolean {
+  return sessionIds(session).includes(activeSessionId);
 }
 
 function projectName(project: WorkspaceEntry): string {
@@ -95,8 +110,9 @@ export default function Sidebar({
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, SessionSummary[]>();
     for (const session of sessions) {
-      const id = session.sessionId || session.agentId || "";
-      const projectPath = sessionProjectMap[id] || "__unassigned__";
+      const projectPath = sessionIds(session)
+        .map((id) => sessionProjectMap[id])
+        .find(Boolean) || "__unassigned__";
       const list = groups.get(projectPath) || [];
       list.push(session);
       groups.set(projectPath, list);
@@ -223,7 +239,7 @@ export default function Sidebar({
                       return (
                         <button
                           key={id}
-                          className={id === activeSessionId ? "session-item active" : "session-item"}
+                          className={sessionIsActive(session, activeSessionId) ? "session-item active" : "session-item"}
                           onClick={() => onSelectSession(id)}
                         >
                           <span className="session-title">{sessionTitle(session)}</span>
@@ -262,7 +278,7 @@ export default function Sidebar({
                 {unassignedSessions.map((session) => {
                   const id = session.sessionId || session.agentId || "";
                   return (
-                    <button key={id} className={id === activeSessionId ? "session-item active" : "session-item"} onClick={() => onSelectSession(id)}>
+                    <button key={id} className={sessionIsActive(session, activeSessionId) ? "session-item active" : "session-item"} onClick={() => onSelectSession(id)}>
                       <span className="session-title">{sessionTitle(session)}</span>
                     </button>
                   );

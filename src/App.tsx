@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ConversationView from "./components/ConversationView";
 import Sidebar, { type WorkspaceView } from "./components/Sidebar";
-import SettingsView from "./components/SettingsView";
+import SettingsView, { type SettingsSection } from "./components/SettingsView";
 import {
   activateModelSetting,
   deleteModelSetting,
@@ -44,8 +44,6 @@ const emptyModelDraft: ModelDraft = {
   enabled: true,
 };
 
-type SettingsTab = "models" | "service";
-
 type ProjectEditTarget = {
   path: string;
   name: string;
@@ -74,6 +72,42 @@ function payloadRecord(payload: unknown): Record<string, unknown> {
   return payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
 }
 
+function payloadString(payload: unknown, ...keys: string[]): string {
+  if (typeof payload === "string") return payload;
+  const record = payloadRecord(payload);
+  for (const key of keys) {
+    if (typeof record[key] === "string") return record[key] as string;
+  }
+  return "";
+}
+
+function payloadArguments(payload: Record<string, unknown>): Record<string, unknown> {
+  const value = payload.arguments ?? payload.args;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string" && value.trim()) return { input: value };
+  return {};
+}
+
+function mergeStreamText(current: string, incoming: string): string {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  if (incoming === current || current.endsWith(incoming)) return current;
+  if (incoming.startsWith(current)) return incoming;
+  return current + incoming;
+}
+
+function readApprovalMode(): ApprovalMode {
+  const value = localStorage.getItem("dsh-approval-mode");
+  return value === "AUTO_APPROVE" || value === "FULL_OPEN" ? value : "REQUEST_APPROVAL";
+}
+
+function readReasoningEffort(): ReasoningEffort {
+  const value = localStorage.getItem("dsh-reasoning-effort");
+  return value === "low" || value === "high" ? value : "medium";
+}
+
 function readSessionMessages(sessionId: string): ConversationMessage[] {
   try {
     const cache = JSON.parse(localStorage.getItem("dsh-session-messages") || "{}");
@@ -100,11 +134,14 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
   const role = typeof raw.role === "string" ? raw.role : "";
   if (!role) return null;
 
+  const parsedContent = parseThinkingMarkup(typeof raw.content === "string" ? raw.content : "");
+
   const normalized: ConversationMessage = {
     role,
-    content: typeof raw.content === "string" ? raw.content : "",
+    content: visibleMessageText(role === "user" ? visibleUserMessage(parsedContent.content) : parsedContent.content),
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : raw.occurredAt as string | undefined,
   };
+  if (parsedContent.reasoning) normalized.reasoning = parsedContent.reasoning;
 
   if (Array.isArray(raw.blocks)) {
     let reasoning = "";
@@ -119,20 +156,27 @@ function normalizeConversationMessage(message: unknown): ConversationMessage | n
       if (kind === "tool-call") {
         normalized.toolName = typeof item.toolName === "string" ? item.toolName : normalized.toolName;
         normalized.callId = typeof item.callId === "string" ? item.callId : normalized.callId;
-        normalized.arguments = item.argsRaw && typeof item.argsRaw === "object"
-          ? item.argsRaw as Record<string, unknown>
-          : typeof item.argsRaw === "string" ? { input: item.argsRaw } : normalized.arguments;
+        const args = item.argsRaw ?? item.args ?? item.arguments;
+        normalized.arguments = args && typeof args === "object" && !Array.isArray(args)
+          ? args as Record<string, unknown>
+          : typeof args === "string" ? { input: args } : normalized.arguments;
         normalized.status = typeof item.status === "string" ? item.status : normalized.status;
         normalized.result = typeof item.result === "string" ? item.result : normalized.result;
       }
     }
-    if (!normalized.content && text) normalized.content = text;
-    if (reasoning) normalized.reasoning = reasoning;
+    if (text) normalized.content = visibleMessageText(text);
+    if (reasoning) normalized.reasoning = [normalized.reasoning, visibleMessageText(reasoning)]
+      .filter(Boolean)
+      .join("\n\n");
   } else {
     if (typeof raw.reasoning === "string" && raw.reasoning) normalized.reasoning = raw.reasoning;
     if (typeof raw.toolName === "string" && raw.toolName) normalized.toolName = raw.toolName;
     if (typeof raw.callId === "string" && raw.callId) normalized.callId = raw.callId;
-    if (raw.arguments && typeof raw.arguments === "object") normalized.arguments = raw.arguments as Record<string, unknown>;
+    if (raw.arguments && typeof raw.arguments === "object" && !Array.isArray(raw.arguments)) {
+      normalized.arguments = raw.arguments as Record<string, unknown>;
+    } else if (raw.args && typeof raw.args === "object" && !Array.isArray(raw.args)) {
+      normalized.arguments = raw.args as Record<string, unknown>;
+    }
     if (typeof raw.result === "string" && raw.result) normalized.result = raw.result;
     if (typeof raw.status === "string" && raw.status) normalized.status = raw.status;
   }
@@ -145,26 +189,61 @@ function newSessionId(): string {
 }
 
 function payloadText(payload: unknown): string {
-  if (typeof payload === "string") return payload;
-  if (!payload || typeof payload !== "object") return "";
-  const record = payload as Record<string, unknown>;
-  if (typeof record.content === "string") return record.content;
-  if (typeof record.text === "string") return record.text;
-  if (typeof record.message === "string") return record.message;
-  if (typeof record.info === "string") return record.info;
-  if (typeof record.error === "string") return record.error;
-  if (typeof record.result === "string") return record.result;
-  return "";
+  return payloadString(payload, "content", "text", "delta", "message", "info", "error", "result", "value");
+}
+
+const HIDDEN_CONTEXT_OPEN = "<hidden-context>";
+const HIDDEN_CONTEXT_CLOSE = "</hidden-context>";
+
+function visibleMessageText(value: string): string {
+  let text = value;
+  const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
+  if (openIndex >= 0) {
+    const closeIndex = text.indexOf(HIDDEN_CONTEXT_CLOSE, openIndex);
+    text = closeIndex >= 0
+      ? text.slice(0, openIndex) + text.slice(closeIndex + HIDDEN_CONTEXT_CLOSE.length)
+      : text.slice(0, openIndex);
+  }
+  return text.replace(/\n?\[当前选择的工程\][\s\S]*$/, "").trim();
+}
+
+function parseThinkingMarkup(value: string): { content: string; reasoning: string } {
+  let reasoning = "";
+  const content = value.replace(/<(?:think|thinking|reasoning)>[\s\S]*?<\/(?:think|thinking|reasoning)>/gi, (match) => {
+    const inner = match.replace(/^<(?:think|thinking|reasoning)>/i, "").replace(/<\/(?:think|thinking|reasoning)>$/i, "").trim();
+    if (inner) reasoning += reasoning ? `\n\n${inner}` : inner;
+    return "";
+  });
+  return {
+    content: content.trim(),
+    reasoning: reasoning.trim(),
+  };
+}
+
+function visibleUserMessage(value: string): string {
+  const marker = "用户原始请求：";
+  const instructionPrefix = "请先使用可用工具完成下面的任务，";
+  if (value.startsWith(instructionPrefix) && value.includes(marker)) {
+    return value.slice(value.indexOf(marker) + marker.length).trim();
+  }
+  return value;
+}
+
+function sessionTitle(session: SessionSummary): string {
+  const rawTitle = session.title || session.lastMessage || session.agentId || session.sessionId || "新对话";
+  return visibleMessageText(visibleUserMessage(rawTitle)) || "新对话";
 }
 
 function messagesFromPayload(payload: unknown): ConversationMessage[] | null {
   const messages = payloadRecord(payload).messages;
   if (!Array.isArray(messages)) return null;
-  return messages.map(normalizeConversationMessage).filter((message): message is ConversationMessage => Boolean(message));
-}
-
-function sessionTitle(session: SessionSummary): string {
-  return session.title || session.lastMessage || session.agentId || session.sessionId || "新对话";
+  const normalized = messages.map(normalizeConversationMessage)
+    .filter((message): message is ConversationMessage => Boolean(message));
+  return normalized.filter((message, index) => (
+    !(message.role === "user" && index > 0
+      && normalized[index - 1].role === "user"
+      && normalized[index - 1].content.trim() === message.content.trim())
+  ));
 }
 
 export default function App() {
@@ -187,14 +266,15 @@ export default function App() {
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [modelDraft, setModelDraft] = useState<ModelDraft>(emptyModelDraft);
   const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("models");
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("models");
   const [savingModel, setSavingModel] = useState(false);
   const [syncingModels, setSyncingModels] = useState(false);
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
-  const [approvalMode, setApprovalMode] = useState<ApprovalMode>("REQUEST_APPROVAL");
-  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("medium");
+  const [lastRunDurations, setLastRunDurations] = useState<Record<string, number>>({});
+  const [approvalMode, setApprovalMode] = useState<ApprovalMode>(readApprovalMode);
+  const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(readReasoningEffort);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
@@ -288,6 +368,14 @@ export default function App() {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
   }, [draftSessions]);
 
+  useEffect(() => {
+    localStorage.setItem("dsh-approval-mode", approvalMode);
+  }, [approvalMode]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-reasoning-effort", reasoningEffort);
+  }, [reasoningEffort]);
+
   const connectService = useCallback(async (focusModelsIfEmpty = false) => {
     setServiceStatus("starting");
     setServiceError("");
@@ -370,6 +458,29 @@ export default function App() {
   }, [messages]);
 
   useEffect(() => {
+    if (!port || streaming || messages.length > 0) return;
+    const session = combinedSessions.find((item) => (
+      item.sessionId === activeSessionId || item.agentId === activeSessionId
+    ));
+    const sessionId = session?.sessionId;
+    if (!sessionId) return;
+    let cancelled = false;
+    const targetIds = new Set([sessionId, session.agentId].filter((value): value is string => Boolean(value)));
+    void listMessages(port, sessionId)
+      .then((loaded) => {
+        if (cancelled || !targetIds.has(activeSessionRef.current)) return;
+        const normalized = loaded
+          .map(normalizeConversationMessage)
+          .filter((message): message is ConversationMessage => Boolean(message));
+        if (normalized.length > 0) setMessages(normalized);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSessionId, combinedSessions, messages.length, port, streaming]);
+
+  useEffect(() => {
     if (!port || !streaming) return;
     let cancelled = false;
     const loadApprovals = async () => {
@@ -429,7 +540,7 @@ export default function App() {
     const context = activeSelectedProjects
       .map((project) => `- ${project.name}: ${project.path}`)
       .join("\n");
-    return `${draft.trim()}\n\n[当前选择的工程]\n${context}`;
+    return `${draft.trim()}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n${HIDDEN_CONTEXT_CLOSE}`;
   }, [activeSelectedProjects, draft]);
 
   const sendMessage = useCallback(async () => {
@@ -441,27 +552,37 @@ export default function App() {
       return;
     }
 
+    const runAgentId = activeSession?.agentId || activeSessionId;
+
     const controller = new AbortController();
     abortRef.current = controller;
+    let resolvedSessionId = "";
     let timedOut = false;
     const watchdog = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, 300_000);
     setStreaming(true);
-    setStreamStartedAt(Date.now());
+    const startedAt = Date.now();
+    setStreamStartedAt(startedAt);
+    setLastRunDurations((current) => ({ ...current, [activeSessionId]: 0 }));
     setError("");
     setDraft("");
     setApprovals([]);
-    const userMessage: ConversationMessage = { role: "user", content: text };
-    const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "" };
+    setSessionProjectMap((current) => ({
+      ...current,
+      [activeSessionId]: activeProjectPath,
+    }));
+    const createdAt = new Date().toISOString();
+    const userMessage: ConversationMessage = { role: "user", content: text, createdAt };
+    const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "", createdAt };
     setMessages((current) => [...current, userMessage, assistantMessage]);
 
     try {
       await streamAgentMessage(
         port,
         {
-          agentId: activeSession?.agentId || activeSessionId,
+          agentId: runAgentId,
           message: outgoingMessage,
           channelCode: activeModel.channelCode,
           cwd: activeProjectPath || undefined,
@@ -472,30 +593,44 @@ export default function App() {
           if (event.type === "chunk" || event.type === "reasoning") {
             const delta = payloadText(event.payload);
             setMessages((current) => {
-              const next = [...current];
-              const target = next[next.length - 1];
-              if (target?.role === "assistant") {
-                if (event.type === "chunk") target.content += delta;
-                else target.reasoning = (target.reasoning || "") + delta;
+              let targetIndex = -1;
+              for (let index = current.length - 1; index >= 0; index -= 1) {
+                if (current[index].role === "assistant") {
+                  targetIndex = index;
+                  break;
+                }
               }
-              return next;
+              if (targetIndex < 0) return current;
+              return current.map((message, index) => {
+                if (index !== targetIndex) return message;
+                return event.type === "chunk"
+                  ? { ...message, content: mergeStreamText(message.content, delta) }
+                  : { ...message, reasoning: mergeStreamText(message.reasoning || "", delta) };
+              });
             });
           } else if (event.type === "step_break") {
             const payload = payloadRecord(event.payload);
             const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
             const callId = typeof payload.callId === "string" ? payload.callId : `${toolName}-${Date.now()}`;
-            setMessages((current) => [
-              ...current,
-              {
+            setMessages((current) => {
+              const next = [...current];
+              const toolMessage: ConversationMessage = {
                 role: "tool",
                 content: "",
                 toolName,
                 callId,
-                arguments: payloadRecord(payload.arguments),
+                arguments: payloadArguments(payload),
                 status: typeof payload.status === "string" ? payload.status : "running",
-              },
-              { role: "assistant", content: "", reasoning: "" },
-            ]);
+              };
+              const last = next[next.length - 1];
+              // 复用尾部已有的空 assistant 占位，避免每步都新加一个导致后续文字被多份累加/重复
+              if (last?.role === "assistant" && !last.content.trim() && !last.reasoning?.trim()) {
+                next.splice(next.length - 1, 0, toolMessage);
+              } else {
+                next.push(toolMessage, { role: "assistant", content: "", reasoning: "" });
+              }
+              return next;
+            });
           } else if (event.type === "tool_result") {
             const payload = payloadRecord(event.payload);
             const callId = typeof payload.callId === "string" ? payload.callId : "";
@@ -511,23 +646,58 @@ export default function App() {
                 : message
             )));
           } else if (event.type === "done") {
+            const payload = payloadRecord(event.payload);
+            const sessionId = payloadString(payload, "sessionId");
+            if (sessionId) resolvedSessionId = sessionId;
             const normalized = messagesFromPayload(event.payload);
-            if (normalized && normalized.length > 0) setMessages(normalized);
+            if (normalized && normalized.length > 0) {
+              setMessages((current) => {
+                // 服务端 done 载荷经常不完整（缺中间文字/工具行），直接替换会把内容"吞掉"。
+                // 只有当它比当前内容更丰富（条数更多或总文本更长）时才采用，否则保留流式累计的结果。
+                const richness = (list: ConversationMessage[]) => list.reduce(
+                  (sum, message) => sum
+                    + (message.content?.length || 0)
+                    + (message.reasoning?.length || 0)
+                    + (message.result?.length || 0),
+                  0,
+                );
+                if (normalized.length > current.length || richness(normalized) > richness(current)) {
+                  return normalized;
+                }
+                // 保留本地累计内容，但把仍在 running 的工具标记为完成，避免永久"执行中"
+                return current.map((message) => (
+                  message.role === "tool" && message.status === "running"
+                    ? { ...message, status: "success" }
+                    : message
+                ));
+              });
+            }
           } else if (event.type === "error") {
             throw new Error(payloadText(event.payload) || "智能体返回错误");
           }
         },
         controller.signal,
       );
+      const persistedSessionId = resolvedSessionId || activeSessionId;
       setSessionProjectMap((current) => ({
         ...current,
-        [activeSessionId]: activeProjectPath,
+        [runAgentId]: activeProjectPath,
+        [persistedSessionId]: activeProjectPath,
       }));
       setDraftSessions((current) => current.map((session) => (
-        sessionKey(session) === activeSessionId
-          ? { ...session, title: text.length > 42 ? `${text.slice(0, 42)}…` : text }
+        sessionKey(session) === runAgentId || session.sessionId === resolvedSessionId
+          ? {
+              ...session,
+              agentId: session.agentId || runAgentId,
+              sessionId: resolvedSessionId || session.sessionId,
+              title: text.length > 42 ? `${text.slice(0, 42)}…` : text,
+              updatedAt: new Date().toISOString(),
+            }
           : session
       )));
+      if (resolvedSessionId && resolvedSessionId !== activeSessionId) {
+        setActiveSessionId(resolvedSessionId);
+      }
       await loadWorkspaceData(port);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") {
@@ -541,10 +711,21 @@ export default function App() {
       window.clearTimeout(watchdog);
       setStreaming(false);
       setStreamStartedAt(null);
+      // 兜底：无论 done 载荷是否完整，结束时都不允许有工具停留在"执行中"
+      setMessages((current) => current.map((message) => (
+        message.role === "tool" && message.status === "running"
+          ? { ...message, status: "success" }
+          : message
+      )));
+      setLastRunDurations((current) => ({
+        ...current,
+        [resolvedSessionId || activeSessionId]: Date.now() - startedAt,
+      }));
       abortRef.current = null;
     }
   }, [
     activeModel,
+    activeSession,
     activeProjectPath,
     activeSelectedProjects,
     activeSessionId,
@@ -796,28 +977,14 @@ export default function App() {
   const selectProject = useCallback((project: WorkspaceEntry) => {
     setActiveProjectPath(project.path);
     setActiveView("conversation");
-    const projectSessionId = Object.entries(sessionProjectMap)
-      .reverse()
-      .find(([, path]) => path === project.path)?.[0];
-    if (projectSessionId) {
-      void selectSession(projectSessionId);
-    } else {
-      startConversation(project);
-    }
-  }, [selectSession, sessionProjectMap, startConversation]);
+    startConversation(project);
+  }, [startConversation]);
 
   const selectDefaultWorkspace = useCallback(() => {
     setActiveProjectPath("");
     setActiveView("conversation");
-    const sessionId = Object.entries(sessionProjectMap)
-      .reverse()
-      .find(([, path]) => path === "")?.[0];
-    if (sessionId) {
-      void selectSession(sessionId);
-      return;
-    }
     startConversation(undefined);
-  }, [selectSession, sessionProjectMap, startConversation]);
+  }, [startConversation]);
 
   const modelChoices = useMemo(() => {
     if (availableModels.length > 0) {
@@ -886,6 +1053,39 @@ export default function App() {
     setEditingProject(project);
   }, []);
 
+  if (activeView === "settings") {
+    return (
+      <SettingsView
+        service={service}
+        serviceStatus={serviceStatus}
+        serviceError={serviceError}
+        error={error}
+        activeSection={settingsSection}
+        onSectionChange={setSettingsSection}
+        onBack={() => setActiveView("conversation")}
+        approvalMode={approvalMode}
+        reasoningEffort={reasoningEffort}
+        onApprovalModeChange={setApprovalMode}
+        onReasoningEffortChange={setReasoningEffort}
+        draft={modelDraft}
+        modelSettings={modelSettings}
+        availableModels={availableModels}
+        discoveredModels={discoveredModels}
+        savingModel={savingModel}
+        syncingModels={syncingModels}
+        onDraftChange={setModelDraft}
+        onDiscover={() => void syncAvailableModels()}
+        onSave={() => submitModel()}
+        onCancelEdit={() => setModelDraft(emptyModelDraft)}
+        onActivate={(channelCode) => void activateModel(channelCode)}
+        onDelete={(channelCode) => void removeModel(channelCode)}
+        onEdit={editModel}
+        onToggleModel={(model) => void toggleModel(model)}
+        onReconnect={() => void startService()}
+      />
+    );
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -902,7 +1102,7 @@ export default function App() {
         onSelectProject={selectProject}
         onSelectDefaultWorkspace={selectDefaultWorkspace}
         onSelectSession={(id) => void selectSession(id)}
-        onNewConversation={startConversation}
+        onNewConversation={() => startConversation(activeProject)}
         editingProject={editingProject}
         savingProject={savingProject}
         onProjectModalChange={(open, name, project) => {
@@ -937,7 +1137,7 @@ export default function App() {
               <h1>
                 {activeView === "conversation"
                   ? sessionTitle(activeSession || { agentId: activeSessionId })
-                      : settingsTab === "models" ? "模型设置" : "智能体服务"}
+                  : "工作台"}
               </h1>
               <p>
                 {activeProject ? `${activeProject.name} · ` : ""}
@@ -963,6 +1163,7 @@ export default function App() {
             projectBranchOptions={projectBranchOptions}
             switchingBranchPath={switchingBranchPath}
             streamStartedAt={streamStartedAt}
+            runDurationMs={lastRunDurations[activeSessionId]}
             onSelectProject={selectProject}
             onSelectDefaultWorkspace={selectDefaultWorkspace}
             onSwitchProjectBranch={(project, branch) => void switchProjectBranch(project, branch)}
@@ -980,31 +1181,6 @@ export default function App() {
               !approval.sessionId || approval.sessionId === activeSessionId)}
             resolvingApprovalId={resolvingApprovalId}
             onResolveApproval={(approvalId, verdict) => void resolveApproval(approvalId, verdict)}
-          />
-        ) : null}
-
-        {activeView === "settings" ? (
-          <SettingsView
-            service={service}
-            serviceStatus={serviceStatus}
-            serviceError={serviceError}
-            onReconnect={() => void startService()}
-            activeTab={settingsTab}
-            onTabChange={setSettingsTab}
-            draft={modelDraft}
-            modelSettings={modelSettings}
-            availableModels={availableModels}
-            discoveredModels={discoveredModels}
-            savingModel={savingModel}
-            syncingModels={syncingModels}
-            onDraftChange={setModelDraft}
-            onDiscover={() => void syncAvailableModels()}
-            onSave={() => submitModel()}
-            onCancelEdit={() => setModelDraft(emptyModelDraft)}
-            onActivate={(channelCode) => void activateModel(channelCode)}
-            onDelete={(channelCode) => void removeModel(channelCode)}
-            onEdit={editModel}
-            onToggleModel={(model) => void toggleModel(model)}
           />
         ) : null}
 

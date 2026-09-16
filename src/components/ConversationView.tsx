@@ -2,7 +2,7 @@ import type { ApprovalMode, AvailableModel, ConversationMessage, ReasoningEffort
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowDownIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon } from "./icons";
+import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon } from "./icons";
 
 type ConversationViewProps = {
   serviceReady: boolean;
@@ -17,6 +17,7 @@ type ConversationViewProps = {
   projectBranchOptions: Record<string, string[]>;
   switchingBranchPath?: string;
   streamStartedAt?: number | null;
+  runDurationMs?: number | null;
   onSelectProject: (project: WorkspaceEntry) => void;
   onSelectDefaultWorkspace: () => void;
   onSwitchProjectBranch: (project: WorkspaceEntry, branch: string) => void;
@@ -67,12 +68,48 @@ function toolDetail(message: ConversationMessage): string {
     ?? message.arguments?.command
     ?? message.arguments?.query
     ?? message.arguments?.url;
-  if (typeof argument === "string" && argument.trim()) return argument.trim();
-  if (message.result) {
-    const result = message.result.trim().replace(/\s+/g, " ");
-    return result.length > 96 ? `${result.slice(0, 96)}…` : result;
+  return typeof argument === "string" && argument.trim() ? argument.trim() : "";
+}
+
+/** 从消息参数中提取文件路径（兼容常见字段名），返回 { base, dir }。 */
+function toolFilePath(message: ConversationMessage): { base: string; dir: string } | null {
+  const args = message.arguments || {};
+  const raw = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const normalized = raw.trim();
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  const base = segments[segments.length - 1] || normalized;
+  const dir = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
+  return { base, dir };
+}
+
+/** 从工具结果中解析 diff 统计（形如 "+10 -19"、"lines added: 10" 等）。 */
+function toolDiffStats(message: ConversationMessage): { add: number; del: number } | null {
+  const text = message.result || "";
+  if (!text) return null;
+  const plusMinus = text.match(/\+(\d+)\s*[-−]\s*(\d+)/);
+  if (plusMinus) return { add: Number(plusMinus[1]), del: Number(plusMinus[2]) };
+  const added = text.match(/(?:added|新增|inserted)[^\d]*(\d+)/i);
+  const removed = text.match(/(?:removed|deleted|删除)[^\d]*(\d+)/i);
+  if (added || removed) {
+    return { add: added ? Number(added[1]) : 0, del: removed ? Number(removed[1]) : 0 };
   }
-  return "";
+  return null;
+}
+
+function isEditTool(toolName?: string): boolean {
+  return /^(fs_write|str_replace_editor|edit_file|write_file)$/i.test(toolName || "");
+}
+
+function toolIconName(message: ConversationMessage): "edit" | "read" | "command" | "search" | "web" | "list" | "tool" {
+  const name = (message.toolName || "").toLowerCase();
+  if (isEditTool(message.toolName)) return "edit";
+  if (name === "fs_read") return "read";
+  if (name === "fs_list" || name === "fs_tree") return "list";
+  if (name === "shell_execute") return "command";
+  if (name === "web_search") return "search";
+  if (name === "web_fetch") return "web";
+  return "tool";
 }
 
 function activityState(messages: ConversationMessage[]): "running" | "error" | "done" {
@@ -83,6 +120,89 @@ function activityState(messages: ConversationMessage[]): "running" | "error" | "
 
 function activityKey(message: ConversationMessage, index: number): string {
   return message.callId || `${message.toolName || "tool"}-${index}`;
+}
+
+function estimateTokens(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 3);
+}
+
+function messageTokenCount(message: ConversationMessage): number {
+  const argumentText = message.arguments ? JSON.stringify(message.arguments) : "";
+  return estimateTokens([message.content, message.reasoning, message.result, argumentText]
+    .filter((value): value is string => typeof value === "string" && Boolean(value))
+    .join("\n"));
+}
+
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+  return String(value);
+}
+
+function formatMessageTime(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function formatDuration(value: number): string {
+  if (value < 1000) return "不到 1 秒";
+  const seconds = Math.round(value / 1000);
+  if (seconds < 60) return `${seconds} 秒`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const minuteRemainder = minutes % 60;
+  return minuteRemainder ? `${hours} 小时 ${minuteRemainder} 分` : `${hours} 小时`;
+}
+
+function activitySummary(messages: ConversationMessage[]): string {
+  const counts = new Map<string, number>();
+  messages.forEach((message) => {
+    const key = message.toolName || "tool";
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  return [...counts.entries()].map(([toolName, count]) => {
+    const label = toolTitle({ toolName, status: "success" } as ConversationMessage);
+    return count > 1 ? `${label} ×${count}` : label;
+  }).join(" · ");
+}
+
+function editedFiles(messages: ConversationMessage[]): string[] {
+  const files = messages
+    .filter((message) => message.role === "tool" && isEditTool(message.toolName))
+    .map((message) => {
+      const args = message.arguments || {};
+      const path = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
+      return typeof path === "string" && path.trim() ? path.trim() : "";
+    })
+    .filter(Boolean);
+  return [...new Set(files)];
+}
+
+/** 找到本轮对话最后一条 AI 回复（不是作为中间思考展示的），用于在尾部挂本轮小结。 */
+function findLastAssistantIndex(messages: ConversationMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const isThought = message.role === "assistant" && messages[i + 1]?.role === "tool";
+    if (!isThought) return i;
+  }
+  return -1;
+}
+
+async function copyMessageText(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+  }
+  return false;
 }
 
 export default function ConversationView({
@@ -98,6 +218,7 @@ export default function ConversationView({
   projectBranchOptions,
   switchingBranchPath,
   streamStartedAt,
+  runDurationMs,
   onSelectProject,
   onSelectDefaultWorkspace,
   onSwitchProjectBranch,
@@ -147,6 +268,10 @@ export default function ConversationView({
   const elapsedSeconds = streaming && streamStartedAt
     ? Math.max(0, Math.floor((now - streamStartedAt) / 1_000))
     : 0;
+  const usedTokens = messages.reduce((sum, message) => sum + messageTokenCount(message), 0);
+  const contextLimit = 128_000;
+  const contextPercent = Math.min(100, (usedTokens / contextLimit) * 100);
+  const contextTooltip = `${contextPercent.toFixed(1)}% · ${formatTokens(usedTokens)} / ${formatTokens(contextLimit)} 上下文已使用`;
   useEffect(() => {
     if (messageListRef.current && followOutputRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
@@ -162,14 +287,9 @@ export default function ConversationView({
   };
 
   const timelineItems = useMemo<TimelineItem[]>(() => {
-    const visibleMessages = messages.filter((message, index) => {
-      if (message.role !== "assistant") return true;
-      const isLast = index === messages.length - 1;
-      if (Boolean(message.content.trim() || message.reasoning?.trim())) return true;
-      return isLast && streaming;
-    });
-
-    return visibleMessages.reduce<TimelineItem[]>((items, message, index) => {
+    // 基于"原始消息数组"判断中间消息（下一条是 tool），而不是过滤后的列表，
+    // 这样过程中的文字在任何一步都能稳定折叠保留，不会随渲染状态变化而消失。
+    return messages.reduce<TimelineItem[]>((items, message, index) => {
       if (message.role === "tool") {
         const previous = items[items.length - 1];
         if (previous?.kind === "activity") {
@@ -180,11 +300,20 @@ export default function ConversationView({
         return items;
       }
 
+      const reasoning = message.reasoning?.trim() || "";
+      const content = message.content.trim();
+      const isLast = index === messages.length - 1;
+      const hasAnything = Boolean(reasoning || content);
+      // 跳过完全为空的消息项（流式占位除外），避免空 article 产生多余间距
+      if (!hasAnything && !(isLast && streaming)) return items;
+
       items.push({
         kind: "message",
-        key: message.callId || message.createdAt || `${message.role}-${index}`,
+        key: `${message.role}-${index}-${message.callId || message.createdAt || "message"}`,
         message,
-        asThought: message.role === "assistant" && visibleMessages[index + 1]?.role === "tool",
+        asThought: message.role === "assistant"
+          && messages[index + 1]?.role === "tool"
+          && !content,
       });
       return items;
     }, []);
@@ -375,6 +504,25 @@ export default function ConversationView({
                 <option value="high">高推理</option>
               </select>
             </div>
+            <div
+              className="context-ring-wrap"
+              role="status"
+              aria-label={contextTooltip}
+              title={contextTooltip}
+            >
+              <svg className="context-ring-svg" viewBox="0 0 22 22" aria-hidden="true">
+                <circle className="context-ring-bg" cx="11" cy="11" r="9" />
+                <circle
+                  className={`context-ring-fg${contextPercent >= 80 ? " danger" : contextPercent >= 50 ? " warn" : ""}`}
+                  cx="11"
+                  cy="11"
+                  r="9"
+                  strokeDasharray={`${(contextPercent / 100) * 2 * Math.PI * 9} ${2 * Math.PI * 9}`}
+                  strokeDashoffset="0"
+                />
+              </svg>
+              <div className="context-ring-tooltip">{contextTooltip}</div>
+            </div>
             <button
               className={streaming ? "composer-action stop" : "composer-action send"}
               onClick={streaming ? onStopGeneration : onSend}
@@ -389,6 +537,9 @@ export default function ConversationView({
       </div>
     </>
   );
+
+  const runFiles = useMemo(() => editedFiles(messages), [messages]);
+  const lastAssistantIndex = useMemo(() => findLastAssistantIndex(messages), [messages]);
 
   return (
     <div className="conversation-layout">
@@ -436,6 +587,14 @@ export default function ConversationView({
                       asThought={item.asThought}
                       renderMarkdown={renderMarkdown}
                       streaming={streaming}
+                      runSummary={
+                        !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
+                          ? {
+                              duration: typeof runDurationMs === "number" && runDurationMs > 0 ? formatDuration(runDurationMs) : null,
+                              files: runFiles,
+                            }
+                          : undefined
+                      }
                     />
                   )
                 ))}
@@ -461,20 +620,37 @@ const MessageItem = memo(function MessageItem({
   asThought,
   renderMarkdown,
   streaming,
+  runSummary,
 }: {
   message: ConversationMessage;
   asThought?: boolean;
   renderMarkdown: (value: string) => ReactNode;
   streaming: boolean;
+  runSummary?: { duration: string | null; files: string[] };
 }) {
   const isTool = message.role === "tool";
-  const reasoningText = asThought
-    ? message.reasoning?.trim() || message.content.trim()
-    : message.reasoning?.trim() || "";
-  const contentText = asThought ? "" : message.content;
+  const reasoningText = message.reasoning?.trim() || "";
+  const contentText = message.content;
+
+  if (asThought) {
+    return (
+      <article className={`message ${message.role} thought`} aria-live={streaming ? "polite" : undefined}>
+        <div className="message-body">
+          <details className="reasoning-block">
+            <summary aria-label="AI 思考过程">
+              <span className="reasoning-dot" />
+              <span className="reasoning-label">思考过程</span>
+              <ChevronIcon className="icon-12 chevron" />
+            </summary>
+            <pre>{reasoningText}</pre>
+          </details>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article className={`message ${message.role}`} aria-live={streaming ? "polite" : undefined}>
-      <div className="message-avatar">{message.role === "user" ? "You" : "AI"}</div>
       <div className="message-body">
         {isTool ? (
           <div className="tool-card">
@@ -496,7 +672,8 @@ const MessageItem = memo(function MessageItem({
               <details className="reasoning-block">
                 <summary aria-label="AI 思考过程">
                   <span className="reasoning-dot" />
-                  <span className="reasoning-label">思考</span>
+                  <span className="reasoning-label">思考过程</span>
+                  <ChevronIcon className="icon-12 chevron" />
                 </summary>
                 <pre>{reasoningText}</pre>
               </details>
@@ -510,6 +687,32 @@ const MessageItem = memo(function MessageItem({
                 <span />
               </div>
             ) : null}
+            {runSummary ? (
+              <div className="run-summary">
+                {runSummary.duration ? (
+                  <span className="run-summary-chip">
+                    <span className="run-summary-dot" />
+                    本轮耗时 {runSummary.duration}
+                  </span>
+                ) : null}
+                {runSummary.files.length > 0 ? (
+                  <details className="run-summary-files">
+                    <summary>
+                      <span>修改文件</span>
+                      <span className="run-summary-count">{runSummary.files.length}</span>
+                    </summary>
+                    <ul>
+                      {runSummary.files.map((file) => (
+                        <li key={file} title={file}>{file}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+              </div>
+            ) : null}
+            {message.role === "user" || message.role === "assistant" ? (
+              <MessageMeta message={message} />
+            ) : null}
           </>
         )}
       </div>
@@ -517,40 +720,181 @@ const MessageItem = memo(function MessageItem({
   );
 });
 
-const ActivityItem = memo(function ActivityItem({ messages }: { messages: ConversationMessage[] }) {
-  const state = activityState(messages);
-  const latest = messages[messages.length - 1];
-  const latestDetail = toolDetail(latest);
+function MessageMeta({ message }: { message: ConversationMessage }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+  }, []);
+
+  const time = formatMessageTime(message.createdAt);
+  const copyText = message.content || message.reasoning || "";
+  if (!time && !copyText) return null;
+
+  const handleCopy = async () => {
+    if (!copyText) return;
+    if (await copyMessageText(copyText)) {
+      setCopied(true);
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+      timerRef.current = window.setTimeout(() => setCopied(false), 1_600);
+    }
+  };
 
   return (
+    <div className="message-meta">
+      {time ? <span className="message-time">{time}</span> : null}
+      {copyText ? (
+        <button
+          className={`message-copy${copied ? " copied" : ""}`}
+          type="button"
+          onClick={() => void handleCopy()}
+          title={copied ? "已复制" : "复制内容"}
+          aria-label={copied ? "已复制" : "复制内容"}
+        >
+          {copied ? "已复制" : <CopyIcon className="icon-14" />}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const ActivityItem = memo(function ActivityItem({ messages }: { messages: ConversationMessage[] }) {
+  const state = activityState(messages);
+  const running = state === "running";
+
+  // WorkBuddy 风格：每个工具步骤直接平铺成一行（图标+动作+文件名+差异），
+  // 单步且非运行中时不包折叠块，最简洁；多步/运行中给一个可折叠的聚合头。
+  if (!running && messages.length === 1) {
+    return (
+      <article className="message activity flat">
+        <div className="message-body">
+          <ToolStep message={messages[0]} />
+        </div>
+      </article>
+    );
+  }
+
+  const title = running ? activityLabel(messages) : activitySummary(messages);
+  return (
     <article className="message activity">
-      <div className="message-avatar">⚙</div>
       <div className="message-body">
-        <details className="activity-detail">
+        <details className="activity-detail" open={running}>
           <summary>
             <span className={`activity-state activity-state-${state}`} />
-            <span className="activity-title">{state === "running" ? activityLabel(messages) : toolTitle(latest)}</span>
-            {latestDetail ? <span className="activity-summary">{latestDetail}</span> : null}
+            <span className="activity-title">{title}</span>
             {messages.length > 1 ? <span className="activity-count">{messages.length}</span> : null}
+            <ChevronIcon className="icon-12 chevron" />
           </summary>
-          {state === "running" ? <div className="activity-progress" aria-hidden="true" /> : null}
+          {running ? <div className="activity-progress" aria-hidden="true" /> : null}
           <div className="activity-list">
             {messages.map((message, index) => (
-              <details key={activityKey(message, index)} className="tool-card-detail nested">
-                <summary>
-                  <span>{toolTitle(message)}</span>
-                  {message.status ? (
-                    <span className={`tool-status ${message.status}`}>
-                      {message.status === "success" ? "完成" : message.status === "running" ? "执行中" : "失败"}
-                    </span>
-                  ) : null}
-                </summary>
-                <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
-              </details>
+              <ToolStep key={activityKey(message, index)} message={message} />
             ))}
           </div>
         </details>
       </div>
     </article>
+  );
+});
+
+function ToolStepIcon({ name }: { name: ReturnType<typeof toolIconName> }) {
+  const className = "tool-step-icon";
+  switch (name) {
+    case "edit":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m4 20h4L20 8l-4-4L4 16v4Z" />
+          <path d="m14 6 4 4" />
+        </svg>
+      );
+    case "read":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="m16 16 4.5 4.5" />
+        </svg>
+      );
+    case "command":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+          <path d="m7 9.5 3 2.5-3 2.5M12.5 14.5H17" />
+        </svg>
+      );
+    case "search":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="10.8" cy="10.8" r="6.3" />
+          <path d="m16 16 4.3 4.3" />
+        </svg>
+      );
+    case "web":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M3.5 12h17M12 3.5c2.6 2.4 3.9 5.3 3.9 8.5s-1.3 6.1-3.9 8.5c-2.6-2.4-3.9-5.3-3.9-8.5s1.3-6.1 3.9-8.5Z" />
+        </svg>
+      );
+    case "list":
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.2l2 2.4H18a2.5 2.5 0 0 1 2.5 2.5v6.6A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.8 2.8-2.4-.7-.7-2.4z" />
+        </svg>
+      );
+  }
+}
+
+function toolActionLabel(message: ConversationMessage): string {
+  const running = message.status === "running";
+  const failed = message.status === "error" || message.status === "failed";
+  if (isEditTool(message.toolName)) return "编辑";
+  const name = (message.toolName || "").toLowerCase();
+  if (name === "fs_read") return "已读取";
+  if (name === "fs_list" || name === "fs_tree") return "查看目录";
+  if (name === "shell_execute") return failed ? "命令失败" : running ? "执行命令" : "已执行命令";
+  if (name === "web_search") return "搜索";
+  if (name === "web_fetch") return "读取网页";
+  if (name === "ask_user_question") return failed ? "确认失败" : running ? "等待确认" : "已完成确认";
+  return toolTitle(message);
+}
+
+const ToolStep = memo(function ToolStep({ message }: { message: ConversationMessage }) {
+  const file = toolFilePath(message);
+  const diff = isEditTool(message.toolName) ? toolDiffStats(message) : null;
+  const failed = message.status === "error" || message.status === "failed";
+  const detail = !file ? toolDetail(message) : "";
+  const statusClass = failed ? " failed" : message.status === "running" ? " running" : "";
+
+  return (
+    <details className={`tool-step${statusClass}`}>
+      <summary>
+        <ToolStepIcon name={toolIconName(message)} />
+        <span className="tool-step-action">{toolActionLabel(message)}</span>
+        {file ? (
+          <span className="tool-step-file" title={file.dir ? `${file.dir}/${file.base}` : file.base}>
+            {file.dir ? <span className="tool-step-dir">{file.dir}/</span> : null}
+            <span className="tool-step-base">{file.base}</span>
+          </span>
+        ) : detail ? (
+          <span className="tool-step-file" title={detail}>
+            <span className="tool-step-base dim">{detail}</span>
+          </span>
+        ) : null}
+        {diff && (diff.add > 0 || diff.del > 0) ? (
+          <span className="tool-step-diff">
+            {diff.add > 0 ? <span className="diff-add">+{diff.add}</span> : null}
+            {diff.del > 0 ? <span className="diff-del">-{diff.del}</span> : null}
+          </span>
+        ) : null}
+        {failed ? <span className="tool-status failed">失败</span> : null}
+      </summary>
+      <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
+    </details>
   );
 });
