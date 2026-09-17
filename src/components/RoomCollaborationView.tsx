@@ -5,6 +5,7 @@ import type { ConversationMessage, DigitalHuman } from "../types";
 import type { RoomEvent, ServerRoomView } from "../lib/digital-human-client";
 import {
   cancelRoomTask,
+  digitalHumanTokensFor,
   fetchRoomEvents,
   fetchServerRoom,
   resumeRoomTask,
@@ -300,7 +301,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
 
   // 兜底收口：服务端任务已全部结束但仍有消息/工具卡停留在 streaming/running（结束事件丢失）时，
   // 强制标记为完成，避免头像光圈或"正在执行 N 步"永久闪烁。
-  const hasActiveTask = (room?.tasks || []).some((t) => ["READY", "ASSIGNED", "RUNNING"].includes(t.state));
+  const hasActiveTask = (room?.tasks || []).some((t) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(t.state));
   const settledFeed = useMemo(() => {
     if (hasActiveTask || !room) return feed;
     let touched = false;
@@ -346,7 +347,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   }, [rows]);
 
   const activeTasks = useMemo(
-    () => (room?.tasks || []).filter((t) => ["READY", "ASSIGNED", "RUNNING"].includes(t.state)),
+    () => (room?.tasks || []).filter((t) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(t.state)),
     [room],
   );
 
@@ -526,7 +527,9 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
                         <button
                           type="button"
                           className="primary-action compact"
-                          onClick={() => void resumeRoomTask(port, roomId, item.taskId, channelCode, approvalMode).catch(() => undefined)}
+                          onClick={() => void digitalHumanTokensFor(humans)
+                            .then((tokens) => resumeRoomTask(port, roomId, item.taskId, channelCode, approvalMode, tokens))
+                            .catch(() => undefined)}
                         >
                           允许并继续
                         </button>

@@ -13,6 +13,70 @@ const AVATAR_OPTIONS = ["🛠️", "📊", "✍️", "☕", "🔍", "🚀", "�
 const COLOR_OPTIONS = ["#4160f0", "#2f855a", "#b7791f", "#7c5cd6", "#c53030", "#0e7490", "#be5a0e", "#4a5568"];
 const STEPS = ["来源", "连接", "身份", "权限", "确认"] as const;
 
+type HumanTemplate = {
+  id: string;
+  name: string;
+  avatar: string;
+  color: string;
+  purpose: string;
+  tags: string;
+  approvalPolicy: DigitalHuman["approvalPolicy"];
+  concurrencyLimit: number;
+};
+
+const HUMAN_TEMPLATES: HumanTemplate[] = [
+  {
+    id: "dev",
+    name: "代码工程师",
+    avatar: "🛠️",
+    color: "#4160f0",
+    purpose: "负责阅读代码、定位缺陷、实现功能、重构模块并给出可验证的修改说明",
+    tags: "coding, refactor, bugfix, code-review",
+    approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+    concurrencyLimit: 1,
+  },
+  {
+    id: "qa",
+    name: "测试工程师",
+    avatar: "🧪",
+    color: "#0e7490",
+    purpose: "负责设计测试用例、运行验证、复现问题、整理风险与回归检查清单",
+    tags: "testing, qa, regression, validation",
+    approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+    concurrencyLimit: 1,
+  },
+  {
+    id: "ops",
+    name: "运维管家",
+    avatar: "🛡️",
+    color: "#c53030",
+    purpose: "负责服务器巡检、日志排查、部署脚本、环境诊断与变更回滚建议",
+    tags: "server-ops, deployment, logs, shell",
+    approvalPolicy: "ALWAYS_CONFIRM",
+    concurrencyLimit: 1,
+  },
+  {
+    id: "pm",
+    name: "产品经理",
+    avatar: "📊",
+    color: "#b7791f",
+    purpose: "负责需求澄清、任务拆解、验收标准、优先级判断与协作结论汇总",
+    tags: "product, planning, acceptance, summary",
+    approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+    concurrencyLimit: 2,
+  },
+  {
+    id: "writer",
+    name: "文档助手",
+    avatar: "✍️",
+    color: "#7c5cd6",
+    purpose: "负责沉淀说明文档、发布记录、会议纪要、操作手册与面向用户的交付材料",
+    tags: "docs, writing, release-note, handbook",
+    approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+    concurrencyLimit: 1,
+  },
+];
+
 type WizardProps = {
   open: boolean;
   port: number | null;
@@ -64,6 +128,18 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
     setForm((current) => ({ ...current, ...partial }));
   }, []);
 
+  const applyTemplate = useCallback((template: HumanTemplate) => {
+    patch({
+      displayName: template.name,
+      avatarRef: template.avatar,
+      themeColor: template.color,
+      purpose: template.purpose,
+      roleTagsText: template.tags,
+      approvalPolicy: template.approvalPolicy,
+      concurrencyLimit: template.concurrencyLimit,
+    });
+  }, [patch]);
+
   useEffect(() => {
     if (open) {
       setStep(1);
@@ -85,7 +161,7 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
     const credentialRef = form.token.trim() ? `cred_${Date.now().toString(36)}` : "";
     try {
       if (credentialRef) await saveCredential(credentialRef, form.token.trim());
-      const result = await discoverDigitalHuman(port, baseUrl, credentialRef || undefined);
+      const result = await discoverDigitalHuman(port, baseUrl, form.source, credentialRef || undefined);
       if (seq !== discoverSeqRef.current) return;
       setDiscovery({ ...result });
       if (result.reachable && result.suggested) {
@@ -135,9 +211,9 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
         concurrencyLimit: Math.max(1, Math.min(8, form.concurrencyLimit || 1)),
         endpoint: {
           type: form.source,
-          baseUrl: form.source === "remote-dsh" ? form.baseUrl.trim().replace(/\/+$/, "") : undefined,
+          baseUrl: form.source === "remote-dsh" || form.source === "a2a" ? form.baseUrl.trim().replace(/\/+$/, "") : undefined,
           credentialRef: credentialRefRef.current || undefined,
-          protocolVersion: discovery?.protocolVersion || "dsh.v1",
+          protocolVersion: discovery?.protocolVersion || (form.source === "a2a" ? "a2a.v1" : "dsh.v1"),
           healthState: form.source === "local-dsh" ? "online" : discovery?.reachable ? "online" : "unknown",
           lastCheckedAt: new Date().toISOString(),
           latencyMs: discovery?.latencyMs,
@@ -197,8 +273,11 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
                   desc="使用本机运行的智能体服务，配置为独立角色与职责"
                   onClick={() => patch({ source: "local-dsh" })}
                 />
-                <SourceCard icon="🔌" name="MCP 工具型" disabled desc="仅暴露工具能力（后续版本）" onClick={() => undefined} />
-                <SourceCard icon="🤝" name="A2A Agent" disabled desc="接入外部框架智能体（预留）" onClick={() => undefined} />
+                <SourceCard
+                  icon="🤝" name="A2A Agent" selected={form.source === "a2a"}
+                  desc="接入支持 A2A 协议的外部智能体，作为协作成员参与分工"
+                  onClick={() => patch({ source: "a2a" })}
+                />
               </div>
             </>
           ) : null}
@@ -213,10 +292,10 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
             ) : (
               <>
                 <label className="wizard-field">
-                  <span className="wizard-label">服务地址<small>远端 DSH 的 Base URL</small></span>
+                  <span className="wizard-label">服务地址<small>{form.source === "a2a" ? "A2A Agent Base URL" : "远端 DSH 的 Base URL"}</small></span>
                   <input
                     className="wizard-input"
-                    placeholder="https://ops.example.com:8080"
+                    placeholder={form.source === "a2a" ? "https://agent.example.com" : "https://ops.example.com:8080"}
                     value={form.baseUrl}
                     onChange={(event) => {
                       patch({ baseUrl: event.target.value });
@@ -236,7 +315,7 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
                 </label>
                 <div className={`wizard-discover${discovery?.reachable ? " ok" : discovery?.error ? " fail" : ""}`}>
                   {discovering ? (
-                    <><span className="dh-spinner" /><span>正在探测 /.well-known/dsh-agent-card …</span></>
+                    <><span className="dh-spinner" /><span>正在探测 {form.source === "a2a" ? "/.well-known/agent.json" : "/.well-known/dsh-agent-card"} …</span></>
                   ) : discovery?.reachable ? (
                     <>
                       <span className="wizard-discover-avatar" style={{ background: form.themeColor }}>{form.avatarRef}</span>
@@ -275,6 +354,28 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
 
           {step === 3 ? (
             <>
+              <div className="wizard-template-block">
+                <div className="wizard-template-head">
+                  <span>选择办公角色模板</span>
+                  <small>点击后自动填充人设、能力标签和安全策略</small>
+                </div>
+                <div className="wizard-template-grid">
+                  {HUMAN_TEMPLATES.map((template) => (
+                    <button
+                      key={template.id}
+                      type="button"
+                      className={`wizard-template-card${form.displayName === template.name ? " sel" : ""}`}
+                      onClick={() => applyTemplate(template)}
+                    >
+                      <span className="wizard-template-avatar" style={{ background: template.color }}>{template.avatar}</span>
+                      <span>
+                        <b>{template.name}</b>
+                        <small>{template.tags.split(",").slice(0, 2).join(" · ")}</small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <label className="wizard-field">
                 <span className="wizard-label">名称</span>
                 <input
@@ -375,7 +476,7 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
                 <div>
                   <b className="wizard-summary-name">{form.displayName}</b>
                   <small className="wizard-summary-sub">
-                    {form.source === "local-dsh" ? "本地 DSH" : form.baseUrl} · dsh.v1
+                    {form.source === "local-dsh" ? "本地 DSH" : form.baseUrl} · {form.source === "a2a" ? "a2a.v1" : "dsh.v1"}
                   </small>
                 </div>
                 <span className="dh-health-pill on">就绪</span>

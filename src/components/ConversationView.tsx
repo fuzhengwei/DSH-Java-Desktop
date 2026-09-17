@@ -1238,6 +1238,7 @@ const MessageItem = memo(function MessageItem({
   const isTool = message.role === "tool";
   const reasoningText = message.reasoning?.trim() || "";
   const contentText = message.content.replace(/​/g, "");
+  const pendingAssistant = message.role === "assistant" && streaming && !reasoningText && !contentText.trim();
   const attribution = showAttribution ? message.attribution : undefined;
   const humanRecord = attribution
     ? digitalHumans.find((human) => human.id === attribution.digitalHumanId) || null
@@ -1273,7 +1274,7 @@ const MessageItem = memo(function MessageItem({
   }
 
   return (
-    <article className={`message ${message.role}${attribution ? " attributed" : ""}`} aria-live={streaming ? "polite" : undefined}>
+    <article className={`message ${message.role}${attribution ? " attributed" : ""}${pendingAssistant ? " pending" : ""}`} aria-live={streaming ? "polite" : undefined}>
       <div className="message-body">
         {attribution ? (
           <div className="message-attribution-row">
@@ -1329,11 +1330,11 @@ const MessageItem = memo(function MessageItem({
               <div className="message-content">
                 {renderMarkdown(contentText)}
               </div>
-            ) : streaming ? (
-              <div className="typing-indicator" aria-label="正在生成回复">
-                <span />
-                <span />
-                <span />
+            ) : pendingAssistant ? (
+              <div className="typing-indicator" role="status" aria-label="正在生成回复">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
               </div>
             ) : null}
             {/* 产出的本地文件（md/word/excel/pdf 等）：内嵌渲染卡片，点击展开预览 */}

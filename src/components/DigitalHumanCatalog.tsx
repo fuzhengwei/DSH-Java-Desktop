@@ -90,7 +90,13 @@ export const HumanAvatar = memo(function HumanAvatar({
 });
 
 function endpointLabel(human: DigitalHuman): string {
-  return human.endpoint.type === "local-dsh" ? "本地" : "远端 DSH";
+  if (human.endpoint.type === "local-dsh") return "本地";
+  if (human.endpoint.type === "a2a") return "A2A";
+  return "远端 DSH";
+}
+
+function hasRemoteEndpoint(human: DigitalHuman): boolean {
+  return human.endpoint.type === "remote-dsh" || human.endpoint.type === "a2a";
 }
 
 type CatalogProps = {
@@ -194,8 +200,8 @@ export default function DigitalHumanCatalog({
       return;
     }
     const baseUrl = editForm.baseUrl.trim().replace(/\/+$/, "");
-    if (selected.endpoint.type === "remote-dsh" && !baseUrl) {
-      setEditError("请填写远端服务地址");
+    if ((selected.endpoint.type === "remote-dsh" || selected.endpoint.type === "a2a") && !baseUrl) {
+      setEditError("请填写服务地址");
       return;
     }
 
@@ -217,7 +223,7 @@ export default function DigitalHumanCatalog({
         concurrencyLimit: Math.max(1, Math.min(8, Math.round(editForm.concurrencyLimit) || 1)),
         endpoint: {
           ...selected.endpoint,
-          baseUrl: selected.endpoint.type === "remote-dsh" ? baseUrl : selected.endpoint.baseUrl,
+          baseUrl: selected.endpoint.type === "remote-dsh" || selected.endpoint.type === "a2a" ? baseUrl : selected.endpoint.baseUrl,
           credentialRef,
         },
       };
@@ -402,7 +408,7 @@ export default function DigitalHumanCatalog({
                 <h3>说明</h3>
                 <p className="dh-empty-sub" style={{ lineHeight: 1.7 }}>
                   在对话中点击顶部「＋」或输入 @ 即可把 {selected.displayName} 加入当前协作。
-                  {selected.endpoint.type === "remote-dsh"
+                  {hasRemoteEndpoint(selected)
                     ? " 远端任务由本地智能体服务统一编排与转发。"
                     : " 本地数字人直接使用本机智能体服务执行任务。"}
                 </p>
@@ -468,7 +474,7 @@ function EditDigitalHumanModal({ human, form, error, saving, onPatch, onClose, o
             />
           </label>
 
-          {human.endpoint.type === "remote-dsh" ? (
+          {hasRemoteEndpoint(human) ? (
             <>
               <label className="wizard-field">
                 <span className="wizard-label">服务地址</span>

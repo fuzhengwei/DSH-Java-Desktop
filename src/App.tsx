@@ -35,6 +35,7 @@ import {
   assignDigitalHumanToProject,
   boundRoomId,
   createDigitalHuman,
+  digitalHumanTokensFor,
   ensureRoomObjective,
   ensureServerRoom,
   fetchServerRoom,
@@ -165,8 +166,62 @@ function readActiveProjectPath(): string {
   return localStorage.getItem("dsh-active-project-path") || "";
 }
 
+function readProjectOrder(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem("dsh-project-order") || "[]");
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+  } catch {
+    return [];
+  }
+}
+
+function readSessionOrder(): Record<string, string[]> {
+  try {
+    const value = JSON.parse(localStorage.getItem("dsh-session-order") || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const next: Record<string, string[]> = {};
+    for (const [projectPath, ids] of Object.entries(value)) {
+      if (typeof projectPath !== "string" || !Array.isArray(ids)) continue;
+      const cleanIds = ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0);
+      if (cleanIds.length > 0) next[projectPath] = cleanIds;
+    }
+    return next;
+  } catch {
+    return {};
+  }
+}
+
+function readSessionProjectMap(): Record<string, string> {
+  try {
+    const storedMap = JSON.parse(localStorage.getItem("dsh-session-project-map") || "{}") as Record<string, unknown>;
+    if (!storedMap || typeof storedMap !== "object" || Array.isArray(storedMap)) return {};
+    const cleanedMap: Record<string, string> = {};
+    for (const [id, path] of Object.entries(storedMap)) {
+      if (typeof id !== "string" || !id.trim() || typeof path !== "string") continue;
+      const normalized = normalizedProjectPath(path);
+      if (normalized) cleanedMap[id] = normalized;
+      else if (path === "default") cleanedMap[id] = "default";
+    }
+    if (Object.keys(cleanedMap).length !== Object.keys(storedMap).length) {
+      localStorage.setItem("dsh-session-project-map", JSON.stringify(cleanedMap));
+    }
+    return cleanedMap;
+  } catch {
+    return {};
+  }
+}
+
 function normalizedProjectPath(value?: string): string {
   return value && value !== "default" ? value : "";
+}
+
+function storedProjectPath(value?: string): string {
+  return normalizedProjectPath(value) || "default";
+}
+
+function projectPathFromMap(map: Record<string, string>, sessionId: string, fallback = ""): string {
+  if (Object.prototype.hasOwnProperty.call(map, sessionId) && map[sessionId] === "default") return "";
+  return normalizedProjectPath(map[sessionId]) || fallback;
 }
 
 function idsOfSession(session?: SessionSummary | null): string[] {
@@ -431,8 +486,10 @@ export default function App() {
   const [hiddenSessionIds, setHiddenSessionIds] = useState<string[]>(readHiddenSessionIds);
   const [projects, setProjects] = useState<WorkspaceEntry[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState(readActiveProjectPath);
-  const [sessionProjectMap, setSessionProjectMap] = useState<Record<string, string>>({});
+  const [sessionProjectMap, setSessionProjectMap] = useState<Record<string, string>>(readSessionProjectMap);
   const [localProjects, setLocalProjects] = useState<WorkspaceEntry[]>([]);
+  const [projectOrder, setProjectOrder] = useState<string[]>(readProjectOrder);
+  const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(readSessionOrder);
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
   const [messages, setMessages] = useState<ConversationMessage[]>(() => readSessionMessages(localStorage.getItem("dsh-active-session-id") || ""));
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
@@ -588,7 +645,7 @@ export default function App() {
       port,
       activeSessionId,
       sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles),
-      normalizedProjectPath(sessionProjectMapRef.current[activeSessionId]) || activeProjectPathRef.current || "default",
+      projectPathFromMap(sessionProjectMapRef.current, activeSessionId, activeProjectPathRef.current) || "default",
     ).then(async (ensured) => {
       if (cancelled) return;
       // 把消息里出现过的数字人也登记进房间参与者，右侧群聊/参与者列表才能完整
@@ -763,7 +820,7 @@ export default function App() {
           port,
           activeSessionId,
           title,
-          normalizedProjectPath(sessionProjectMapRef.current[activeSessionId]) || activeProjectPathRef.current || "default",
+          projectPathFromMap(sessionProjectMapRef.current, activeSessionId, activeProjectPathRef.current) || "default",
         );
         const snapshot = await joinServerRoom(port, ensured.id, human.id);
         setServerRoom(snapshot);
@@ -791,14 +848,16 @@ export default function App() {
   }, [port, serverRoomId]);
 
   const loadWorkspaceData = useCallback(async (servicePort: number, focusModelsIfEmpty = false) => {
-    const [sessionsResult, projectsResult, modelSettingsResult, runtimeModelsResult, approvalsResult] =
-      await Promise.allSettled([
-        listSessions(servicePort),
-        listWorkspaces(servicePort),
-        listModelSettings(servicePort),
-        listAvailableModels(servicePort),
-        listRuntimeApprovals(servicePort),
-      ]);
+    const sessionsPromise = listSessions(servicePort);
+    const projectsPromise = listWorkspaces(servicePort);
+    const modelSettingsPromise = listModelSettings(servicePort);
+    const runtimeModelsPromise = listAvailableModels(servicePort);
+    const approvalsPromise = listRuntimeApprovals(servicePort);
+    const primaryLoad = Promise.allSettled([sessionsPromise, projectsPromise]);
+    const secondaryLoad = Promise.allSettled([modelSettingsPromise, runtimeModelsPromise, approvalsPromise]);
+
+    // 会话/项目决定左侧列表首屏，优先落状态；模型和审批等相对慢的接口随后再补齐。
+    const [sessionsResult, projectsResult] = await primaryLoad;
 
     if (sessionsResult.status === "fulfilled") {
       const loadedSessions = sessionsResult.value;
@@ -813,14 +872,15 @@ export default function App() {
         for (const [id, path] of Object.entries(current)) {
           const normalized = normalizedProjectPath(path);
           if (normalized) next[id] = normalized;
+          else if (path === "default") next[id] = "default";
           else changed = true;
         }
         for (const session of loadedSessions) {
           const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
           // 本地映射优先（发送消息时已按会话归属写入并与服务端 cwd 对齐）；
           // 服务端 workspaceId 仅作兜底，用于补齐本地缺失的老会话归属
-          const projectPath = ids.map((id) => normalizedProjectPath(next[id])).find(Boolean)
-            || normalizedProjectPath(session.workspaceId);
+          const localProjectPath = ids.map((id) => next[id]).find((value) => value === "default" || Boolean(normalizedProjectPath(value)));
+          const projectPath = localProjectPath || normalizedProjectPath(session.workspaceId);
           if (!projectPath) continue;
           for (const id of ids) {
             if (next[id] !== projectPath) {
@@ -842,6 +902,7 @@ export default function App() {
         current && !latestProjects.some((project) => project.path === current) ? "" : current
       ));
     }
+    const [modelSettingsResult, runtimeModelsResult, approvalsResult] = await secondaryLoad;
     const loadedModels = modelSettingsResult.status === "fulfilled" ? modelSettingsResult.value : [];
     const loadedRuntimeModels = runtimeModelsResult.status === "fulfilled" ? runtimeModelsResult.value : [];
     setModelSettings(loadedModels);
@@ -856,17 +917,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    // 加载历史映射时剔除空串脏数据：旧版本曾把空值写入映射，会阻断回填逻辑
-    const storedMap = JSON.parse(localStorage.getItem("dsh-session-project-map") || "{}") as Record<string, string>;
-    const cleanedMap: Record<string, string> = {};
-    for (const [id, path] of Object.entries(storedMap)) {
-      const normalized = normalizedProjectPath(path);
-      if (typeof path === "string" && normalized) cleanedMap[id] = normalized;
-    }
-    if (Object.keys(cleanedMap).length !== Object.keys(storedMap).length) {
-      localStorage.setItem("dsh-session-project-map", JSON.stringify(cleanedMap));
-    }
-    setSessionProjectMap(cleanedMap);
     setLocalProjects(JSON.parse(localStorage.getItem("dsh-local-projects") || "[]"));
     // 启动时如果 activeSessionId 不在草稿列表里（比如上次是点项目/会话后直接退出的，
     // 或 localStorage 被清过但 active id 还留着），补登记一条归属默认工作区的草稿。
@@ -921,6 +971,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("dsh-local-projects", JSON.stringify(localProjects));
   }, [localProjects]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-project-order", JSON.stringify(projectOrder));
+  }, [projectOrder]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-session-order", JSON.stringify(sessionOrder));
+  }, [sessionOrder]);
 
   useEffect(() => {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
@@ -1147,7 +1205,8 @@ export default function App() {
     setActiveSessionId(sessionId);
     setActiveView("conversation");
     // 同步输入框项目选择器到该会话所属项目；无归属（默认工作区）时回退为空
-    const sessionProject = aliases.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
+    const hasDefaultProject = aliases.some((id) => sessionProjectMapRef.current[id] === "default");
+    const sessionProject = hasDefaultProject ? "" : aliases.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
       || normalizedProjectPath(session?.workspaceId);
     setActiveProjectPath(sessionProject || "");
 
@@ -1217,7 +1276,7 @@ export default function App() {
 
   // 当前会话归属项目下挂载的工程；归属缺失时退回激活项目
   const sessionSelectedProjects = useMemo(() => {
-    const sessionProjectPath = normalizedProjectPath(sessionProjectMap[activeSessionId]) || activeProjectPath;
+    const sessionProjectPath = projectPathFromMap(sessionProjectMap, activeSessionId, activeProjectPath);
     return localProjects.filter((project) => project.parentPath === sessionProjectPath);
   }, [activeProjectPath, activeSessionId, localProjects, sessionProjectMap]);
 
@@ -1256,18 +1315,18 @@ export default function App() {
 
     // ── 项目配置的数字人：会话归属项目下的显式归属数字人（发消息前就解析一次，
     // 同时决定「走房间编排（多人）还是直连（单人）」与直连时的归属）
-    const sessionProjectPathForHumans = normalizedProjectPath(sessionProjectMapRef.current[originSessionId]) || activeProjectPathRef.current;
+    const sessionProjectPathForHumans = projectPathFromMap(sessionProjectMapRef.current, originSessionId, activeProjectPathRef.current);
     const projectHumans = sessionProjectPathForHumans
       ? digitalHumansRef.current.filter((human) => human.projectPath === sessionProjectPathForHumans)
       : [];
 
     // ── 房间协作消息：房间有参与者、输入框 @/卡片加入了数字人，
-    // 或项目配置了多个数字人（需要编排分工）时，交给服务端 Orchestrator
+    // 或项目配置了数字人时，交给服务端 Orchestrator（含单个远端数字人的真实执行）
     const roomHasParticipants = Boolean(
       (serverRoom?.participants?.length || 0) > 0
       || (room?.participants.length || 0) > 0
       || humanMentionsRef.current.length > 0
-      || projectHumans.length > 1,
+      || projectHumans.length > 0,
     );
     if (roomHasParticipants) {
       const mentionedHumans = humanMentionsRef.current;
@@ -1284,7 +1343,7 @@ export default function App() {
         setDraft("");
         setDraftMentions([]);
         setHumanMentions([]);
-        setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPathForHumans }));
+        setSessionProjectMap((current) => ({ ...current, [originSessionId]: storedProjectPath(sessionProjectPathForHumans) }));
         setDraftSessions((current) => {
           const updated = current.map((session) => (
             session.agentId === originSessionId || session.sessionId === originSessionId
@@ -1313,7 +1372,11 @@ export default function App() {
         }
         // @ 提及优先作为派发目标；否则项目多数字人由 Orchestrator 自行分工
         const mentionIds = mentionedHumans.map((human) => human.id);
-        await postRoomMessage(port, ensured.id, text, mentionIds, activeModel.channelCode, approvalMode);
+        const tokenHumans = digitalHumansRef.current.filter((human) => (
+          (snapshot.participants || []).some((participant) => participant.digitalHumanId === human.id)
+        ));
+        const digitalHumanTokens = await digitalHumanTokensFor(tokenHumans);
+        await postRoomMessage(port, ensured.id, text, mentionIds, activeModel.channelCode, approvalMode, digitalHumanTokens);
         setServerRoomId(ensured.id);
         // 协作开始：自动展开右侧协作面板
         setActiveDockTab("collab");
@@ -1350,8 +1413,8 @@ export default function App() {
     setApprovals([]);
     // 会话归属以其创建时记录的项目为准（sessionProjectMap），而不是发送瞬间的激活项目，
     // 否则切过项目下拉框后发消息会把服务端 workspaceId 写错，loadWorkspaceData 回填时会话被挪走
-    const sessionProjectPath = normalizedProjectPath(sessionProjectMapRef.current[originSessionId]) || activeProjectPath;
-    setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPath }));
+    const sessionProjectPath = projectPathFromMap(sessionProjectMapRef.current, originSessionId, activeProjectPath);
+    setSessionProjectMap((current) => ({ ...current, [originSessionId]: storedProjectPath(sessionProjectPath) }));
     const createdAt = new Date().toISOString();
 
     // 数字人归属解析（直连路径，此时项目数字人至多 1 个，多人已在上方走房间编排）：
@@ -1662,7 +1725,24 @@ export default function App() {
       setProjects(latest);
       const renamedProject = latest.find((item) => item.name === name) || latest[0];
       const nextParentPath = renamedProject?.path || project.path;
+      setProjectOrder((current) => current.map((path) => (path === project.path ? nextParentPath : path)));
       setActiveProjectPath(nextParentPath);
+      setSessionProjectMap((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const [sessionId, projectPath] of Object.entries(next)) {
+          if (projectPath === project.path) {
+            next[sessionId] = nextParentPath;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      setDigitalHumans((current) => current.map((human) => {
+        if (human.projectPath !== project.path) return human;
+        assignDigitalHumanToProject(human.id, nextParentPath);
+        return { ...human, projectPath: nextParentPath };
+      }));
       setLocalProjects((current) => current.map((item) => (
         item.parentPath === project.path ? { ...item, parentPath: nextParentPath } : item
       )));
@@ -1823,13 +1903,14 @@ export default function App() {
     sessionMessagesRef.current.set(sessionId, []);
     writeSessionMessages(sessionId, []);
     setDraftSessions((current) => [draftSession, ...current]);
-    setSessionProjectMap((current) => ({ ...current, [sessionId]: projectPath }));
+    setSessionProjectMap((current) => ({ ...current, [sessionId]: storedProjectPath(projectPath) }));
     setActiveView("conversation");
   }, []);
 
   const removeProject = useCallback(async (project: WorkspaceEntry) => {
     if (project.local) {
       setLocalProjects((current) => current.filter((item) => item.path !== project.path));
+      setProjectOrder((current) => current.filter((path) => path !== project.path));
       return;
     }
     if (!port) return;
@@ -1837,6 +1918,7 @@ export default function App() {
     try {
       const latest = await deleteWorkspace(port, project.name);
       setProjects(latest);
+      setProjectOrder((current) => current.filter((path) => path !== project.path));
       setLocalProjects((current) => current.filter((item) => item.parentPath !== project.path));
       const nextActive = latest[0]?.path || "";
       if (activeProjectPath === project.path) {
@@ -1919,6 +2001,16 @@ export default function App() {
       // 缓存清理失败不影响主流程
     }
     for (const id of ids) sessionMessagesRef.current.delete(id);
+    setSessionOrder((current) => {
+      let changed = false;
+      const next: Record<string, string[]> = {};
+      for (const [projectPath, orderedIds] of Object.entries(current)) {
+        const filtered = orderedIds.filter((id) => !idSet.has(id));
+        if (filtered.length !== orderedIds.length) changed = true;
+        next[projectPath] = filtered;
+      }
+      return changed ? next : current;
+    });
 
     // 删除的是当前会话时，切到剩余会话里的第一个；没有则开新对话
     if (isActive) {
@@ -1934,7 +2026,7 @@ export default function App() {
         const freshId = newSessionId();
         setActiveSessionId(freshId);
         setMessages([]);
-        setSessionProjectMap((current) => ({ ...current, [freshId]: activeProjectPath }));
+        setSessionProjectMap((current) => ({ ...current, [freshId]: storedProjectPath(activeProjectPath) }));
       }
     }
   }, [activeProjectPath, combinedSessions]);
@@ -1963,7 +2055,101 @@ export default function App() {
 
   const removeLocalProject = useCallback((project: WorkspaceEntry) => {
     setLocalProjects((current) => current.filter((item) => item.path !== project.path));
+    setProjectOrder((current) => current.filter((path) => path !== project.path));
   }, []);
+
+  const reorderSessions = useCallback((dragIds: string[], targetIds: string[], projectPath: string, position: "before" | "after" = "before") => {
+    const dragId = dragIds.find(Boolean);
+    const targetId = targetIds.find(Boolean);
+    if (!dragId || !targetId || dragId === targetId) return;
+    const normalizedPath = normalizedProjectPath(projectPath);
+    const sessionsInProject = combinedSessions.filter((session) => {
+      const ids = idsOfSession(session);
+      const mappedPath = ids.some((id) => sessionProjectMapRef.current[id] === "default")
+        ? ""
+        : ids.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
+          || normalizedProjectPath(session.workspaceId)
+          || "";
+      return mappedPath === normalizedPath;
+    });
+    setSessionOrder((current) => {
+      const projectKey = normalizedPath || "default";
+      const knownIds = sessionsInProject.map((session) => idsOfSession(session)[0]).filter((id): id is string => Boolean(id));
+      const ordered = [
+        ...(current[projectKey] || []).filter((id) => knownIds.includes(id)),
+        ...knownIds.filter((id) => !(current[projectKey] || []).includes(id)),
+      ];
+      const fromIndex = ordered.indexOf(dragId);
+      const toIndex = ordered.indexOf(targetId);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const nextOrder = [...ordered];
+      const [moved] = nextOrder.splice(fromIndex, 1);
+      const targetIndexAfterRemoval = nextOrder.indexOf(targetId);
+      if (targetIndexAfterRemoval < 0) return current;
+      nextOrder.splice(position === "after" ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval, 0, moved);
+      return { ...current, [projectKey]: nextOrder };
+    });
+  }, [combinedSessions]);
+
+  const moveSessionToProject = useCallback((sessionIds: string[], projectPath: string) => {
+    const normalizedPath = storedProjectPath(projectPath);
+    const ids = [...new Set(sessionIds.filter(Boolean))];
+    if (ids.length === 0) return;
+    setSessionProjectMap((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const id of ids) {
+        if (next[id] !== normalizedPath) {
+          next[id] = normalizedPath;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+    if (ids.includes(activeSessionRef.current)) {
+      setActiveProjectPath(normalizedProjectPath(projectPath));
+    }
+    setSessionOrder((current) => {
+      const destinationKey = normalizedProjectPath(projectPath) || "default";
+      let changed = false;
+      const next: Record<string, string[]> = {};
+      for (const [key, value] of Object.entries(current)) {
+        const filtered = value.filter((id) => !ids.includes(id));
+        if (filtered.length !== value.length) changed = true;
+        next[key] = filtered;
+      }
+      const existing = next[destinationKey] || [];
+      const movedIds = ids.filter((id) => !existing.includes(id));
+      if (movedIds.length > 0) {
+        next[destinationKey] = [...movedIds, ...existing];
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
+  const reorderProjects = useCallback((dragPath: string, targetPath: string, position: "before" | "after" = "before") => {
+    if (!dragPath || !targetPath || dragPath === targetPath) return;
+    setProjectOrder((current) => {
+      const allProjects = [...projects, ...localProjects];
+      const topLevelPaths = [...new Map(allProjects.map((project) => [project.path, project])).values()]
+        .filter((project) => !project.local || !project.parentPath)
+        .map((project) => project.path);
+      const ordered = [
+        ...current.filter((path) => topLevelPaths.includes(path)),
+        ...topLevelPaths.filter((path) => !current.includes(path)),
+      ];
+      const fromIndex = ordered.indexOf(dragPath);
+      const toIndex = ordered.indexOf(targetPath);
+      if (fromIndex < 0 || toIndex < 0) return current;
+      const next = [...ordered];
+      const [moved] = next.splice(fromIndex, 1);
+      const targetIndexAfterRemoval = next.indexOf(targetPath);
+      const insertIndex = position === "after" ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
+      next.splice(insertIndex, 0, moved);
+      return next;
+    });
+  }, [localProjects, projects]);
 
   const selectProject = useCallback((project: WorkspaceEntry) => {
     setActiveProjectPath(project.path);
@@ -1997,8 +2183,28 @@ export default function App() {
     for (const project of localProjects) {
       byPath.set(project.path, project);
     }
-    return [...byPath.values()];
-  }, [localProjects, projects]);
+    const allProjects = [...byPath.values()];
+    const topLevelPaths = allProjects
+      .filter((project) => !project.local || !project.parentPath)
+      .map((project) => project.path);
+    const orderedPaths = [
+      ...projectOrder.filter((path) => topLevelPaths.includes(path)),
+      ...topLevelPaths.filter((path) => !projectOrder.includes(path)),
+    ];
+    const orderIndex = new Map(orderedPaths.map((path, index) => [path, index]));
+    return allProjects.sort((a, b) => {
+      const aTopLevel = !a.local || !a.parentPath;
+      const bTopLevel = !b.local || !b.parentPath;
+      if (aTopLevel && bTopLevel) {
+        return (orderIndex.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (orderIndex.get(b.path) ?? Number.MAX_SAFE_INTEGER);
+      }
+      if (aTopLevel !== bTopLevel) return aTopLevel ? -1 : 1;
+      const aParentIndex = orderIndex.get(a.parentPath || "") ?? Number.MAX_SAFE_INTEGER;
+      const bParentIndex = orderIndex.get(b.parentPath || "") ?? Number.MAX_SAFE_INTEGER;
+      if (aParentIndex !== bParentIndex) return aParentIndex - bParentIndex;
+      return a.name.localeCompare(b.name, "zh-CN");
+    });
+  }, [localProjects, projectOrder, projects]);
   const activeProject = combinedProjects.find((project) => project.path === activeProjectPath);
   const switchProjectBranch = useCallback(async (project: WorkspaceEntry, branch: string) => {
     if (projectBranches[project.path] === branch) return;
@@ -2106,6 +2312,7 @@ export default function App() {
         projects={combinedProjects}
         sessions={combinedSessions}
         sessionProjectMap={sessionProjectMap}
+        sessionOrder={sessionOrder}
         creatingProject={creatingProject}
         projectModalOpen={projectModalOpen}
         projectName={projectName}
@@ -2115,6 +2322,8 @@ export default function App() {
         sessionCustomTitles={customSessionTitles}
         onRenameSession={renameSession}
         onDeleteSession={deleteSession}
+        onMoveSessionToProject={moveSessionToProject}
+        onReorderSessions={reorderSessions}
         onNewConversation={() => startConversation(activeProject)}
         editingProject={editingProject}
         savingProject={savingProject}
@@ -2139,6 +2348,7 @@ export default function App() {
             }
           });
         }}
+        onReorderProjects={reorderProjects}
         onRemoveProject={(project) => void removeProject(project)}
         onRemoveLocalProject={removeLocalProject}
         digitalHumans={digitalHumans}
@@ -2284,6 +2494,8 @@ export default function App() {
                   port,
                   roomId: serverRoomId,
                   serverRoom,
+                  channelCode: activeModel?.channelCode,
+                  approvalMode,
                   onFocusItem: (seq) => setFocusRequest({ seq, nonce: Date.now() }),
                   onOpenArtifact: openArtifactTab,
                 } : undefined}

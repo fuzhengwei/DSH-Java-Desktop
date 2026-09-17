@@ -1,6 +1,24 @@
-import { memo } from "react";
+import { memo, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { FileIcon, SlidersIcon, UsersIcon, XIcon } from "./icons";
+
+const DOCK_WIDTH_STORAGE_KEY = "dsh:right-dock-width";
+const DEFAULT_DOCK_WIDTH = 470;
+const MIN_DOCK_WIDTH = 320;
+const MAX_DOCK_WIDTH = 860;
+
+function clampDockWidth(width: number) {
+  const viewportMax = typeof window === "undefined"
+    ? MAX_DOCK_WIDTH
+    : Math.max(MIN_DOCK_WIDTH, Math.min(MAX_DOCK_WIDTH, window.innerWidth - 360));
+  return Math.min(Math.max(width, MIN_DOCK_WIDTH), viewportMax);
+}
+
+function readInitialDockWidth() {
+  if (typeof window === "undefined") return DEFAULT_DOCK_WIDTH;
+  const stored = Number(window.localStorage.getItem(DOCK_WIDTH_STORAGE_KEY));
+  return clampDockWidth(Number.isFinite(stored) && stored > 0 ? stored : DEFAULT_DOCK_WIDTH);
+}
 
 export type DockTab =
   | { kind: "collab"; label: string }
@@ -109,8 +127,75 @@ type Props = {
 
 /** 右侧面板：只承载内容主体；Tab 栏统一放在顶部 topbar（见 DockTabBar） */
 const RightDock = memo(function RightDock({ children }: Props) {
+  const [dockWidth, setDockWidth] = useState(readInitialDockWidth);
+
+  useEffect(() => {
+    window.localStorage.setItem(DOCK_WIDTH_STORAGE_KEY, String(dockWidth));
+  }, [dockWidth]);
+
+  useEffect(() => {
+    const handleResize = () => setDockWidth((width) => clampDockWidth(width));
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const resizeBy = (delta: number) => {
+    setDockWidth((width) => clampDockWidth(width + delta));
+  };
+
+  const handleResizeStart = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+
+    const startX = event.clientX;
+    const startWidth = dockWidth;
+
+    document.body.classList.add("right-dock-resizing");
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setDockWidth(clampDockWidth(startWidth + startX - moveEvent.clientX));
+    };
+
+    const stopResize = () => {
+      document.body.classList.remove("right-dock-resizing");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  };
+
   return (
-    <aside className="right-dock" role="complementary" aria-label="侧栏">
+    <aside className="right-dock" role="complementary" aria-label="侧栏" style={{ width: dockWidth }}>
+      <div
+        className="right-dock-resize-handle"
+        role="separator"
+        aria-label="调整侧栏宽度"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_DOCK_WIDTH}
+        aria-valuemax={MAX_DOCK_WIDTH}
+        aria-valuenow={dockWidth}
+        tabIndex={0}
+        onPointerDown={handleResizeStart}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            resizeBy(24);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            resizeBy(-24);
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            setDockWidth(MAX_DOCK_WIDTH);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            setDockWidth(MIN_DOCK_WIDTH);
+          }
+        }}
+      />
       <div className="right-dock-body">{children}</div>
     </aside>
   );

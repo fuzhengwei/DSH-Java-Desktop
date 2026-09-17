@@ -1,6 +1,11 @@
 import { memo, useState } from "react";
 import type { DigitalHuman, RoomProjection, RuntimeApproval } from "../types";
 import type { ServerRoomView } from "../lib/digital-human-client";
+import {
+  digitalHumanTokensFor,
+  reassignRoomTask,
+  retryRoomTask,
+} from "../lib/digital-human-client";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
 import { PlusIcon, XIcon } from "./icons";
 import GroupChatView from "./GroupChatView";
@@ -21,10 +26,39 @@ type CollabPanelProps = {
     port: number;
     roomId: string;
     serverRoom: ServerRoomView | null;
+    channelCode?: string;
+    approvalMode?: string;
     onFocusItem?: (seq: number) => void;
     onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
   };
 };
+
+function taskStateLabel(state?: string): string {
+  switch ((state || "").toUpperCase()) {
+    case "READY": return "待排队";
+    case "ASSIGNED": return "已派发";
+    case "RUNNING": return "办公中";
+    case "WAITING_APPROVAL": return "待审批";
+    case "COMPLETED": return "已完成";
+    case "FAILED": return "失败";
+    case "CANCELED": return "已取消";
+    default: return state || "未知";
+  }
+}
+
+function taskStateClass(state?: string): string {
+  const normalized = (state || "unknown").toLowerCase();
+  if (["ready", "assigned"].includes(normalized)) return "queued";
+  if (["running"].includes(normalized)) return "running";
+  if (["waiting_approval"].includes(normalized)) return "waiting";
+  if (["completed"].includes(normalized)) return "done";
+  if (["failed", "canceled"].includes(normalized)) return "error";
+  return "queued";
+}
+
+function canRetryTask(state?: string): boolean {
+  return ["FAILED", "CANCELED", "COMPLETED"].includes((state || "").toUpperCase());
+}
 
 /**
  * 右侧协作面板：两个视图
@@ -45,10 +79,25 @@ const CollabPanel = memo(function CollabPanel({
   groupChat,
 }: CollabPanelProps) {
   const [view, setView] = useState<"chat" | "info">(groupChat ? "chat" : "info");
+  const [busyTaskId, setBusyTaskId] = useState("");
   const humanById = new Map(humans.map((human) => [human.id, human]));
   const participants = (room?.participants || [])
     .map((participant) => ({ participant, human: humanById.get(participant.digitalHumanId) }))
     .filter((entry): entry is { participant: RoomProjection["participants"][number]; human: DigitalHuman } => Boolean(entry.human));
+  const serverTasks = groupChat?.serverRoom?.tasks || [];
+  const completedTasks = serverTasks.filter((task) => task.state === "COMPLETED").length;
+  const artifacts = groupChat?.serverRoom?.artifacts || [];
+
+  const withTokens = async (action: (tokens: Record<string, string>) => Promise<void>, taskId: string) => {
+    if (!groupChat) return;
+    setBusyTaskId(taskId);
+    try {
+      const tokens = await digitalHumanTokensFor(humans);
+      await action(tokens);
+    } finally {
+      setBusyTaskId("");
+    }
+  };
 
   return (
     <div className="collab-panel" aria-label="协作面板">
@@ -70,7 +119,7 @@ const CollabPanel = memo(function CollabPanel({
             className={`collab-tab${view === "info" ? " active" : ""}`}
             onClick={() => setView("info")}
           >
-            信息
+            工作台
           </button>
         </div>
       ) : null}
@@ -111,6 +160,75 @@ const CollabPanel = memo(function CollabPanel({
               </div>
             </div>
           </section>
+
+          {groupChat ? (
+            <section className="collab-section collab-workbench">
+              <div className="collab-section-label">
+                工作台
+                <span className="collab-count">{serverTasks.length}</span>
+              </div>
+              <div className="collab-workbench-stats">
+                <span><b>{completedTasks}</b><small>已完成</small></span>
+                <span><b>{Math.max(serverTasks.length - completedTasks, 0)}</b><small>处理中</small></span>
+                <span><b>{artifacts.length}</b><small>产物</small></span>
+              </div>
+              {serverTasks.length === 0 ? (
+                <div className="collab-empty compact">发送任务后，这里会显示数字人的分工、状态和操作。</div>
+              ) : (
+                <div className="collab-task-list">
+                  {serverTasks.map((task) => {
+                    const assignee = humans.find((human) => human.id === task.assignedTo);
+                    return (
+                      <div key={task.taskId} className="collab-task-card">
+                        <div className="collab-task-top">
+                          <span className={`collab-task-state ${taskStateClass(task.state)}`}>{taskStateLabel(task.state)}</span>
+                          <span className="collab-task-title" title={task.title}>{task.title}</span>
+                        </div>
+                        <div className="collab-task-meta">
+                          {assignee ? <HumanAvatar human={assignee} size={22} /> : <span className="collab-task-ghost">?</span>}
+                          <span>{task.assigneeName || assignee?.displayName || "未分配"}</span>
+                          {task.dependsOn && task.dependsOn.length > 0 ? <small>依赖 {task.dependsOn.length}</small> : null}
+                        </div>
+                        <div className="collab-task-actions">
+                          <button
+                            type="button"
+                            className="ghost-action compact"
+                            disabled={!canRetryTask(task.state) || busyTaskId === task.taskId}
+                            onClick={() => void withTokens(
+                              (tokens) => retryRoomTask(groupChat.port, groupChat.roomId, task.taskId, groupChat.channelCode, groupChat.approvalMode, tokens),
+                              task.taskId,
+                            )}
+                          >
+                            重试
+                          </button>
+                          <select
+                            className="collab-task-select"
+                            value=""
+                            disabled={busyTaskId === task.taskId || participants.length < 2}
+                            onChange={(event) => {
+                              const target = event.target.value;
+                              if (!target) return;
+                              void withTokens(
+                                (tokens) => reassignRoomTask(groupChat.port, groupChat.roomId, task.taskId, target, groupChat.channelCode, groupChat.approvalMode, tokens),
+                                task.taskId,
+                              );
+                            }}
+                          >
+                            <option value="">转派</option>
+                            {participants
+                              .filter(({ participant }) => participant.digitalHumanId !== task.assignedTo)
+                              .map(({ participant, human }) => (
+                                <option key={participant.digitalHumanId} value={participant.digitalHumanId}>{human.displayName}</option>
+                              ))}
+                          </select>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          ) : null}
 
           <section className="collab-section">
             <div className="collab-section-label">

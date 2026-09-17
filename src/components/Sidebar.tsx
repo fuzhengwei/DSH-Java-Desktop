@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { DigitalHuman, SessionSummary, WorkspaceEntry } from "../types";
 import { sanitizeDisplayName, truncateSessionTitle } from "../lib/text";
 import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./ProjectRowMenu";
@@ -26,6 +26,7 @@ type SidebarProps = {
   projects: WorkspaceEntry[];
   sessions: SessionSummary[];
   sessionProjectMap: Record<string, string>;
+  sessionOrder?: Record<string, string[]>;
   creatingProject: boolean;
   projectModalOpen: boolean;
   projectName: string;
@@ -42,12 +43,15 @@ type SidebarProps = {
   sessionCustomTitles?: Record<string, string>;
   onRenameSession?: (session: SessionSummary, title: string) => void;
   onDeleteSession?: (session: SessionSummary) => void;
+  onMoveSessionToProject?: (sessionIds: string[], projectPath: string) => void;
+  onReorderSessions?: (dragIds: string[], targetIds: string[], projectPath: string, position?: "before" | "after") => void;
   onProjectModalChange: (open: boolean, name?: string, editingProject?: SidebarProps["editingProject"]) => void;
   onCreateProject: () => void;
   onPickLocalProject: (parentPath: string) => void;
   onAddLocalProject: (parentPath: string) => void;
   onEditProject: (project: WorkspaceEntry) => void;
   onRenameProject: (name: string) => void;
+  onReorderProjects?: (dragPath: string, targetPath: string, position?: "before" | "after") => void;
   onRemoveProject: (project: WorkspaceEntry) => void;
   onRemoveLocalProject: (project: WorkspaceEntry) => void;
   /** 全部数字人（含项目归属），用于项目行头像堆叠与数量 */
@@ -57,6 +61,27 @@ type SidebarProps = {
   /** 浮层底部「新建数字人并归属到该项目」（打开向导，创建后归属该项目） */
   onCreateDigitalHuman?: (project: WorkspaceEntry) => void;
 };
+
+type SidebarDragState =
+  | { kind: "session"; ids: string[]; label: string }
+  | { kind: "project"; path: string; label: string };
+
+type DropTargetState =
+  | { kind: "project"; path: string }
+  | { kind: "session"; projectPath: string; ids: string[]; position: "before" | "after" };
+
+type DragPreviewState = {
+  label: string;
+  x: number;
+  y: number;
+};
+
+const DEFAULT_PROJECT_DROP_TARGET = "__unassigned__";
+const POINTER_DRAG_THRESHOLD = 4;
+
+function normalizedSidebarProjectPath(value?: string): string {
+  return value && value !== "default" ? value : "";
+}
 
 function sessionTitle(session: SessionSummary, customTitles?: Record<string, string>): string {
   const customTitle = [session.sessionId, session.agentId]
@@ -111,6 +136,7 @@ export default function Sidebar({
   projects,
   sessions,
   sessionProjectMap,
+  sessionOrder = {},
   creatingProject,
   projectModalOpen,
   projectName: projectModalName,
@@ -123,12 +149,15 @@ export default function Sidebar({
   sessionCustomTitles,
   onRenameSession,
   onDeleteSession,
+  onMoveSessionToProject,
+  onReorderSessions,
   onProjectModalChange,
   onCreateProject,
   onPickLocalProject,
   onAddLocalProject,
   onEditProject,
   onRenameProject,
+  onReorderProjects,
   onRemoveProject,
   onRemoveLocalProject,
   digitalHumans = [],
@@ -140,6 +169,9 @@ export default function Sidebar({
   const [renamingSession, setRenamingSession] = useState<SessionSummary | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [pendingDeleteSession, setPendingDeleteSession] = useState<SessionSummary | null>(null);
+  const [dragging, setDragging] = useState<SidebarDragState | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTargetState | null>(null);
+  const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null);
   // 会话列表分页：每个项目默认只展示前几条，点击「加载更多」再追加
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
   const showMoreSessions = (path: string, step: number) => {
@@ -149,9 +181,13 @@ export default function Sidebar({
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, SessionSummary[]>();
     for (const session of sessions) {
-      const projectPath = sessionIds(session)
-        .map((id) => sessionProjectMap[id])
-        .find(Boolean) || "__unassigned__";
+      const ids = sessionIds(session);
+      const hasDefaultProject = ids.some((id) => sessionProjectMap[id] === "default");
+      const projectPath = hasDefaultProject
+        ? "__unassigned__"
+        : ids.map((id) => normalizedSidebarProjectPath(sessionProjectMap[id])).find(Boolean)
+          || normalizedSidebarProjectPath(session.workspaceId)
+          || "__unassigned__";
       const list = groups.get(projectPath) || [];
       list.push(session);
       groups.set(projectPath, list);
@@ -162,11 +198,21 @@ export default function Sidebar({
       const time = new Date(value).getTime();
       return Number.isNaN(time) ? 0 : time;
     };
-    for (const list of groups.values()) {
-      list.sort((a, b) => timeOf(b) - timeOf(a));
+    for (const [projectPath, list] of groups.entries()) {
+      const projectKey = projectPath === "__unassigned__" ? "default" : projectPath;
+      const orderedIds = sessionOrder[projectKey] || [];
+      const orderIndex = new Map(orderedIds.map((id, index) => [id, index]));
+      list.sort((a, b) => {
+        const aIndex = orderIndex.get(sessionIds(a)[0] || "") ?? -1;
+        const bIndex = orderIndex.get(sessionIds(b)[0] || "") ?? -1;
+        if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
+        if (aIndex >= 0) return -1;
+        if (bIndex >= 0) return 1;
+        return timeOf(b) - timeOf(a);
+      });
     }
     return groups;
-  }, [sessionProjectMap, sessions]);
+  }, [sessionOrder, sessionProjectMap, sessions]);
 
   const groupedLocalProjects = useMemo(() => {
     const groups = new Map<string, WorkspaceEntry[]>();
@@ -229,17 +275,179 @@ export default function Sidebar({
     sessionIds(session).some((id) => runningIds.has(id))
   );
 
-  const renderSessionRow = (session: SessionSummary, showTime: boolean) => {
+  const suppressClickRef = useRef(false);
+  const pointerDragRef = useRef<{
+    state: SidebarDragState;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+
+  const clearDragState = () => {
+    setDragging(null);
+    setDropTarget(null);
+    setDragPreview(null);
+    pointerDragRef.current = null;
+  };
+
+  const projectPathOfSessionIds = (ids: string[]) => (
+    ids
+      .map((id) => normalizedSidebarProjectPath(sessionProjectMap[id]))
+      .find(Boolean) || ""
+  );
+
+  const dropTargetAt = (clientX: number, clientY: number, state: SidebarDragState): DropTargetState | null => {
+    const targetSession = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-sidebar-session]");
+    if (state.kind === "session" && targetSession) {
+      const targetIds = (targetSession.dataset.sessionIds || "").split(",").filter(Boolean);
+      const targetProjectPath = targetSession.dataset.projectPath || "";
+      const sameSession = targetIds.length > 0 && state.ids.some((id) => targetIds.includes(id));
+      const sameProject = projectPathOfSessionIds(state.ids) === targetProjectPath;
+      if (!sameSession && sameProject) {
+        const rect = targetSession.getBoundingClientRect();
+        return {
+          kind: "session",
+          projectPath: targetProjectPath,
+          ids: targetIds,
+          position: clientY > rect.top + rect.height / 2 ? "after" : "before",
+        };
+      }
+    }
+
+    const element = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-sidebar-drop]");
+    if (!element) return null;
+    const targetPath = element.dataset.projectPath || "";
+    if (targetPath === DEFAULT_PROJECT_DROP_TARGET) return state.kind === "session" ? { kind: "project", path: DEFAULT_PROJECT_DROP_TARGET } : null;
+    if (state.kind === "project" && state.path === targetPath) return null;
+    return { kind: "project", path: targetPath };
+  };
+
+  const sameDropTarget = (left: DropTargetState | null, right: DropTargetState | null) => {
+    if (!left || !right) return left === right;
+    if (left.kind !== right.kind) return false;
+    if (left.kind === "project" && right.kind === "project") return left.path === right.path;
+    if (left.kind === "session" && right.kind === "session") {
+      return left.projectPath === right.projectPath && left.position === right.position && left.ids.join(",") === right.ids.join(",");
+    }
+    return false;
+  };
+
+  const finishPointerDrag = (clientX: number, clientY: number) => {
+    const pending = pointerDragRef.current;
+    if (!pending?.active) {
+      clearDragState();
+      return;
+    }
+    const target = dropTargetAt(clientX, clientY, pending.state);
+    if (!target) {
+      clearDragState();
+      return;
+    }
+    if (pending.state.kind === "session" && target.kind === "session") {
+      onReorderSessions?.(pending.state.ids, target.ids, target.projectPath, target.position);
+      setExpandedProjects((current) => ({ ...current, [target.projectPath]: true }));
+    } else if (pending.state.kind === "session" && target.kind === "project") {
+      const nextProjectPath = target.path === DEFAULT_PROJECT_DROP_TARGET ? "" : target.path;
+      onMoveSessionToProject?.(pending.state.ids, nextProjectPath);
+      setExpandedProjects((current) => ({ ...current, [target.path]: true }));
+    } else if (pending.state.kind === "project" && target.kind === "project" && target.path !== DEFAULT_PROJECT_DROP_TARGET) {
+      const dropNode = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>("[data-sidebar-drop]");
+      const row = dropNode?.querySelector(".project-row");
+      const rect = row?.getBoundingClientRect();
+      const position = rect && clientY > rect.top + rect.height / 2 ? "after" : "before";
+      onReorderProjects?.(pending.state.path, target.path, position);
+    }
+    clearDragState();
+  };
+
+  const startPointerDrag = (event: ReactPointerEvent<HTMLElement>, state: SidebarDragState) => {
+    if (event.button !== 0) return;
+    if (state.kind === "session" && !onMoveSessionToProject && !onReorderSessions) return;
+    if (state.kind === "project" && !onReorderProjects) return;
+    pointerDragRef.current = {
+      state,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+
+    const onPointerMove = (pointerEvent: PointerEvent) => {
+      const pending = pointerDragRef.current;
+      if (!pending) return;
+      const distance = Math.hypot(pointerEvent.clientX - pending.startX, pointerEvent.clientY - pending.startY);
+      if (!pending.active && distance < POINTER_DRAG_THRESHOLD) return;
+      if (!pending.active) {
+        pending.active = true;
+        suppressClickRef.current = true;
+        setDragging(pending.state);
+      }
+      pointerEvent.preventDefault();
+      const target = dropTargetAt(pointerEvent.clientX, pointerEvent.clientY, pending.state);
+      setDropTarget((current) => (sameDropTarget(current, target) ? current : target));
+      setDragPreview({ label: pending.state.label, x: pointerEvent.clientX, y: pointerEvent.clientY });
+    };
+
+    const onPointerUp = (pointerEvent: PointerEvent) => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      finishPointerDrag(pointerEvent.clientX, pointerEvent.clientY);
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    };
+
+    const onPointerCancel = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      clearDragState();
+      window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+  };
+
+  const renderSessionRow = (session: SessionSummary, showTime: boolean, projectPath = "") => {
     const id = session.sessionId || session.agentId || "";
     const active = sessionIsActive(session, activeSessionId);
     const running = isSessionRunning(session) || (active && streaming);
     const title = sessionTitle(session, sessionCustomTitles);
+    const ids = sessionIds(session);
+    const sessionDropActive = dropTarget?.kind === "session" && dropTarget.ids.some((item) => ids.includes(item));
     return (
-      <div key={id} className={active ? "session-item active" : "session-item"}>
+      <div
+        key={id}
+        className={`session-item${active ? " active" : ""}${dragging?.kind === "session" && dragging.ids.some((item) => ids.includes(item)) ? " dragging" : ""}${sessionDropActive ? ` drop-${dropTarget.position}` : ""}`}
+        data-draggable="true"
+        data-sidebar-session="true"
+        data-session-ids={ids.join(",")}
+        data-project-path={projectPath}
+        onPointerDown={(event) => {
+          if (ids.length === 0) return;
+          if ((event.target as HTMLElement).closest(".session-item-actions")) return;
+          startPointerDrag(event, { kind: "session", ids, label: title });
+        }}
+      >
+        <span className="session-drag-handle" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </span>
         <button
           type="button"
           className="session-main"
-          onClick={() => onSelectSession(id)}
+          onClick={(event) => {
+            if (suppressClickRef.current) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
+            onSelectSession(id);
+          }}
           title={title}
         >
           <span className="session-title">{title}</span>
@@ -280,7 +488,16 @@ export default function Sidebar({
     );
   };
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${dragging ? " dragging-sidebar" : ""}`}>
+      {dragPreview ? (
+        <div
+          className="sidebar-drag-preview"
+          style={{ transform: `translate3d(${dragPreview.x + 12}px, ${dragPreview.y + 10}px, 0)` }}
+        >
+          <span className="sidebar-drag-preview-icon" aria-hidden="true" />
+          <span>{sanitizeDisplayName(dragPreview.label)}</span>
+        </div>
+      ) : null}
       {/* 项目数字人配置浮层：固定定位在侧边栏内，锚点为触发行的 ⋮ 按钮 */}
       <ProjectHumanAssignPopover
         anchorRef={assignAnchorRef}
@@ -317,7 +534,7 @@ export default function Sidebar({
       <div className="sidebar-scroll">
         <div className="section-heading-row">
           <div className="section-heading">项目</div>
-          <button className="section-action" onClick={() => onProjectModalChange(true, "")} title="新建项目">
+          <button className="section-action" onClick={() => onProjectModalChange(true, "", null)} title="新建项目">
             <PlusIcon className="icon-15" />
           </button>
         </div>
@@ -330,9 +547,16 @@ export default function Sidebar({
             const projectSessions = groupedSessions.get(project.path) || [];
             const expanded = isProjectExpanded(project.path, projectSessions.length > 0);
             const humansOfProject = projectHumans.get(project.path) || [];
+            const projectDragActive = dragging?.kind === "project" && dragging.path === project.path;
+            const projectDropActive = dropTarget?.kind === "project" && dropTarget.path === project.path;
             return (
-              <div key={project.path} className="project-node">
-                <div className="project-row">
+              <div
+                key={project.path}
+                className={`project-node${projectDragActive ? " dragging" : ""}`}
+                data-sidebar-drop="project"
+                data-project-path={project.path}
+              >
+                <div className={`project-row${activeProjectPath === project.path ? " active" : ""}${projectDropActive ? " drop-target" : ""}`}>
                   <button
                     className="project-expander"
                     onClick={() => setExpandedProjects((current) => ({ ...current, [project.path]: !expanded }))}
@@ -340,7 +564,22 @@ export default function Sidebar({
                   >
                     <ChevronIcon className={`icon-14 chevron ${expanded ? "expanded" : ""}`} />
                   </button>
-                  <button className="project-main" onClick={() => setExpandedProjects((current) => ({ ...current, [project.path]: !expanded }))} title={expanded ? "折叠" : "展开"}>
+                  <button
+                    className="project-main"
+                    data-draggable="true"
+                    onPointerDown={(event) => {
+                      startPointerDrag(event, { kind: "project", path: project.path, label: projectName(project) });
+                    }}
+                    onClick={(event) => {
+                      if (suppressClickRef.current) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        return;
+                      }
+                      setExpandedProjects((current) => ({ ...current, [project.path]: !expanded }));
+                    }}
+                    title={expanded ? "折叠；拖动可排序" : "展开；拖动可排序"}
+                  >
                     <FolderIcon className="icon-16" />
                     <span>{sanitizeDisplayName(projectName(project))}</span>
                   </button>
@@ -359,7 +598,7 @@ export default function Sidebar({
                 {expanded ? (
                   <div className="project-sessions">
                     {projectSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
-                    {projectSessions.slice(0, visibleCounts[project.path] ?? SESSION_PAGE_SIZE).map((session) => renderSessionRow(session, true))}
+                    {projectSessions.slice(0, visibleCounts[project.path] ?? SESSION_PAGE_SIZE).map((session) => renderSessionRow(session, true, project.path))}
                     {projectSessions.length > (visibleCounts[project.path] ?? SESSION_PAGE_SIZE) ? (
                       <button
                         type="button"
@@ -375,8 +614,12 @@ export default function Sidebar({
             );
           })}
 
-          <div className="project-node">
-            <div className="project-row">
+          <div
+            className="project-node"
+            data-sidebar-drop="default"
+            data-project-path={DEFAULT_PROJECT_DROP_TARGET}
+          >
+            <div className={`project-row${activeProjectPath === "" ? " active" : ""}${dropTarget?.kind === "project" && dropTarget.path === DEFAULT_PROJECT_DROP_TARGET ? " drop-target" : ""}`}>
               {unassignedSessions.length > 0 ? (
                 <button
                   className="project-expander"
@@ -397,7 +640,7 @@ export default function Sidebar({
             {expandedProjects.__unassigned__ ? (
               <div className="project-sessions">
                 {unassignedSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
-                {unassignedSessions.slice(0, visibleCounts.__unassigned__ ?? SESSION_PAGE_SIZE).map((session) => renderSessionRow(session, false))}
+                {unassignedSessions.slice(0, visibleCounts.__unassigned__ ?? SESSION_PAGE_SIZE).map((session) => renderSessionRow(session, false, ""))}
                 {unassignedSessions.length > (visibleCounts.__unassigned__ ?? SESSION_PAGE_SIZE) ? (
                   <button
                     type="button"
@@ -434,7 +677,7 @@ export default function Sidebar({
               value={projectModalName}
               autoFocus
               placeholder="例如：mall-admin"
-              onChange={(event) => onProjectModalChange(true, event.target.value)}
+              onChange={(event) => onProjectModalChange(true, event.target.value, editingProject)}
               onKeyDown={(event) => {
                 if (event.key === "Enter") (editingProject ? onRenameProject(projectModalName) : onCreateProject());
                 if (event.key === "Escape") onProjectModalChange(false);

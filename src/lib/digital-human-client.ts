@@ -234,10 +234,11 @@ function classifyError(status: number, error: unknown): DiscoverResult["error"] 
   return { kind: "network", message: message || "网络不可达" };
 }
 
-/** 探测远端 Agent Card：GET {baseUrl}/.well-known/dsh-agent-card */
+/** 探测远端 Agent Card：DSH 走 dsh-agent-card，A2A 走 agent.json */
 export async function discoverDigitalHuman(
   port: number | null,
   remoteBaseUrl: string,
+  endpointType: DigitalHumanEndpoint["type"] = "remote-dsh",
   credentialRef?: string,
 ): Promise<DiscoverResult> {
   const normalized = remoteBaseUrl.trim().replace(/\/+$/, "");
@@ -248,7 +249,7 @@ export async function discoverDigitalHuman(
     try {
       return await request<DiscoverResult>(port, "/api/digital-humans/discover", {
         method: "POST",
-        body: JSON.stringify({ baseUrl: normalized, credentialRef }),
+        body: JSON.stringify({ baseUrl: normalized, endpointType, credentialRef }),
       });
     } catch (error) {
       if (!isRuntimeUnavailable(error)) throw error;
@@ -262,7 +263,8 @@ export async function discoverDigitalHuman(
   }
   const startedAt = Date.now();
   try {
-    const response = await fetch(`${normalized}/.well-known/dsh-agent-card`, {
+    const cardPath = endpointType === "a2a" ? "/.well-known/agent.json" : "/.well-known/dsh-agent-card";
+    const response = await fetch(`${normalized}${cardPath}`, {
       method: "GET",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       connectTimeout: 8_000,
@@ -272,6 +274,29 @@ export async function discoverDigitalHuman(
       return { reachable: false, latencyMs, error: classifyError(response.status, null) };
     }
     const card = await response.json().catch(() => null) as Record<string, unknown> | null;
+    if (endpointType === "a2a") {
+      if (!card || (typeof card.name !== "string" && typeof card.description !== "string" && !Array.isArray(card.skills))) {
+        return { reachable: false, latencyMs, error: { kind: "incompatible", message: "响应不是有效的 A2A Agent Card" } };
+      }
+      const skills = Array.isArray(card.skills) ? card.skills as Array<Record<string, unknown>> : [];
+      const tags = skills.flatMap((skill) => [
+        typeof skill.name === "string" ? skill.name : "",
+        ...(Array.isArray(skill.tags) ? skill.tags.filter((tag): tag is string => typeof tag === "string") : []),
+      ]).filter(Boolean);
+      return {
+        reachable: true,
+        protocolVersion: typeof card.protocolVersion === "string" ? card.protocolVersion : "a2a.v1",
+        latencyMs,
+        suggested: {
+          displayName: typeof card.name === "string" ? card.name : "A2A Agent",
+          avatarRef: "🤝",
+          purpose: typeof card.description === "string" ? card.description : "通过 A2A 协议接入的外部智能体",
+          roleTags: [...new Set(tags)].slice(0, 8),
+          approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+          maxConcurrentTasks: 1,
+        },
+      };
+    }
     if (!card || typeof card.protocol !== "string") {
       return { reachable: false, latencyMs, error: { kind: "incompatible", message: "响应不是有效的 DSH Agent Card" } };
     }
@@ -303,7 +328,7 @@ export async function healthCheck(
     return { healthState: port ? "online" : "offline" };
   }
   if (!human.endpoint.baseUrl) return { healthState: "unknown" };
-  const result = await discoverDigitalHuman(port, human.endpoint.baseUrl, human.endpoint.credentialRef);
+  const result = await discoverDigitalHuman(port, human.endpoint.baseUrl, human.endpoint.type, human.endpoint.credentialRef);
   if (result.reachable) return { healthState: "online", latencyMs: result.latencyMs };
   return {
     healthState: result.error?.kind === "unauthorized" ? "unauthorized" : "offline",
@@ -319,6 +344,20 @@ export async function saveCredential(credentialRef: string, secret: string): Pro
 
 export async function readCredential(credentialRef: string): Promise<string | null> {
   return invoke<string | null>("read_credential", { credentialRef });
+}
+
+/**
+ * 为一次协作调度临时读取远端数字人的凭据。
+ * 返回值只随本次 HTTP 请求发送给本地 Runtime，不写入 localStorage / 服务端数据库。
+ */
+export async function digitalHumanTokensFor(humans: DigitalHuman[]): Promise<Record<string, string>> {
+  const entries = await Promise.all(humans.map(async (human) => {
+    const credentialRef = human.endpoint.credentialRef;
+    if (human.endpoint.type !== "remote-dsh" || !credentialRef) return null;
+    const token = await readCredential(credentialRef).catch(() => "");
+    return token ? [human.id, token] as const : null;
+  }));
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
 }
 
 export async function deleteCredential(credentialRef: string): Promise<void> {
@@ -523,10 +562,11 @@ export async function postRoomMessage(
   mentions: string[],
   channelCode?: string,
   approvalMode?: string,
+  digitalHumanTokens?: Record<string, string>,
 ): Promise<{ accepted: boolean; mode?: string }> {
   return collabRequest(port, `/rooms/${encodeURIComponent(roomId)}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content, mentions, channelCode, approvalMode }),
+    body: JSON.stringify({ content, mentions, channelCode, approvalMode, digitalHumanTokens }),
   });
 }
 
@@ -543,10 +583,40 @@ export async function resumeRoomTask(
   taskId: string,
   channelCode?: string,
   approvalMode?: string,
+  digitalHumanTokens?: Record<string, string>,
 ): Promise<void> {
   await collabRequest(port, `/tasks/${encodeURIComponent(taskId)}/resume`, {
     method: "POST",
-    body: JSON.stringify({ roomId, channelCode, approvalMode }),
+    body: JSON.stringify({ roomId, channelCode, approvalMode, digitalHumanTokens }),
+  });
+}
+
+export async function retryRoomTask(
+  port: number,
+  roomId: string,
+  taskId: string,
+  channelCode?: string,
+  approvalMode?: string,
+  digitalHumanTokens?: Record<string, string>,
+): Promise<void> {
+  await collabRequest(port, `/tasks/${encodeURIComponent(taskId)}/retry`, {
+    method: "POST",
+    body: JSON.stringify({ roomId, channelCode, approvalMode, digitalHumanTokens }),
+  });
+}
+
+export async function reassignRoomTask(
+  port: number,
+  roomId: string,
+  taskId: string,
+  targetDigitalHumanId: string,
+  channelCode?: string,
+  approvalMode?: string,
+  digitalHumanTokens?: Record<string, string>,
+): Promise<void> {
+  await collabRequest(port, `/tasks/${encodeURIComponent(taskId)}/reassign`, {
+    method: "POST",
+    body: JSON.stringify({ roomId, targetDigitalHumanId, channelCode, approvalMode, digitalHumanTokens }),
   });
 }
 

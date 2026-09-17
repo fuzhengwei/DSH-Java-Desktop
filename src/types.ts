@@ -168,7 +168,7 @@ export type ParticipantPresence =
   | "idle" | "thinking" | "working" | "waiting_input"
   | "waiting_approval" | "blocked" | "done" | "error";
 
-export type DigitalHumanEndpointType = "local-dsh" | "remote-dsh" | "mcp-tool" | "a2a";
+export type DigitalHumanEndpointType = "local-dsh" | "remote-dsh" | "a2a";
 
 export type DigitalHumanEndpoint = {
   type: DigitalHumanEndpointType;

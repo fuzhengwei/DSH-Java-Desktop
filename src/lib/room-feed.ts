@@ -239,6 +239,16 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
         items.push({ kind: "sys", id: event.id, text: `「${event.payload.displayName || event.displayName || "数字人"}」加入了协作`, seq: event.seq });
         break;
       }
+      case "TASK_RETRIED": {
+        const human = humanRefOf(event, humans);
+        items.push({ kind: "sys", id: event.id, text: `↻ ${human.name} 重新接手这个任务`, seq: event.seq });
+        break;
+      }
+      case "TASK_REASSIGNED": {
+        const human = humanRefOf(event, humans);
+        items.push({ kind: "sys", id: event.id, text: `🔀 任务已转派给「${human.name}」`, seq: event.seq });
+        break;
+      }
       default:
         break;
     }
