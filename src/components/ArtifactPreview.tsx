@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ServerRoomView } from "../lib/digital-human-client";
@@ -63,6 +64,7 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose 
     const paths = [...(full?.filePath ? [full.filePath] : []), ...extractFilePaths(content)];
     return Array.from(new Set(paths));
   }, [content, full?.filePath]);
+  const [existingFilePaths, setExistingFilePaths] = useState<Set<string> | null>(null);
   const echartOption = useMemo(() => (
     full?.echartsOption ? JSON.stringify(full.echartsOption, null, 2) : parseEchartsOption(content)
   ), [content, full?.echartsOption]);
@@ -79,6 +81,23 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose 
       return <pre>{children}</pre>;
     },
   }), []);
+
+  useEffect(() => {
+    if (filePaths.length === 0) {
+      setExistingFilePaths(new Set());
+      return;
+    }
+    setExistingFilePaths(null);
+    let cancelled = false;
+    void invoke<string[]>("existing_local_files", { paths: filePaths })
+      .then((existing) => {
+        if (!cancelled) setExistingFilePaths(new Set(existing));
+      })
+      .catch(() => {
+        if (!cancelled) setExistingFilePaths(new Set());
+      });
+    return () => { cancelled = true; };
+  }, [filePaths]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -108,9 +127,12 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose 
         <div className="artifact-preview-content markdown-body">
           {echartOption ? <EChartBlock code={echartOption} /> : null}
           <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{markdownContent}</ReactMarkdown>
-          {filePaths.slice(0, 2).map((filePath) => (
+          {filePaths.filter((filePath) => existingFilePaths?.has(filePath)).slice(0, 2).map((filePath) => (
             <FilePreview key={filePath} path={filePath} compact />
           ))}
+          {existingFilePaths && filePaths.length > 0 && filePaths.every((filePath) => !existingFilePaths.has(filePath)) ? (
+            <div className="file-preview-error">关联文件已不存在，无法预览。</div>
+          ) : null}
         </div>
       </div>
     </aside>

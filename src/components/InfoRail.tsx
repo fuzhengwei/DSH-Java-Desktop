@@ -37,6 +37,8 @@ type GitChangeSummary = {
   files: GitChangedFile[];
 };
 
+type ExistingLocalFilesResult = string[];
+
 const FILE_TOOL_PATTERN = /write|edit|create|patch|apply|file|save|touch|mkdir/i;
 const ARG_PATH_KEYS = ["path", "file", "filePath", "target", "filename", "name", "output", "destination", "cwd"];
 
@@ -167,6 +169,14 @@ function buildFileCards(
   return cards;
 }
 
+async function filterExistingFileCards(cards: FileCard[]): Promise<FileCard[]> {
+  const paths = Array.from(new Set(cards.map((card) => card.rawPath).filter((path): path is string => Boolean(path))));
+  if (paths.length === 0) return [];
+  const existing = await invoke<ExistingLocalFilesResult>("existing_local_files", { paths });
+  const existingSet = new Set(existing);
+  return cards.filter((card) => card.rawPath && existingSet.has(card.rawPath));
+}
+
 export default function InfoRail(props: InfoRailProps) {
   const {
     open,
@@ -211,8 +221,10 @@ export default function InfoRail(props: InfoRailProps) {
           return buildFileCards(session, normalized, timeOf);
         }));
         if (cancelled) return;
-        const merged = groups.flat().sort((a, b) => b.time - a.time).slice(0, 40);
-        setFileCards(merged);
+        const merged = await filterExistingFileCards(groups.flat().sort((a, b) => b.time - a.time));
+        if (cancelled) return;
+        const visible = merged.slice(0, 40);
+        setFileCards(visible);
         setFilesLoaded(true);
       } catch (caught) {
         if (cancelled) return;

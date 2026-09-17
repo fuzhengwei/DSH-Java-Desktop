@@ -221,28 +221,46 @@ function SheetPreview({ base64, name }: { base64: string; name: string }) {
 /** 对话内嵌文件渲染卡片：正文中出现本地文件路径时自动渲染 */
 export function InlineFileCards({ content, onOpenFile }: { content: string; onOpenFile?: (path: string) => void }) {
   const paths = useMemo(() => extractFilePaths(content), [content]);
+  const [existingPaths, setExistingPaths] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (paths.length === 0) {
+      setExistingPaths(new Set());
+      return;
+    }
+    setExistingPaths(null);
+    let cancelled = false;
+    void invoke<string[]>("existing_local_files", { paths })
+      .then((existing) => {
+        if (!cancelled) setExistingPaths(new Set(existing));
+      })
+      .catch(() => {
+        if (!cancelled) setExistingPaths(new Set());
+      });
+    return () => { cancelled = true; };
+  }, [paths]);
   if (paths.length === 0) return null;
   return (
     <div className="inline-file-cards">
       {paths.slice(0, 3).map((filePath) => (
-        <InlineFileCard key={filePath} path={filePath} onOpenFile={onOpenFile} />
+        <InlineFileCard key={filePath} path={filePath} exists={existingPaths?.has(filePath) ?? null} onOpenFile={onOpenFile} />
       ))}
     </div>
   );
 }
 
-function InlineFileCard({ path, onOpenFile }: { path: string; onOpenFile?: (path: string) => void }) {
+function InlineFileCard({ path, exists, onOpenFile }: { path: string; exists: boolean | null; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const name = path.split("/").filter(Boolean).pop() || path;
+  const disabled = exists === false;
   if (!open) {
     return (
       <span className="inline-file-trigger-wrap">
-        <button type="button" className="inline-file-trigger" onClick={() => setOpen(true)} title={path}>
+        <button type="button" className="inline-file-trigger" onClick={() => setOpen(true)} title={disabled ? "文件已不存在" : path} disabled={disabled}>
           <span className="file-kind-badge">{fileKindOf(name) === "unknown" ? "文件" : KIND_LABEL[fileKindOf(name)]}</span>
           <span className="inline-file-name">{name}</span>
-          <span className="inline-file-hint">点击渲染预览</span>
+          <span className="inline-file-hint">{disabled ? "文件不存在" : "点击渲染预览"}</span>
         </button>
-        {onOpenFile ? (
+        {onOpenFile && !disabled ? (
           <button type="button" className="inline-file-dock" onClick={() => onOpenFile(path)} title="在右侧面板打开">
             在右侧打开 ↗
           </button>

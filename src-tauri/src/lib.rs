@@ -578,6 +578,15 @@ fn read_local_file_base64(path: String) -> Result<String, String> {
     Ok(base64_encode(&buffer))
 }
 
+/// 批量检查本地文件是否仍然存在，用于过滤对话历史里已失效的临时文件路径。
+#[tauri::command]
+fn existing_local_files(paths: Vec<String>) -> Vec<String> {
+    paths
+        .into_iter()
+        .filter(|path| resolve_preview_file(path).is_file())
+        .collect()
+}
+
 /// 预览路径兜底：Agent 有时会把用户主目录下的文件写成 `/Desktop/foo.html`。
 /// 不改变对外展示的原路径，只在本机读取时尝试映射到 `$HOME/Desktop/foo.html`。
 fn resolve_preview_file(path: &str) -> PathBuf {
@@ -740,7 +749,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

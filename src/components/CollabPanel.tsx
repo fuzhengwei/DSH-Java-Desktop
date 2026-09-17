@@ -139,6 +139,7 @@ const CollabPanel = memo(function CollabPanel({
             humans={humans}
             onFocusItem={groupChat.onFocusItem}
             onOpenArtifact={groupChat.onOpenArtifact}
+            serverRoom={groupChat.serverRoom}
           />
         </div>
       ) : null}

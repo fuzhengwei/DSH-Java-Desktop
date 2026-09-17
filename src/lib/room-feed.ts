@@ -78,6 +78,10 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
   const items: FeedItem[] = [];
   // 同一任务的消息归并：taskId → 消息条目（流式累加 + 最终定稿共用一条，杜绝重复）
   const messageByTask = new Map<string, Extract<FeedItem, { kind: "human-message" }>>();
+  const latestArtifactSeqByKey = new Map<string, number>();
+  const artifactKeys = (artifactId: string, title: string) => (
+    [artifactId, title ? `title:${title}` : ""].filter(Boolean)
+  );
 
   const upsertMessage = (
     taskId: string,
@@ -182,12 +186,15 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
       case "TASK_STATE_CHANGED":
         break;
       case "ARTIFACT_CREATED": {
+        const artifactId = String(event.payload.artifactId || event.id);
+        const title = String(event.payload.title || "交付物");
+        for (const key of artifactKeys(artifactId, title)) latestArtifactSeqByKey.set(key, event.seq);
         items.push({
           kind: "artifact",
           id: event.id,
-          artifactId: String(event.payload.artifactId || event.id),
+          artifactId,
           human: humanRefOf(event, humans),
-          title: String(event.payload.title || "交付物"),
+          title,
           kindLabel: String(event.payload.kind || "markdown"),
           seq: event.seq,
         });
@@ -253,7 +260,9 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
         break;
     }
   }
-  return items.sort((a, b) => a.seq - b.seq);
+  return items
+    .filter((item) => item.kind !== "artifact" || artifactKeys(item.artifactId, item.title).every((key) => latestArtifactSeqByKey.get(key) === item.seq))
+    .sort((a, b) => a.seq - b.seq);
 }
 
 export function truncateText(text: string, max: number): string {

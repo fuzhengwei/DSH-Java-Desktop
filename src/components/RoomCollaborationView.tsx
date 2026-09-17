@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ConversationMessage, DigitalHuman } from "../types";
@@ -35,6 +36,9 @@ type Props = {
   focusRequest?: { seq: number; nonce: number } | null;
 };
 
+type RoomArtifact = NonNullable<ServerRoomView["artifacts"]>[number];
+type ArtifactAvailability = "ready" | "pending" | "missing";
+
 function extractText(node: unknown): string {
   if (typeof node === "string") return node;
   if (typeof node === "number") return String(node);
@@ -55,6 +59,29 @@ function formatMessageTime(value?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+function roomArtifactHasPreview(artifact?: RoomArtifact): boolean {
+  return Boolean(
+    artifact?.content?.trim()
+    || artifact?.previewMarkdown?.trim()
+    || artifact?.summary?.trim()
+    || artifact?.filePath?.trim()
+    || artifact?.echartsOption,
+  );
+}
+
+function roomArtifactFilePaths(artifact?: RoomArtifact): string[] {
+  return artifact?.filePath?.trim() ? [artifact.filePath.trim()] : [];
+}
+
+function roomArtifactAvailability(artifact: RoomArtifact | undefined, existingFilePaths: Set<string> | null): ArtifactAvailability {
+  if (!artifact) return "pending";
+  if (artifact.content?.trim() || artifact.previewMarkdown?.trim() || artifact.summary?.trim() || artifact.echartsOption) return "ready";
+  const filePaths = roomArtifactFilePaths(artifact);
+  if (filePaths.length === 0) return "pending";
+  if (!existingFilePaths) return "pending";
+  return filePaths.some((path) => existingFilePaths.has(path)) ? "ready" : "missing";
 }
 
 // ── 工具行：与普通对话 ToolStep 同款 ──────────────
@@ -243,6 +270,7 @@ function ToolGroupBlock({ group, focusSeq, forceOpen, humans }: {
 const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, focusRequest }: Props) {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [room, setRoom] = useState<ServerRoomView | null>(null);
+  const [existingArtifactFiles, setExistingArtifactFiles] = useState<Set<string> | null>(null);
   const [loadError, setLoadError] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const lastSeqRef = useRef(0);
@@ -296,6 +324,24 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId]);
+
+  useEffect(() => {
+    const paths = Array.from(new Set((room?.artifacts || []).flatMap(roomArtifactFilePaths)));
+    if (paths.length === 0) {
+      setExistingArtifactFiles(new Set());
+      return;
+    }
+    setExistingArtifactFiles(null);
+    let cancelled = false;
+    void invoke<string[]>("existing_local_files", { paths })
+      .then((existing) => {
+        if (!cancelled) setExistingArtifactFiles(new Set(existing));
+      })
+      .catch(() => {
+        if (!cancelled) setExistingArtifactFiles(new Set());
+      });
+    return () => { cancelled = true; };
+  }, [room?.artifacts]);
 
   const feed = useMemo(() => buildRoomFeed(events, humans), [events, humans]);
 
@@ -472,21 +518,30 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
             );
           }
           if (item.kind === "artifact") {
+            const readyArtifact = (room?.artifacts || []).find((artifact) => (
+              artifact.artifactId === item.artifactId || artifact.title === item.title
+            ));
+            const availability = roomArtifactAvailability(readyArtifact, existingArtifactFiles);
+            const canPreview = roomArtifactHasPreview(readyArtifact) && availability === "ready" && Boolean(onOpenArtifact);
+            const disabledTitle = availability === "missing" ? "文件已不存在，无法查看" : "产物内容还在生成，稍后可查看";
+            const metaText = canPreview ? readyArtifact?.kind || item.kindLabel : availability === "missing" ? "文件已不存在" : "内容生成中";
+            const openText = canPreview ? "查看 →" : availability === "missing" ? "已失效" : "稍后可查看";
             return (
               <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
                   <button
                     type="button"
-                    className="room-artifact clickable"
-                    title="点击在右侧查看"
-                    onClick={() => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name })}
+                    className={`room-artifact${canPreview ? " clickable" : availability === "missing" ? " missing" : " pending"}`}
+                    title={canPreview ? "点击在右侧查看" : disabledTitle}
+                    disabled={!canPreview}
+                    onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
                   >
                     <span className="room-artifact-icon">📄</span>
                     <div className="room-artifact-text">
                       <div className="room-artifact-title">{item.title}</div>
-                      <div className="room-artifact-meta">{item.kindLabel}</div>
+                      <div className="room-artifact-meta">{metaText}</div>
                     </div>
-                    <span className="room-artifact-open">查看 →</span>
+                    <span className="room-artifact-open">{openText}</span>
                   </button>
                   <div className="message-meta">
                     <AttributionAvatar

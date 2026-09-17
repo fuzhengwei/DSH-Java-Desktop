@@ -643,7 +643,7 @@ export default function ConversationView({
     if (messageListRef.current && followOutputRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, streaming]);
 
   const scrollToBottom = () => {
     followOutputRef.current = true;
@@ -656,15 +656,15 @@ export default function ConversationView({
   const timelineItems = useMemo<TimelineItem[]>(() => {
     // 基于"原始消息数组"判断中间消息（下一条是 tool），而不是过滤后的列表，
     // 这样过程中的文字在任何一步都能稳定折叠保留，不会随渲染状态变化而消失。
-    return messages.reduce<TimelineItem[]>((items, message, index) => {
+    const items = messages.reduce<TimelineItem[]>((nextItems, message, index) => {
       if (message.role === "tool") {
-        const previous = items[items.length - 1];
+        const previous = nextItems[nextItems.length - 1];
         if (previous?.kind === "activity") {
           previous.messages.push(message);
-          return items;
+          return nextItems;
         }
-        items.push({ kind: "activity", key: activityKey(message, index), messages: [message] });
-        return items;
+        nextItems.push({ kind: "activity", key: activityKey(message, index), messages: [message] });
+        return nextItems;
       }
 
       const reasoning = message.reasoning?.trim() || "";
@@ -672,9 +672,9 @@ export default function ConversationView({
       const isLast = index === messages.length - 1;
       const hasAnything = Boolean(reasoning || content);
       // 跳过完全为空的消息项（流式占位除外），避免空 article 产生多余间距
-      if (!hasAnything && !(isLast && streaming)) return items;
+      if (!hasAnything && !(isLast && streaming)) return nextItems;
 
-      items.push({
+      nextItems.push({
         kind: "message",
         key: `${message.role}-${index}-${message.callId || message.createdAt || "message"}`,
         message,
@@ -682,8 +682,24 @@ export default function ConversationView({
           && messages[index + 1]?.role === "tool"
           && !content,
       });
-      return items;
+      return nextItems;
     }, []);
+    const lastItem = items[items.length - 1];
+    const hasVisiblePendingAssistant = lastItem?.kind === "message"
+      && lastItem.message.role === "assistant"
+      && !lastItem.message.reasoning?.trim()
+      && !lastItem.message.content.trim();
+    const waitingForFirstAssistantChunk = streaming
+      && messages.length > 0
+      && messages[messages.length - 1]?.role === "user";
+    if (waitingForFirstAssistantChunk && !hasVisiblePendingAssistant) {
+      items.push({
+        kind: "message",
+        key: "assistant-pending-placeholder",
+        message: { role: "assistant", content: "" },
+      });
+    }
+    return items;
   }, [messages, streaming]);
 
   const renderComposer = (variant: "hero" | "chat") => (

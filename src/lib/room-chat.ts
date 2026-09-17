@@ -66,8 +66,11 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
   const items: ChatItem[] = [];
   /** 当前折叠中的工具段（同一数字人连续 tool 归并到这里） */
   let pendingTools: Extract<ChatItem, { kind: "tools" }> | null = null;
-  const flushTools = () => {
+  const flushTools = (closedByLaterEvent = false) => {
     if (!pendingTools) return;
+    if (closedByLaterEvent) {
+      pendingTools.tools = pendingTools.tools.map((tool) => ({ ...tool, done: true }));
+    }
     pendingTools.running = pendingTools.tools.some((t) => !t.done);
     items.push(pendingTools);
     pendingTools = null;
@@ -93,15 +96,15 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         break;
       }
       case "user":
-        flushTools();
+        flushTools(true);
         items.push({ kind: "user", id: item.id, content: item.content, seq: item.seq });
         break;
       case "sys":
-        flushTools();
+        flushTools(true);
         items.push({ kind: "sys", id: item.id, text: item.text, seq: item.seq });
         break;
       case "plan":
-        flushTools();
+        flushTools(true);
         items.push({
           kind: "plan",
           id: item.id,
@@ -110,7 +113,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         });
         break;
       case "human-message": {
-        flushTools();
+        flushTools(true);
         const firstLine = (item.content || "").split(/\r?\n/).find((line) => line.trim()) || "…";
         items.push({
           kind: "say",
@@ -122,7 +125,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         break;
       }
       case "artifact":
-        flushTools();
+        flushTools(true);
         items.push({
           kind: "artifact",
           id: item.id,
@@ -134,7 +137,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         });
         break;
       case "handoff":
-        flushTools();
+        flushTools(true);
         items.push({
           kind: "handoff",
           id: item.id,
@@ -144,7 +147,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         });
         break;
       case "approval":
-        flushTools();
+        flushTools(true);
         items.push({
           kind: "approval",
           id: item.id,
@@ -155,7 +158,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         });
         break;
       case "error":
-        flushTools();
+        flushTools(true);
         items.push({
           kind: "error",
           id: item.id,
@@ -172,26 +175,68 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
   return items.sort((a, b) => a.seq - b.seq);
 }
 
-/**
- * 工具名 → 口语化动词短语（台词里不出现工具名/JSON/状态机语言）。
- */
-const TOOL_VERB: Record<string, string> = {
-  shell_execute: "跑了条命令",
-  execute_command: "跑了条命令",
-  run_command: "跑了条命令",
-  fs_read: "看了眼文件",
-  read_file: "看了眼文件",
-  fs_write: "改了改文件",
-  write_file: "改了改文件",
-  fs_edit: "改了改文件",
-  edit_file: "改了改文件",
-  create_file: "写了个文件",
-  mkdir: "建了目录",
-  list_dir: "翻了翻目录",
-  search: "查了些资料",
-  web_search: "查了些资料",
-  grep: "搜了搜内容",
+type ToolNarrative = {
+  intent: string;
+  done: string;
+  action: string;
 };
+
+/** 工具名 → 群聊里的动作意图。只展示“准备做什么”，不展示模型私有推理链。 */
+const TOOL_NARRATIVE: Record<string, ToolNarrative> = {
+  shell_execute: { intent: "我先跑一下命令，确认现场情况", done: "命令跑完了，我看下结果", action: "跑命令" },
+  execute_command: { intent: "我先跑一下命令，确认现场情况", done: "命令跑完了，我看下结果", action: "跑命令" },
+  run_command: { intent: "我先跑一下命令，确认现场情况", done: "命令跑完了，我看下结果", action: "跑命令" },
+  fs_read: { intent: "我先翻一下相关文件，确认上下文", done: "文件看完了，关键点我记下了", action: "看文件" },
+  read_file: { intent: "我先翻一下相关文件，确认上下文", done: "文件看完了，关键点我记下了", action: "看文件" },
+  fs_write: { intent: "我准备直接改一下相关文件", done: "文件已经改过了", action: "改文件" },
+  write_file: { intent: "我准备直接改一下相关文件", done: "文件已经改过了", action: "改文件" },
+  fs_edit: { intent: "我准备直接改一下相关文件", done: "文件已经改过了", action: "改文件" },
+  edit_file: { intent: "我准备直接改一下相关文件", done: "文件已经改过了", action: "改文件" },
+  create_file: { intent: "我准备补一个新文件", done: "新文件已经放好了", action: "写文件" },
+  mkdir: { intent: "我先把目录位置整理出来", done: "目录已经准备好了", action: "建目录" },
+  fs_list: { intent: "我先看看目录结构", done: "目录结构确认了", action: "看目录" },
+  fs_tree: { intent: "我先看看目录结构", done: "目录结构确认了", action: "看目录" },
+  list_dir: { intent: "我先看看目录结构", done: "目录结构确认了", action: "看目录" },
+  search: { intent: "我先搜一下线索", done: "线索搜完了，我来整理", action: "搜线索" },
+  grep: { intent: "我先在代码里搜一下线索", done: "代码线索找到了", action: "搜代码" },
+  web_search: { intent: "我先查一下资料", done: "资料查到了，我来筛一下", action: "查资料" },
+  web_fetch: { intent: "我先打开资料看一眼", done: "资料读完了，我来提炼", action: "读资料" },
+};
+
+const FALLBACK_NARRATIVE: ToolNarrative = {
+  intent: "我先动手查一下，马上回来",
+  done: "这一步处理完了",
+  action: "处理一步",
+};
+
+function narrativeFor(toolName: string): ToolNarrative {
+  return TOOL_NARRATIVE[toolName.toLowerCase()] || FALLBACK_NARRATIVE;
+}
+
+function toolNameOf(raw: string): string {
+  const text = raw.trim();
+  if (!text) return "";
+  if (TOOL_NARRATIVE[text.toLowerCase()]) return text.toLowerCase();
+  if (!text.startsWith("{")) return "";
+  try {
+    const obj = JSON.parse(text) as Record<string, unknown>;
+    return String(obj.toolName || obj.name || "").toLowerCase();
+  } catch {
+    return ((text.match(/"toolName"\s*:\s*"([^"]+)"/) || [])[1] || "").toLowerCase();
+  }
+}
+
+function summaryOf(raw: string): string {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (!text || TOOL_NARRATIVE[text.toLowerCase()]) return "";
+  if (!text.startsWith("{")) return truncateText(text, 24);
+  try {
+    const obj = JSON.parse(text) as Record<string, unknown>;
+    return truncateText(String(obj.summary || obj.description || "").replace(/\s+/g, " ").trim(), 24);
+  } catch {
+    return truncateText(((text.match(/"summary"\s*:\s*"([^"]*)"/) || [])[1] || "").replace(/\s+/g, " ").trim(), 24);
+  }
+}
 
 /**
  * callSummary → 一句干净的人话。
@@ -201,27 +246,41 @@ const TOOL_VERB: Record<string, string> = {
 function gistOfSummary(raw: string): string {
   const text = raw.replace(/\s+/g, " ").trim();
   if (!text) return "";
-  if (text.startsWith("{")) {
-    let toolName = "";
-    let summary = "";
-    try {
-      const obj = JSON.parse(text) as Record<string, unknown>;
-      toolName = String(obj.toolName || obj.name || "");
-      summary = String(obj.summary || obj.description || "");
-    } catch {
-      // 可能是被截断的 JSON：退化为正则抽取
-      toolName = (text.match(/"toolName"\s*:\s*"([^"]+)"/) || [])[1] || "";
-      summary = (text.match(/"summary"\s*:\s*"([^"]*)"/) || [])[1] || "";
-    }
-    const verb = TOOL_VERB[toolName];
-    if (verb) {
-      const gist = summary.replace(/\s+/g, " ").trim();
-      return gist ? `${verb}（${truncateText(gist, 16)}）` : verb;
-    }
-    if (summary) return truncateText(summary.replace(/\s+/g, " ").trim(), 18);
-    return "";
+  const narrative = narrativeFor(toolNameOf(text));
+  const summary = summaryOf(text);
+  return summary ? `${narrative.action}：${summary}` : narrative.action;
+}
+
+export type ToolSegmentVoice = {
+  stage: "thinking" | "acting" | "done";
+  label: string;
+  line: string;
+  action: string;
+  detail: string;
+};
+
+export function toolSegmentVoice(item: Extract<ChatItem, { kind: "tools" }>): ToolSegmentVoice {
+  const first = item.tools.find((tool) => tool.callSummary) || item.tools[0];
+  const toolName = toolNameOf(first?.callSummary || first?.toolName || "") || first?.toolName || "";
+  const narrative = narrativeFor(toolName);
+  const detail = summaryOf(first?.callSummary || "");
+  const multiple = item.tools.length > 1;
+  if (item.running) {
+    return {
+      stage: "acting",
+      label: "正在动手",
+      line: detail ? `${narrative.intent}：${detail}` : narrative.intent,
+      action: multiple ? `${narrative.action}等 ${item.tools.length} 步` : narrative.action,
+      detail,
+    };
   }
-  return truncateText(text, 18);
+  return {
+    stage: "done",
+    label: "已处理",
+    line: multiple ? `这几步我处理完了，先把结果接上。` : narrative.done,
+    action: multiple ? `${narrative.action}等 ${item.tools.length} 步` : narrative.action,
+    detail,
+  };
 }
 
 /**
@@ -230,14 +289,7 @@ function gistOfSummary(raw: string): string {
  * 提炼自首个工具的 callSummary / toolName，不暴露 JSON、工具名与任务状态机语言。
  */
 export function toolSegmentLine(item: Extract<ChatItem, { kind: "tools" }>): string {
-  const gist = gistOfSummary(
-    (item.tools.find((t) => t.callSummary)?.callSummary) || item.tools[0]?.toolName || "",
-  );
-  if (item.running) return gist ? `我去${gist}，稍等` : "我去弄一下，稍等";
-  if (item.tools.length > 1) {
-    return gist ? `刚忙完 ${item.tools.length} 件事，${gist}…` : `刚忙完 ${item.tools.length} 件事`;
-  }
-  return gist || "刚忙完了手头的活";
+  return toolSegmentVoice(item).line;
 }
 
 /** 展开明细里单条工具 → 干净短句（不露原始 JSON） */
