@@ -12,7 +12,9 @@ import {
 } from "../lib/digital-human-client";
 import { buildRoomFeed, foldToolRuns } from "../lib/room-feed";
 import type { FeedRow, HumanRef, ToolRun } from "../lib/room-feed";
-import { ArrowDownIcon, ChevronIcon, StopIcon } from "./icons";
+import { EChartBlock } from "./EChartBlock";
+import { InlineFileCards } from "./FilePreview";
+import { ArrowDownIcon, ChevronIcon } from "./icons";
 import { AttributionAvatar } from "./AttributionAvatar";
 
 type Props = {
@@ -25,13 +27,21 @@ type Props = {
   /** 运行态变化：有活跃任务时为 true（用于禁用输入框、显示总停止） */
   onRunningChange?: (running: boolean) => void;
   /** 点击产物卡：右侧滑出预览 */
-  onOpenArtifact?: (artifact: { title: string; producerName?: string }) => void;
+  onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
+  /** 点击正文里的文件路径：右侧文件预览 */
+  onOpenFile?: (path: string) => void;
   /** 右侧群聊点击摘要：中间区域滚动定位到对应 seq 的条目 */
   focusRequest?: { seq: number; nonce: number } | null;
 };
 
-function truncate(text: string, max: number): string {
-  return text.length > max ? text.slice(0, max) + "…" : text;
+function extractText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    return extractText((node as { props?: { children?: unknown } }).props?.children);
+  }
+  return "";
 }
 
 /** HumanRef（feed 轻量引用）→ 目录档案（用于点击查看角色信息） */
@@ -229,7 +239,7 @@ function ToolGroupBlock({ group, focusSeq, forceOpen, humans }: {
 
 // ── 主视图 ───────────────────────────────────────
 
-const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, focusRequest }: Props) {
+const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, focusRequest }: Props) {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [room, setRoom] = useState<ServerRoomView | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -288,13 +298,17 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
 
   const feed = useMemo(() => buildRoomFeed(events, humans), [events, humans]);
 
-  // 兜底收口：服务端任务已全部结束但仍有工具卡停留在 running（结果事件丢失）时，
-  // 强制标记为完成，避免"正在执行 N 步"永久转圈。
+  // 兜底收口：服务端任务已全部结束但仍有消息/工具卡停留在 streaming/running（结束事件丢失）时，
+  // 强制标记为完成，避免头像光圈或"正在执行 N 步"永久闪烁。
   const hasActiveTask = (room?.tasks || []).some((t) => ["READY", "ASSIGNED", "RUNNING"].includes(t.state));
   const settledFeed = useMemo(() => {
     if (hasActiveTask || !room) return feed;
     let touched = false;
     const next = feed.map((item) => {
+      if (item.kind === "human-message" && item.streaming) {
+        touched = true;
+        return { ...item, streaming: false };
+      }
       if (item.kind === "tool" && item.status === "running") {
         touched = true;
         return { ...item, status: "success" as const, resultSummary: item.resultSummary || "（无输出）" };
@@ -336,19 +350,11 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     [room],
   );
 
-  // 运行态上抛：输入框据此禁用 + 显示总停止
+  // 运行态上抛：输入框据此禁用，避免协作任务并发提交
   const running = activeTasks.length > 0;
   useEffect(() => {
     onRunningChange?.(running);
   }, [onRunningChange, running]);
-
-  const stopAll = () => {
-    for (const task of activeTasks) {
-      void cancelRoomTask(port, roomId, task.taskId).catch(() => undefined);
-    }
-  };
-
-  const taskHumans = useMemo(() => new Map(humans.map((h) => [h.id, h])), [humans]);
 
   const scrollToBottom = () => {
     followOutputRef.current = true;
@@ -359,8 +365,21 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     return <div className="room-error">协作事件加载失败：{loadError}</div>;
   }
 
+  const markdownComponents = useMemo(() => ({
+    pre: ({ children }: { children?: ReactNode }) => {
+      const child = Array.isArray(children) ? children[0] : children;
+      const className = (child as { props?: { className?: string } })?.props?.className || "";
+      const match = /language-(\w+)/.exec(className);
+      if (match && ["echart", "echarts"].includes(match[1])) {
+        const code = extractText(child).trim();
+        if (code.startsWith("{")) return <EChartBlock code={code} />;
+      }
+      return <pre>{children}</pre>;
+    },
+  }), []);
+
   const renderMarkdown = (value: string): ReactNode => (
-    <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{value}</ReactMarkdown>
   );
 
   return (
@@ -434,6 +453,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
                 <div className="message-body">
                   <div className="message-content">
                     {renderMarkdown(item.content || "…")}
+                    {!item.streaming ? <InlineFileCards content={item.content} onOpenFile={onOpenFile} /> : null}
                     {item.streaming ? <span className="room-cursor" aria-hidden>▍</span> : null}
                     <AttributionAvatar
                       name={item.human.name}
@@ -458,7 +478,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
                     type="button"
                     className="room-artifact clickable"
                     title="点击在右侧查看"
-                    onClick={() => onOpenArtifact?.({ title: item.title, producerName: item.human.name })}
+                    onClick={() => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name })}
                   >
                     <span className="room-artifact-icon">📄</span>
                     <div className="room-artifact-text">
@@ -551,43 +571,6 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
         <button className="jump-latest" type="button" onClick={scrollToBottom} aria-label="回到最新" title="回到最新">
           <ArrowDownIcon className="icon-18" />
         </button>
-      ) : null}
-      {/* 活跃任务：单胶囊固定显示在消息区底部（输入框上方，不随消息滚动） */}
-      {activeTasks.length > 0 ? (
-        <div className="room-status-bar">
-          <div className="room-status-capsule" role="status" aria-live="polite">
-          <span className="room-status-dots">
-            {activeTasks.slice(0, 3).map((task) => {
-              const human = taskHumans.get(task.assignedTo || "");
-              return (
-                <span
-                  key={task.taskId}
-                  className="room-status-avatar"
-                  style={{ background: task.assigneeColor || human?.themeColor || "#4a5568" }}
-                  title={`${task.assigneeName} · ${task.title}`}
-                >
-                  {task.assigneeAvatar || human?.avatarRef || "🤖"}
-                </span>
-              );
-            })}
-          </span>
-          <span className="room-status-text">
-            {activeTasks.length === 1
-              ? `${activeTasks[0].assigneeName} 执行中 · ${truncate(activeTasks[0].title, 20)}`
-              : `${activeTasks.length} 个任务进行中 · ${activeTasks.map((t) => t.assigneeName).filter(Boolean).join("、")}`}
-          </span>
-          <span className="room-status-pulse" aria-hidden="true" />
-          <button
-            type="button"
-            className="room-task-cancel stop-all"
-            title={activeTasks.length === 1 ? "停止任务" : `停止全部 ${activeTasks.length} 个任务`}
-            aria-label="停止全部任务"
-            onClick={stopAll}
-          >
-            <StopIcon className="icon-12" />
-          </button>
-          </div>
-        </div>
       ) : null}
     </div>
   );

@@ -26,7 +26,7 @@ export type ChatItem =
    */
   | { kind: "tools"; id: string; human: ChatHuman; tools: Array<{ id: string; toolName: string; callSummary: string; done: boolean; seq: number }>; running: boolean; seq: number }
   /** 交付：一句「整理好了」+ 可点的产物名 */
-  | { kind: "artifact"; id: string; human: ChatHuman; title: string; kindLabel: string; seq: number }
+  | { kind: "artifact"; id: string; artifactId: string; human: ChatHuman; title: string; kindLabel: string; seq: number }
   /** 交接：一句「我做完了，交给下一位」 */
   | { kind: "handoff"; id: string; text: string; fromName: string; seq: number }
   | { kind: "approval"; id: string; human: ChatHuman; summary: string; resolved?: string; seq: number }
@@ -126,6 +126,7 @@ export function buildChatFeed(feed: FeedItem[]): ChatItem[] {
         items.push({
           kind: "artifact",
           id: item.id,
+          artifactId: item.artifactId,
           human: item.human,
           title: item.title,
           kindLabel: item.kindLabel,

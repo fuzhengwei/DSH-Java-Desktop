@@ -144,7 +144,7 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
         ) : kind === "pdf" ? (
           <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
         ) : kind === "html" ? (
-          <iframe className="file-preview-frame" title={displayName} srcDoc={binaryToText(binary)} sandbox="" />
+          <iframe className="file-preview-frame" title={displayName} srcDoc={binaryToText(binary)} sandbox="allow-scripts" />
         ) : (
           <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
         )}

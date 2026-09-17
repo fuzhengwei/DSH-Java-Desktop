@@ -306,6 +306,7 @@ export default function ConversationView({
   const composingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [canJumpLatest, setCanJumpLatest] = useState(false);
+  const [roomStatusStartedAt, setRoomStatusStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   // 项目没有任何数字人时，历史消息里残留的归属信息也一并隐藏
   const showAttribution = digitalHumans.length > 0;
@@ -317,8 +318,24 @@ export default function ConversationView({
     setHistoryCursorState(value);
   };
   const draftBackupRef = useRef("");
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
+  const [localDraft, setLocalDraft] = useState(draft);
+  const draftRef = useRef(localDraft);
+  const lastCommittedDraftRef = useRef(draft);
+  draftRef.current = localDraft;
+
+  const commitDraft = (value: string) => {
+    draftRef.current = value;
+    lastCommittedDraftRef.current = value;
+    setLocalDraft(value);
+    onDraftChange(value);
+  };
+
+  useEffect(() => {
+    if (draft === lastCommittedDraftRef.current) return;
+    draftRef.current = draft;
+    lastCommittedDraftRef.current = draft;
+    setLocalDraft(draft);
+  }, [draft]);
   const sentHistoryRef = useRef(sentHistory);
   sentHistoryRef.current = sentHistory;
   const historyBrowsing = historyCursor < sentHistory.length;
@@ -349,6 +366,13 @@ export default function ConversationView({
     }
     return projectHumans;
   }, [digitalHumans, room, projectHumans]);
+
+  const roomHumans = useMemo(() => {
+    if (!room) return [];
+    return room.participants
+      .map((participant) => digitalHumans.find((human) => human.id === participant.digitalHumanId) || null)
+      .filter((human): human is DigitalHuman => Boolean(human));
+  }, [digitalHumans, room]);
 
   // 候选工程变化（切项目/增删工程）时刷新标签对应的工程信息，丢弃已不存在的
   useEffect(() => {
@@ -431,7 +455,7 @@ export default function ConversationView({
     ));
     setMentionTrigger(null);
     setMentionDismissed(false);
-    onDraftChange(next);
+    commitDraft(next);
     requestAnimationFrame(() => {
       const target = textareaRef.current;
       if (target) {
@@ -456,7 +480,7 @@ export default function ConversationView({
     }
     setMentionTrigger(null);
     setMentionDismissed(false);
-    onDraftChange(next);
+    commitDraft(next);
     requestAnimationFrame(() => {
       const target = textareaRef.current;
       if (target) {
@@ -481,7 +505,7 @@ export default function ConversationView({
   };
 
   const setDraftAndCaret = (value: string) => {
-    onDraftChange(value);
+    commitDraft(value);
     requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (textarea) {
@@ -581,16 +605,35 @@ export default function ConversationView({
   const runningLabel = runningTool
     ? (runningTool.toolName === "ask_user_question" ? "等待你的回答" : `工具 · ${runningTool.toolName || "Tool"}`)
     : isThinking ? "思考中" : "生成中";
+  const roomStatusHumans = roomStreaming
+    ? (humanMentions.length > 0 ? humanMentions : roomHumans.length > 0 ? roomHumans : projectHumans)
+    : [];
+  const roomStatusHumanLabel = roomStatusHumans.length === 0
+    ? "数字人协作中"
+    : roomStatusHumans.length === 1
+      ? `${roomStatusHumans[0].displayName} · 协作中`
+      : `${roomStatusHumans.slice(0, 2).map((human) => human.displayName).join("、")}${roomStatusHumans.length > 2 ? ` 等 ${roomStatusHumans.length} 位` : ""} · 协作中`;
 
   useEffect(() => {
-    if (!streaming || !streamStartedAt) return;
+    if (!streaming && !roomStreaming) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
-  }, [streamStartedAt, streaming]);
+  }, [roomStreaming, streaming]);
+
+  useEffect(() => {
+    if (roomStreaming) {
+      setRoomStatusStartedAt((current) => current || Date.now());
+      return;
+    }
+    setRoomStatusStartedAt(null);
+  }, [roomStreaming]);
 
   const elapsedSeconds = streaming && streamStartedAt
     ? Math.max(0, Math.floor((now - streamStartedAt) / 1_000))
+    : 0;
+  const roomElapsedSeconds = roomStreaming && roomStatusStartedAt
+    ? Math.max(0, Math.floor((now - roomStatusStartedAt) / 1_000))
     : 0;
   const usedTokens = messages.reduce((sum, message) => sum + messageTokenCount(message), 0);
   const contextLimit = 128_000;
@@ -645,18 +688,33 @@ export default function ConversationView({
 
   const renderComposer = (variant: "hero" | "chat") => (
     <>
-      {variant === "chat" && streaming ? (
+      {variant === "chat" && (streaming || roomStreaming) ? (
         <div className="conversation-status">
-          {activeHuman ? (
+          {streaming && activeHuman ? (
             <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
               {activeHuman.avatarRef}
+            </span>
+          ) : roomStreaming && roomStatusHumans.length > 0 ? (
+            <span
+              className="conversation-status-humans"
+              title={`参与数字人：${roomStatusHumans.map((human) => human.displayName).join("、")}`}
+            >
+              {roomStatusHumans.slice(0, 3).map((human) => (
+                <span key={human.id} className="conversation-status-human">
+                  <HumanAvatar human={human} size={16} />
+                </span>
+              ))}
+              {roomStatusHumans.length > 3 ? <span className="conversation-status-more">+{roomStatusHumans.length - 3}</span> : null}
             </span>
           ) : (
             <span className="conversation-status-dot" />
           )}
           <span className="conversation-status-label">
-            {activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel}
-            {elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : ""}
+            {streaming
+              ? (activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel)
+              : `${roomStatusHumanLabel} · 等待调度`}
+            {streaming && elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : ""}
+            {!streaming && roomElapsedSeconds > 0 ? ` · ${roomElapsedSeconds}s` : ""}
           </span>
         </div>
       ) : null}
@@ -763,25 +821,21 @@ export default function ConversationView({
           }}
         >
           <textarea
-            // key 随 placeholder 文案变化强制重建节点：WebKit 在 placeholder 由短变长时
-            // 不重绘完整文本（提示语被截断），重建节点可让新 placeholder 完整渲染。
-            // 历史浏览时文案也会变化，重建发生在 ↑ 键进入浏览的瞬间，可接受。
-            key={historyBrowsing ? "ph-history" : mentionCandidates.length > 0 ? "ph-mention" : "ph-plain"}
             ref={textareaRef}
-            value={draft}
+            value={localDraft}
             placeholder={historyBrowsing
               ? `历史消息 ${historyCursor + 1}/${sentHistory.length} · ↑↓ 切换 · Esc 返回草稿`
               : mentionCandidates.length > 0
                 ? "描述任务，输入 @ 可选择数字人或引用当前项目下的工程（↑ 键调出历史消息）"
                 : roomStreaming
-                  ? "数字人协作中… 可在下方状态胶囊停止全部任务"
+                  ? "数字人协作中… 请等待当前任务完成"
                   : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
             disabled={streaming || roomStreaming}
             onChange={(event) => {
               exitHistoryBrowsing();
               const value = event.target.value;
               const caret = event.target.selectionStart;
-              onDraftChange(value);
+              commitDraft(value);
               const trigger = detectMentionTrigger(value, caret);
               if (trigger) {
                 // Esc 关闭后同一触发词不再自动弹出；换一个触发词（@ 位置变化）重新弹出
@@ -944,22 +998,6 @@ export default function ConversationView({
                     );
                   })}
                 </select>
-                {/* 项目归属的数字人：在胶囊内叠加头像，超过 2 个用 +N 表示 */}
-                {activeProject && projectHumans.length > 0 ? (
-                  <span
-                    className="project-chip-humans"
-                    title={`该项目数字人：${projectHumans.map((human) => human.displayName).join("、")}`}
-                  >
-                    {projectHumans.slice(0, 2).map((human) => (
-                      <span key={human.id} className="project-chip-humans-item">
-                        <HumanAvatar human={human} size={16} />
-                      </span>
-                    ))}
-                    {projectHumans.length > 2 ? (
-                      <span className="project-chip-humans-more">+{projectHumans.length - 2}</span>
-                    ) : null}
-                  </span>
-                ) : null}
               </div>
             </div>
             <div className="branch-controls">
@@ -1068,21 +1106,21 @@ export default function ConversationView({
               <div className="context-ring-tooltip">{contextTooltip}</div>
             </div>
             <button
-              className={streaming ? "composer-action stop" : "composer-action send"}
+              className={(streaming || roomStreaming) ? "composer-action stop" : "composer-action send"}
               onClick={streaming ? onStopGeneration : sendFromComposer}
-              disabled={streaming}
+              disabled={streaming || roomStreaming}
               title={streaming
                 ? "停止生成"
                 : roomStreaming
-                  ? "数字人协作中（在下方胶囊停止）"
+                  ? "数字人协作中"
                   : !serviceReady
                     ? "智能体服务未就绪"
-                    : !draft.trim()
+                    : !localDraft.trim()
                       ? "请先输入消息"
                       : "发送"}
-              aria-label={streaming ? "停止生成" : "发送"}
+              aria-label={streaming ? "停止生成" : roomStreaming ? "数字人协作中" : "发送"}
             >
-              {streaming ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
+              {(streaming || roomStreaming) ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
             </button>
           </div>
         </div>
@@ -1104,13 +1142,13 @@ export default function ConversationView({
                 <p>{activeProject ? "当前项目已就绪" : "选择项目后开始一个新对话"}</p>
               </div>
               <div className="suggestion-grid">
-                <button onClick={() => onDraftChange("分析当前项目的代码结构，找出启动入口、核心模块和潜在风险。")}>
+                <button onClick={() => commitDraft("分析当前项目的代码结构，找出启动入口、核心模块和潜在风险。")}>
                   分析项目结构
                 </button>
-                <button onClick={() => onDraftChange("为当前项目设计一个可执行的测试计划，并优先列出高风险场景。")}>
+                <button onClick={() => commitDraft("为当前项目设计一个可执行的测试计划，并优先列出高风险场景。")}>
                   制定测试计划
                 </button>
-                <button onClick={() => onDraftChange("审查当前项目的构建配置，找出可以改进的地方。")}>
+                <button onClick={() => commitDraft("审查当前项目的构建配置，找出可以改进的地方。")}>
                   审查构建配置
                 </button>
               </div>

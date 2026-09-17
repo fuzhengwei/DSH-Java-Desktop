@@ -547,7 +547,7 @@ fn project_git_changes(path: String) -> Result<GitChangeSummary, String> {
 /// 读取本地文本文件（md/txt/csv 等），大小限制 8MB，避免 UI 卡死。
 #[tauri::command]
 fn read_local_text_file(path: String) -> Result<String, String> {
-    let file = PathBuf::from(&path);
+    let file = resolve_preview_file(&path);
     if !file.is_file() {
         return Err(format!("文件不存在：{path}"));
     }
@@ -562,7 +562,7 @@ fn read_local_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn read_local_file_base64(path: String) -> Result<String, String> {
     use std::io::Read;
-    let file = PathBuf::from(&path);
+    let file = resolve_preview_file(&path);
     if !file.is_file() {
         return Err(format!("文件不存在：{path}"));
     }
@@ -576,6 +576,35 @@ fn read_local_file_base64(path: String) -> Result<String, String> {
         .read_to_end(&mut buffer)
         .map_err(|error| format!("读取文件失败：{error}"))?;
     Ok(base64_encode(&buffer))
+}
+
+/// 预览路径兜底：Agent 有时会把用户主目录下的文件写成 `/Desktop/foo.html`。
+/// 不改变对外展示的原路径，只在本机读取时尝试映射到 `$HOME/Desktop/foo.html`。
+fn resolve_preview_file(path: &str) -> PathBuf {
+    let direct = if let Some(rest) = path.strip_prefix("~/") {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(rest))
+            .unwrap_or_else(|| PathBuf::from(path))
+    } else {
+        PathBuf::from(path)
+    };
+    if direct.is_file() {
+        return direct;
+    }
+
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return direct;
+    };
+    for prefix in ["/Desktop/", "/Downloads/", "/Documents/"] {
+        if let Some(rest) = path.strip_prefix(prefix) {
+            let mapped = home.join(prefix.trim_matches('/')).join(rest);
+            if mapped.is_file() {
+                return mapped;
+            }
+        }
+    }
+    direct
 }
 
 /// 轻量 Base64 编码（避免为单一命令引入依赖）

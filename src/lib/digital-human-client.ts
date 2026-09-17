@@ -420,6 +420,12 @@ export type ServerRoomView = {
     title: string;
     kind: string;
     version: number;
+    content?: string;
+    filePath?: string;
+    mimeType?: string;
+    previewMarkdown?: string;
+    summary?: string;
+    echartsOption?: unknown;
     producerName?: string;
     producerColor?: string;
     createdAt?: string;
@@ -473,6 +479,7 @@ export async function ensureServerRoom(
   port: number,
   sessionId: string,
   title: string,
+  workspaceId = "default",
 ): Promise<ServerRoomView> {
   const bound = boundRoomId(sessionId);
   if (bound) {
@@ -484,7 +491,7 @@ export async function ensureServerRoom(
   }
   const room = await collabRequest<ServerRoomView>(port, "/rooms", {
     method: "POST",
-    body: JSON.stringify({ workspaceId: "default", title: title || "协作对话", orchestrationMode: "MANUAL" }),
+    body: JSON.stringify({ workspaceId: workspaceId || "default", title: title || "协作对话", orchestrationMode: "MANUAL" }),
   });
   bindRoom(sessionId, room.id);
   return room;

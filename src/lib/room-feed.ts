@@ -16,7 +16,7 @@ export type FeedItem =
   | { kind: "plan"; id: string; steps: PlanStep[]; seq: number }
   | { kind: "human-message"; id: string; human: HumanRef; content: string; streaming: boolean; taskId?: string; seq: number; occurredAt?: string }
   | { kind: "tool"; id: string; human: HumanRef; toolName: string; callSummary?: string; callArguments?: Record<string, unknown>; callId?: string; resultSummary?: string; status?: string; taskId?: string; seq: number }
-  | { kind: "artifact"; id: string; human: HumanRef; title: string; kindLabel: string; seq: number }
+  | { kind: "artifact"; id: string; artifactId: string; human: HumanRef; title: string; kindLabel: string; seq: number }
   | { kind: "handoff"; id: string; fromName: string; seq: number }
   | { kind: "approval"; id: string; human: HumanRef; taskId: string; summary: string; resolved?: string; seq: number }
   | { kind: "sys"; id: string; text: string; seq: number }
@@ -185,6 +185,7 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
         items.push({
           kind: "artifact",
           id: event.id,
+          artifactId: String(event.payload.artifactId || event.id),
           human: humanRefOf(event, humans),
           title: String(event.payload.title || "交付物"),
           kindLabel: String(event.payload.kind || "markdown"),

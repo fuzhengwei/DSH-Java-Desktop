@@ -1499,6 +1499,31 @@ select:focus-visible {
   animation: status-pulse 1.35s ease-in-out infinite;
 }
 
+.conversation-status-humans {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-right: 1px;
+  line-height: 0;
+}
+
+.conversation-status-human {
+  display: inline-flex;
+  margin-left: -5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(255,255,255,.94);
+}
+
+.conversation-status-human:first-child { margin-left: 0; }
+
+.conversation-status-more {
+  margin-left: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text-subtle);
+}
+
 @keyframes status-pulse {
   0%, 100% { opacity: .28; transform: scale(.84); }
   50% { opacity: 1; transform: scale(1); }
@@ -1543,29 +1568,30 @@ select:focus-visible {
 .jump-latest {
   position: absolute;
   left: 50%;
-  bottom: 118px;
+  bottom: 86px;
   z-index: 2;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   transform: translateX(-50%);
-  border: 0;
+  border: 1px solid rgba(30, 30, 34, .12);
   border-radius: 50%;
-  background: rgba(255, 255, 255, .86);
-  box-shadow: 0 5px 18px rgba(20, 20, 20, .07);
-  color: var(--text-muted);
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 8px 26px rgba(20, 20, 20, .12), 0 1px 3px rgba(20, 20, 20, .08);
+  color: var(--text);
   backdrop-filter: blur(12px) saturate(1.05);
   transition: border-color .18s ease, color .18s ease, background .18s ease, box-shadow .18s ease, opacity .18s ease, transform .2s cubic-bezier(.2, .8, .3, 1);
   animation: jump-latest-in .22s cubic-bezier(.2, .8, .3, 1);
-  opacity: .92;
+  opacity: .98;
 }
 
 .jump-latest:hover {
-  background: rgba(255, 255, 255, .97);
-  box-shadow: 0 8px 22px rgba(20, 20, 20, .1);
+  background: #fff;
+  border-color: rgba(30, 30, 34, .18);
+  box-shadow: 0 10px 30px rgba(20, 20, 20, .16), 0 2px 5px rgba(20, 20, 20, .1);
   color: var(--text);
   opacity: 1;
   transform: translateX(-50%) translateY(1px);
@@ -1576,8 +1602,9 @@ select:focus-visible {
 }
 
 .jump-latest .icon-18 {
-  width: 17px;
-  height: 17px;
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
 }
 
 @keyframes jump-latest-in {
@@ -3193,9 +3220,8 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 18px;
-  width: 1180px;
-  max-width: calc(100% - 24px);
-  margin: 0 auto;
+  width: 100%;
+  min-width: 0;
   padding: 18px 28px 18px;
 }
 
@@ -3240,9 +3266,8 @@ select:focus-visible {
 }
 
 .settings-page-error {
-  width: 1180px;
-  max-width: calc(100% - 24px);
-  margin: -6px auto 14px;
+  width: calc(100% - 56px);
+  margin: -6px 28px 14px;
   padding: 10px 12px;
   border-radius: var(--radius);
   background: var(--danger-bg);
@@ -3254,10 +3279,8 @@ select:focus-visible {
   display: grid;
   grid-template-columns: 268px minmax(0, 1fr);
   gap: 22px;
-  width: 1180px;
-  max-width: calc(100% - 24px);
+  width: 100%;
   min-height: 0;
-  margin: 0 auto;
   padding: 0 28px 28px;
 }
 
@@ -3324,9 +3347,11 @@ select:focus-visible {
 
 .settings-content {
   display: grid;
-  align-content: start;
+  align-content: stretch;
   gap: 16px;
+  height: 100%;
   min-width: 0;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 3px;
@@ -3349,6 +3374,7 @@ select:focus-visible {
 }
 
 .settings-panel {
+  min-height: 0;
   padding: 24px;
   border: 0;
   border-radius: var(--radius-lg);
@@ -4425,6 +4451,31 @@ select:focus-visible {
 .dh-detail-title p { font-size: 13.5px; color: var(--text-muted); margin-top: 5px; line-height: 1.65; }
 .dh-detail-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .dh-detail-actions .ghost-action, .dh-detail-actions .danger-action { display: inline-flex; align-items: center; gap: 5px; }
+.dh-edit-modal {
+  width: min(640px, calc(100% - 48px));
+  max-height: min(760px, calc(100vh - 56px));
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.dh-edit-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 24px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.dh-edit-head p { margin-bottom: 0; }
+.dh-edit-body {
+  padding: 18px 24px 8px;
+  overflow-y: auto;
+}
+.dh-edit-error {
+  width: 100%;
+  margin: 0 0 12px;
+}
 .dh-kv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; max-width: 760px; }
 .dh-kv-card {
   background: var(--surface);

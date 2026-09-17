@@ -1,7 +1,29 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import type { DigitalHuman, DigitalHumanHealth, ParticipantPresence, WorkspaceEntry } from "../types";
-import { assignDigitalHumanToProject, deleteDigitalHuman, healthCheck } from "../lib/digital-human-client";
-import { PlusIcon, RefreshIcon, TrashIcon, XIcon } from "./icons";
+import {
+  assignDigitalHumanToProject,
+  deleteDigitalHuman,
+  healthCheck,
+  saveCredential,
+  updateDigitalHuman,
+  type DigitalHumanDraft,
+} from "../lib/digital-human-client";
+import { EditIcon, PlusIcon, RefreshIcon, TrashIcon, XIcon } from "./icons";
+
+const AVATAR_OPTIONS = ["🛠️", "📊", "✍️", "☕", "🔍", "🚀", "🧪", "📦", "🛡️", "📚", "🤖", "🌐"];
+const COLOR_OPTIONS = ["#4160f0", "#2f855a", "#b7791f", "#7c5cd6", "#c53030", "#0e7490", "#be5a0e", "#4a5568"];
+
+type EditFormState = {
+  displayName: string;
+  avatarRef: string;
+  themeColor: string;
+  purpose: string;
+  roleTagsText: string;
+  approvalPolicy: DigitalHuman["approvalPolicy"];
+  concurrencyLimit: number;
+  baseUrl: string;
+  token: string;
+};
 
 export const HEALTH_TEXT: Record<DigitalHumanHealth, string> = {
   online: "在线",
@@ -96,6 +118,10 @@ export default function DigitalHumanCatalog({
   const [checking, setChecking] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<EditFormState | null>(null);
+  const [editError, setEditError] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
   const selected = humans.find((item) => item.id === selectedId) || humans[0];
 
   useEffect(() => {
@@ -135,6 +161,76 @@ export default function DigitalHumanCatalog({
     assignDigitalHumanToProject(selected.id, projectPath);
     onChanged();
   }, [onChanged, selected]);
+
+  const startEdit = useCallback(() => {
+    if (!selected) return;
+    setActionError("");
+    setEditError("");
+    setConfirmingDelete(false);
+    setEditForm({
+      displayName: selected.displayName,
+      avatarRef: selected.avatarRef,
+      themeColor: selected.themeColor,
+      purpose: selected.purpose,
+      roleTagsText: selected.roleTags.join(", "),
+      approvalPolicy: selected.approvalPolicy,
+      concurrencyLimit: selected.concurrencyLimit,
+      baseUrl: selected.endpoint.baseUrl || "",
+      token: "",
+    });
+    setEditing(true);
+  }, [selected]);
+
+  const patchEditForm = useCallback((partial: Partial<EditFormState>) => {
+    setEditForm((current) => current ? { ...current, ...partial } : current);
+  }, []);
+
+  const saveEdit = useCallback(async () => {
+    if (!selected || !editForm || savingEdit) return;
+    const displayName = editForm.displayName.trim();
+    const purpose = editForm.purpose.trim();
+    if (!displayName || !purpose) {
+      setEditError("请填写名称和用途描述");
+      return;
+    }
+    const baseUrl = editForm.baseUrl.trim().replace(/\/+$/, "");
+    if (selected.endpoint.type === "remote-dsh" && !baseUrl) {
+      setEditError("请填写远端服务地址");
+      return;
+    }
+
+    setSavingEdit(true);
+    setEditError("");
+    try {
+      let credentialRef = selected.endpoint.credentialRef;
+      if (editForm.token.trim()) {
+        credentialRef = credentialRef || `cred_${Date.now().toString(36)}`;
+        await saveCredential(credentialRef, editForm.token.trim());
+      }
+      const patch: Partial<DigitalHumanDraft> = {
+        displayName,
+        avatarRef: editForm.avatarRef,
+        themeColor: editForm.themeColor,
+        purpose,
+        roleTags: editForm.roleTagsText.split(/[，,]/).map((item) => item.trim()).filter(Boolean),
+        approvalPolicy: editForm.approvalPolicy,
+        concurrencyLimit: Math.max(1, Math.min(8, Math.round(editForm.concurrencyLimit) || 1)),
+        endpoint: {
+          ...selected.endpoint,
+          baseUrl: selected.endpoint.type === "remote-dsh" ? baseUrl : selected.endpoint.baseUrl,
+          credentialRef,
+        },
+      };
+      await updateDigitalHuman(port, selected.id, patch);
+      setEditing(false);
+      setEditForm(null);
+      onChanged();
+    } catch (caught) {
+      setEditError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSavingEdit(false);
+    }
+  }, [editForm, onChanged, port, savingEdit, selected]);
 
   const selectedProjectName = selected?.projectPath
     ? projects.find((project) => project.path === selected.projectPath)?.name || selected.projectPath
@@ -202,6 +298,14 @@ export default function DigitalHumanCatalog({
                 <p>{selected.purpose}</p>
               </div>
               <div className="dh-detail-actions">
+                <button
+                  type="button"
+                  className="ghost-action compact"
+                  onClick={startEdit}
+                >
+                  <EditIcon className="icon-14" />
+                  编辑
+                </button>
                 <button
                   type="button"
                   className="ghost-action compact"
@@ -311,6 +415,173 @@ export default function DigitalHumanCatalog({
             <p>选择左侧数字人查看详情</p>
           </div>
         )}
+      </div>
+      {editing && selected && editForm ? (
+        <EditDigitalHumanModal
+          human={selected}
+          form={editForm}
+          error={editError}
+          saving={savingEdit}
+          onPatch={patchEditForm}
+          onClose={() => {
+            if (savingEdit) return;
+            setEditing(false);
+            setEditForm(null);
+            setEditError("");
+          }}
+          onSave={() => void saveEdit()}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function EditDigitalHumanModal({ human, form, error, saving, onPatch, onClose, onSave }: {
+  human: DigitalHuman;
+  form: EditFormState;
+  error: string;
+  saving: boolean;
+  onPatch: (partial: Partial<EditFormState>) => void;
+  onClose: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <div className="modal-overlay" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <div className="modal dh-edit-modal" role="dialog" aria-modal="true" aria-label="编辑数字人">
+        <div className="dh-edit-head">
+          <div>
+            <h3>编辑数字人</h3>
+            <p>修改名称、头像、用途、权限和连接信息。</p>
+          </div>
+          <CloseButton onClick={onClose} label="关闭编辑" />
+        </div>
+
+        <div className="dh-edit-body">
+          <label className="wizard-field">
+            <span className="wizard-label">名称</span>
+            <input
+              className="wizard-input"
+              value={form.displayName}
+              onChange={(event) => onPatch({ displayName: event.target.value })}
+            />
+          </label>
+
+          {human.endpoint.type === "remote-dsh" ? (
+            <>
+              <label className="wizard-field">
+                <span className="wizard-label">服务地址</span>
+                <input
+                  className="wizard-input"
+                  placeholder="https://host:port"
+                  value={form.baseUrl}
+                  onChange={(event) => onPatch({ baseUrl: event.target.value })}
+                />
+              </label>
+              <label className="wizard-field">
+                <span className="wizard-label">访问令牌<small>留空表示沿用当前凭据</small></span>
+                <input
+                  className="wizard-input"
+                  type="password"
+                  placeholder={human.endpoint.credentialRef ? "已保存到安全存储" : "可选"}
+                  value={form.token}
+                  onChange={(event) => onPatch({ token: event.target.value })}
+                />
+              </label>
+            </>
+          ) : null}
+
+          <div className="wizard-field">
+            <span className="wizard-label">头像与主题色</span>
+            <div className="wizard-avatar-picker">
+              {AVATAR_OPTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  type="button"
+                  className={`wizard-avatar-opt${form.avatarRef === emoji ? " sel" : ""}`}
+                  style={{ background: form.themeColor }}
+                  onClick={() => onPatch({ avatarRef: emoji })}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <div className="wizard-color-row">
+              {COLOR_OPTIONS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={`主题色 ${color}`}
+                  className={`wizard-color-dot${form.themeColor === color ? " sel" : ""}`}
+                  style={{ background: color }}
+                  onClick={() => onPatch({ themeColor: color })}
+                />
+              ))}
+            </div>
+          </div>
+
+          <label className="wizard-field">
+            <span className="wizard-label">用途描述<small>用于展示和自动分工匹配</small></span>
+            <textarea
+              className="wizard-input"
+              rows={3}
+              value={form.purpose}
+              onChange={(event) => onPatch({ purpose: event.target.value })}
+            />
+          </label>
+
+          <label className="wizard-field">
+            <span className="wizard-label">能力标签<small>逗号分隔</small></span>
+            <input
+              className="wizard-input"
+              value={form.roleTagsText}
+              onChange={(event) => onPatch({ roleTagsText: event.target.value })}
+            />
+          </label>
+
+          <div className="wizard-field">
+            <span className="wizard-label">审批策略</span>
+            <div className="wizard-radio-group">
+              {([
+                ["WRITE_REQUIRES_APPROVAL", "读自动 / 写审批", "读取类操作自动执行，写入与命令需确认"],
+                ["AUTO_ALLOW", "全部自动", "仅用于完全可信的环境"],
+                ["ALWAYS_CONFIRM", "逐次确认", "每个工具调用都需人工确认"],
+              ] as const).map(([value, name, desc]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`wizard-radio${form.approvalPolicy === value ? " sel" : ""}`}
+                  onClick={() => onPatch({ approvalPolicy: value })}
+                >
+                  <b>{name}</b>
+                  <small>{desc}</small>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <label className="wizard-field">
+            <span className="wizard-label">并发上限<small>同时执行的任务数（1-8）</small></span>
+            <input
+              className="wizard-input wizard-input-narrow"
+              type="number"
+              min={1}
+              max={8}
+              value={form.concurrencyLimit}
+              onChange={(event) => onPatch({ concurrencyLimit: Number(event.target.value) || 1 })}
+            />
+          </label>
+          {error ? <div className="error-banner dh-edit-error">{error}</div> : null}
+        </div>
+
+        <div className="wizard-foot">
+          <button type="button" className="ghost-action compact" disabled={saving} onClick={onClose}>取消</button>
+          <span className="wizard-foot-spacer" />
+          <button type="button" className="primary-action compact" disabled={saving} onClick={onSave}>
+            {saving ? "保存中…" : "保存修改"}
+          </button>
+        </div>
       </div>
     </div>
   );

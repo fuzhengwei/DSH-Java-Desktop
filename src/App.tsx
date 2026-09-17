@@ -161,6 +161,19 @@ function readReasoningEffort(): ReasoningEffort {
   return value === "low" || value === "high" ? value : "medium";
 }
 
+function readActiveProjectPath(): string {
+  return localStorage.getItem("dsh-active-project-path") || "";
+}
+
+function normalizedProjectPath(value?: string): string {
+  return value && value !== "default" ? value : "";
+}
+
+function idsOfSession(session?: SessionSummary | null): string[] {
+  if (!session) return [];
+  return [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
+}
+
 function readSessionMessages(sessionId: string): ConversationMessage[] {
   try {
     const cache = JSON.parse(localStorage.getItem("dsh-session-messages") || "{}");
@@ -417,7 +430,7 @@ export default function App() {
   const [customSessionTitles, setCustomSessionTitles] = useState<Record<string, string>>(readCustomSessionTitles);
   const [hiddenSessionIds, setHiddenSessionIds] = useState<string[]>(readHiddenSessionIds);
   const [projects, setProjects] = useState<WorkspaceEntry[]>([]);
-  const [activeProjectPath, setActiveProjectPath] = useState("");
+  const [activeProjectPath, setActiveProjectPath] = useState(readActiveProjectPath);
   const [sessionProjectMap, setSessionProjectMap] = useState<Record<string, string>>({});
   const [localProjects, setLocalProjects] = useState<WorkspaceEntry[]>([]);
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
@@ -575,6 +588,7 @@ export default function App() {
       port,
       activeSessionId,
       sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles),
+      normalizedProjectPath(sessionProjectMapRef.current[activeSessionId]) || activeProjectPathRef.current || "default",
     ).then(async (ensured) => {
       if (cancelled) return;
       // 把消息里出现过的数字人也登记进房间参与者，右侧群聊/参与者列表才能完整
@@ -604,9 +618,8 @@ export default function App() {
     digitalHumans.filter((human) => human.projectPath && human.projectPath === activeProjectPath)
   ), [activeProjectPath, digitalHumans]);
 
-  // 协作运行态只在「当前会话真的挂着房间协作视图」时才可信：
-  // 视图未挂载（无 serverRoomId）时强制为 false，避免任何残留状态锁死输入框
-  const roomStreamingEffective = roomRunning && Boolean(serverRoomId && port);
+  // 协作运行态在发送瞬间先乐观置为 true；会话切换和房间视图回调会负责复位。
+  const roomStreamingEffective = roomRunning && Boolean(port);
 
   const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
     try {
@@ -694,8 +707,8 @@ export default function App() {
   });
 
   // 打开产物：新增/激活对应标签并展开面板
-  const openArtifactTab = useCallback((artifact: { title: string; producerName?: string }) => {
-    const id = artifact.title;
+  const openArtifactTab = useCallback((artifact: { artifactId?: string; title: string; producerName?: string }) => {
+    const id = artifact.artifactId || artifact.title;
     setArtifactTabs((current) => (
       current.some((tab) => tab.id === id) ? current : [...current, { id, label: artifact.title }]
     ));
@@ -746,7 +759,12 @@ export default function App() {
       try {
         // 确保房间存在（未绑定则以当前会话标题创建），再加入
         const title = sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles);
-        const ensured = await ensureServerRoom(port, activeSessionId, title);
+        const ensured = await ensureServerRoom(
+          port,
+          activeSessionId,
+          title,
+          normalizedProjectPath(sessionProjectMapRef.current[activeSessionId]) || activeProjectPathRef.current || "default",
+        );
         const snapshot = await joinServerRoom(port, ensured.id, human.id);
         setServerRoom(snapshot);
         setServerRoomId(snapshot.id);
@@ -791,12 +809,18 @@ export default function App() {
       // 2) 本地映射里已存在的归属则补齐到同会话的其他 ID（agentId <-> sessionId）。
       setSessionProjectMap((current) => {
         let changed = false;
-        const next = { ...current };
+        const next: Record<string, string> = {};
+        for (const [id, path] of Object.entries(current)) {
+          const normalized = normalizedProjectPath(path);
+          if (normalized) next[id] = normalized;
+          else changed = true;
+        }
         for (const session of loadedSessions) {
           const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
           // 本地映射优先（发送消息时已按会话归属写入并与服务端 cwd 对齐）；
           // 服务端 workspaceId 仅作兜底，用于补齐本地缺失的老会话归属
-          const projectPath = ids.map((id) => next[id]).find(Boolean) || session.workspaceId;
+          const projectPath = ids.map((id) => normalizedProjectPath(next[id])).find(Boolean)
+            || normalizedProjectPath(session.workspaceId);
           if (!projectPath) continue;
           for (const id of ids) {
             if (next[id] !== projectPath) {
@@ -809,11 +833,14 @@ export default function App() {
       });
     }
     if (projectsResult.status === "fulfilled") {
-      setProjects(projectsResult.value);
+      const latestProjects = projectsResult.value;
+      setProjects(latestProjects);
       // 不主动切换激活项目：空值代表「默认工作区」，应保留用户的显式选择，
       // 否则每次刷新都会把用户从默认工作区悄悄挪到第一个项目上，
       // 新建的对话也会因此挂错归属，看起来就像「新对话没反应」。
-      setActiveProjectPath((current) => current);
+      setActiveProjectPath((current) => (
+        current && !latestProjects.some((project) => project.path === current) ? "" : current
+      ));
     }
     const loadedModels = modelSettingsResult.status === "fulfilled" ? modelSettingsResult.value : [];
     const loadedRuntimeModels = runtimeModelsResult.status === "fulfilled" ? runtimeModelsResult.value : [];
@@ -833,7 +860,8 @@ export default function App() {
     const storedMap = JSON.parse(localStorage.getItem("dsh-session-project-map") || "{}") as Record<string, string>;
     const cleanedMap: Record<string, string> = {};
     for (const [id, path] of Object.entries(storedMap)) {
-      if (typeof path === "string" && path) cleanedMap[id] = path;
+      const normalized = normalizedProjectPath(path);
+      if (typeof path === "string" && normalized) cleanedMap[id] = normalized;
     }
     if (Object.keys(cleanedMap).length !== Object.keys(storedMap).length) {
       localStorage.setItem("dsh-session-project-map", JSON.stringify(cleanedMap));
@@ -863,6 +891,7 @@ export default function App() {
 
   useEffect(() => {
     activeProjectPathRef.current = activeProjectPath;
+    localStorage.setItem("dsh-active-project-path", activeProjectPath);
   }, [activeProjectPath]);
 
   useEffect(() => {
@@ -1018,10 +1047,10 @@ export default function App() {
     const session = combinedSessions.find((item) => (
       item.sessionId === activeSessionId || item.agentId === activeSessionId
     ));
-    const sessionId = session?.sessionId;
-    if (!sessionId) return;
+    const sessionId = session?.sessionId || activeSessionId;
     let cancelled = false;
-    const targetIds = new Set([sessionId, session.agentId].filter((value): value is string => Boolean(value)));
+    const targetIds = new Set(idsOfSession(session));
+    targetIds.add(activeSessionId);
     void listMessages(port, sessionId)
       .then((loaded) => {
         if (cancelled || !targetIds.has(activeSessionRef.current)) return;
@@ -1029,9 +1058,17 @@ export default function App() {
           .map(normalizeConversationMessage)
           .filter((message): message is ConversationMessage => Boolean(message));
         // 本地缓存里可能已有归属信息（流式时写入），服务端拉回时回填
-        const cached = sessionMessagesRef.current.get(activeSessionId) || readSessionMessages(activeSessionId);
+        const cached = [...targetIds]
+          .map((id) => sessionMessagesRef.current.get(id) || readSessionMessages(id))
+          .find((items) => items.length > 0) || [];
         const merged = mergeAttributionFromCache(normalized, cached);
-        if (merged.length > 0) setMessages(merged);
+        if (merged.length > 0) {
+          for (const id of targetIds) {
+            sessionMessagesRef.current.set(id, merged);
+            writeSessionMessages(id, merged);
+          }
+          setMessages(merged);
+        }
       })
       .catch(() => undefined);
     return () => {
@@ -1095,26 +1132,36 @@ export default function App() {
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (!port) return;
-    const cachedMessages = sessionMessagesRef.current.get(sessionId) || readSessionMessages(sessionId);
+    const session = combinedSessionsRef.current.find((item) => idsOfSession(item).includes(sessionId));
+    const aliases = idsOfSession(session);
+    if (!aliases.includes(sessionId)) aliases.push(sessionId);
+    const canonicalSessionId = session?.sessionId || sessionId;
+    const cachedMessages = aliases
+      .map((id) => sessionMessagesRef.current.get(id) || readSessionMessages(id))
+      .find((items) => items.length > 0) || [];
     const currentHumans = digitalHumansRef.current;
     // 先立即展示本地缓存，避免等待接口时先清空成首页、再二次闪回消息
-    sessionMessagesRef.current.set(sessionId, cachedMessages);
+    for (const id of aliases) sessionMessagesRef.current.set(id, cachedMessages);
+    activeSessionRef.current = sessionId;
     setMessages(stripDigitalHumanAttribution(cachedMessages, currentHumans));
     setActiveSessionId(sessionId);
     setActiveView("conversation");
     // 同步输入框项目选择器到该会话所属项目；无归属（默认工作区）时回退为空
-    const sessionProject = sessionProjectMapRef.current[sessionId];
-    setActiveProjectPath(sessionProject ?? "");
+    const sessionProject = aliases.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
+      || normalizedProjectPath(session?.workspaceId);
+    setActiveProjectPath(sessionProject || "");
 
     try {
-      const loadedMessages = (await listMessages(port, sessionId))
+      const loadedMessages = (await listMessages(port, canonicalSessionId))
         .map(normalizeConversationMessage)
         .filter((message): message is ConversationMessage => Boolean(message));
       // 服务端消息没有归属（本地投影），从本地缓存回填后展示
       const withAttribution = mergeAttributionFromCache(loadedMessages, cachedMessages);
       const nextMessages = stripDigitalHumanAttribution(withAttribution, currentHumans);
-      sessionMessagesRef.current.set(sessionId, nextMessages);
-      writeSessionMessages(sessionId, nextMessages);
+      for (const id of aliases) {
+        sessionMessagesRef.current.set(id, nextMessages);
+        writeSessionMessages(id, nextMessages);
+      }
       if (activeSessionRef.current === sessionId) {
         setMessages(nextMessages);
       }
@@ -1170,7 +1217,7 @@ export default function App() {
 
   // 当前会话归属项目下挂载的工程；归属缺失时退回激活项目
   const sessionSelectedProjects = useMemo(() => {
-    const sessionProjectPath = sessionProjectMap[activeSessionId] ?? activeProjectPath;
+    const sessionProjectPath = normalizedProjectPath(sessionProjectMap[activeSessionId]) || activeProjectPath;
     return localProjects.filter((project) => project.parentPath === sessionProjectPath);
   }, [activeProjectPath, activeSessionId, localProjects, sessionProjectMap]);
 
@@ -1205,10 +1252,11 @@ export default function App() {
       setError("请先配置并激活一个可用模型");
       return;
     }
+    const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(text))) || text;
 
     // ── 项目配置的数字人：会话归属项目下的显式归属数字人（发消息前就解析一次，
     // 同时决定「走房间编排（多人）还是直连（单人）」与直连时的归属）
-    const sessionProjectPathForHumans = sessionProjectMapRef.current[originSessionId] ?? activeProjectPathRef.current;
+    const sessionProjectPathForHumans = normalizedProjectPath(sessionProjectMapRef.current[originSessionId]) || activeProjectPathRef.current;
     const projectHumans = sessionProjectPathForHumans
       ? digitalHumansRef.current.filter((human) => human.projectPath === sessionProjectPathForHumans)
       : [];
@@ -1222,14 +1270,37 @@ export default function App() {
       || projectHumans.length > 1,
     );
     if (roomHasParticipants) {
+      const mentionedHumans = humanMentionsRef.current;
+      const createdAt = new Date().toISOString();
+      const userMessage: ConversationMessage = {
+        role: "user",
+        content: text,
+        createdAt,
+        mentions: draftMentions.length > 0 ? draftMentions : undefined,
+      };
       try {
         setError("");
+        setRoomRunning(true);
+        setDraft("");
+        setDraftMentions([]);
+        setHumanMentions([]);
+        setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPathForHumans }));
+        setDraftSessions((current) => {
+          const updated = current.map((session) => (
+            session.agentId === originSessionId || session.sessionId === originSessionId
+              ? { ...session, title: runTitle, updatedAt: createdAt }
+              : session
+          ));
+          return updated.some((session) => session.agentId === originSessionId || session.sessionId === originSessionId)
+            ? updated
+            : [{ agentId: originSessionId, title: runTitle, createdAt, updatedAt: createdAt }, ...updated];
+        });
+        updateMessagesForAliases([originSessionId], (current) => [...current, userMessage]);
         // 确保 @chips 与项目配置的数字人都已加入房间
-        const title = sessionTitle(activeSession || { agentId: originSessionId }, customSessionTitles);
-        const ensured = await ensureServerRoom(port, originSessionId, title);
-        setServerRoomId(ensured.id);
+        const title = sessionTitle(activeSession || { agentId: originSessionId, title: runTitle }, customSessionTitles);
+        const ensured = await ensureServerRoom(port, originSessionId, title === "新对话" ? runTitle : title, sessionProjectPathForHumans || "default");
         let snapshot = ensured;
-        const toJoin = [...humanMentionsRef.current, ...projectHumans];
+        const toJoin = [...mentionedHumans, ...projectHumans];
         for (const human of toJoin) {
           const alreadyIn = (snapshot.participants || []).some((p) => p.digitalHumanId === human.id);
           if (!alreadyIn) {
@@ -1241,10 +1312,9 @@ export default function App() {
           }
         }
         // @ 提及优先作为派发目标；否则项目多数字人由 Orchestrator 自行分工
-        const mentionIds = humanMentionsRef.current.map((human) => human.id);
+        const mentionIds = mentionedHumans.map((human) => human.id);
         await postRoomMessage(port, ensured.id, text, mentionIds, activeModel.channelCode, approvalMode);
-        setDraft("");
-        setHumanMentions([]);
+        setServerRoomId(ensured.id);
         // 协作开始：自动展开右侧协作面板
         setActiveDockTab("collab");
         setDockOpen(true);
@@ -1253,12 +1323,12 @@ export default function App() {
         setServerRoom(refreshed);
         setRoom(serverRoomToProjection(refreshed));
       } catch (caught) {
+        setRoomRunning(false);
         setError(caught instanceof Error ? caught.message : String(caught));
       }
       return;
     }
     const runAgentId = activeSession?.agentId || originSessionId;
-    const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(text))) || text;
 
     const controller = new AbortController();
     abortControllersRef.current.set(originSessionId, controller);
@@ -1280,7 +1350,7 @@ export default function App() {
     setApprovals([]);
     // 会话归属以其创建时记录的项目为准（sessionProjectMap），而不是发送瞬间的激活项目，
     // 否则切过项目下拉框后发消息会把服务端 workspaceId 写错，loadWorkspaceData 回填时会话被挪走
-    const sessionProjectPath = sessionProjectMapRef.current[originSessionId] ?? activeProjectPath;
+    const sessionProjectPath = normalizedProjectPath(sessionProjectMapRef.current[originSessionId]) || activeProjectPath;
     setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPath }));
     const createdAt = new Date().toISOString();
 
@@ -1718,21 +1788,22 @@ export default function App() {
     setActiveView("settings");
   }, []);
 
-  const startConversation = useCallback((project?: WorkspaceEntry) => {
+  const startConversation = useCallback((project?: WorkspaceEntry, options?: { reuseEmptyDraft?: boolean; projectPath?: string }) => {
     // 顶部「新对话」不传 project 时，归属当前激活项目；项目行的 + 号则明确归属该项目
-    const projectPath = project ? project.path : activeProjectPathRef.current;
+    const projectPath = project ? project.path : options?.projectPath ?? activeProjectPathRef.current;
+    setActiveProjectPath(projectPath);
     // 仅复用「真正空白且可见」的新对话：没有 sessionId（从未持久化到服务端）、
     // 标题仍是占位文案（发过消息的会话 title 会被替换成消息摘要）、
     // 且确实在会话列表中展示（僵尸 draft——id 与服务端会话撞车被去重过滤、
     // 永远不可见——不能复用，否则点了就像没反应）。
-    const existingEmptyDraft = draftSessionsRef.current.find((session) => {
+    const existingEmptyDraft = options?.reuseEmptyDraft ? draftSessionsRef.current.find((session) => {
       const id = session.agentId || "";
       if (!id || session.sessionId) return false;
       const belongsTo = sessionProjectMapRef.current[id] ?? "";
       const untouched = (session.title || "新对话") === "新对话";
       const visible = combinedSessionsRef.current.some((item) => item.agentId === id);
       return belongsTo === projectPath && untouched && visible;
-    });
+    }) : undefined;
     if (existingEmptyDraft) {
       const existingId = existingEmptyDraft.agentId || "";
       setActiveSessionId(existingId);
@@ -1897,13 +1968,13 @@ export default function App() {
   const selectProject = useCallback((project: WorkspaceEntry) => {
     setActiveProjectPath(project.path);
     setActiveView("conversation");
-    startConversation(project);
+    startConversation(project, { reuseEmptyDraft: true });
   }, [startConversation]);
 
   const selectDefaultWorkspace = useCallback(() => {
     setActiveProjectPath("");
     setActiveView("conversation");
-    startConversation(undefined);
+    startConversation(undefined, { reuseEmptyDraft: true, projectPath: "" });
   }, [startConversation]);
 
   const modelChoices = useMemo(() => {
@@ -2169,6 +2240,7 @@ export default function App() {
                 }}
                 onRunningChange={setRoomRunning}
                 onOpenArtifact={openArtifactTab}
+                onOpenFile={openFileTab}
                 focusRequest={focusRequest}
               />
             ) : null}
@@ -2228,7 +2300,7 @@ export default function App() {
               />
             ) : activeDockTab.startsWith("artifact:") ? (
               <ArtifactPreview
-                artifact={{ title: activeDockTab.slice(9) }}
+                artifact={{ artifactId: activeDockTab.slice(9), title: artifactTabs.find((tab) => tab.id === activeDockTab.slice(9))?.label || activeDockTab.slice(9) }}
                 room={serverRoom}
                 onClose={() => closeArtifactTab(activeDockTab)}
               />

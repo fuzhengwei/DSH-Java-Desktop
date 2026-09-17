@@ -15,7 +15,7 @@ type Props = {
   /** 点击摘要条目：中间区域滚动定位到对应详情 */
   onFocusItem?: (seq: number) => void;
   /** 点击产物卡：右侧滑出预览 */
-  onOpenArtifact?: (artifact: { title: string; producerName?: string }) => void;
+  onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
 };
 
 /**
@@ -140,7 +140,7 @@ const GroupChatView = memo(function GroupChatView({ port, roomId, humans, onFocu
                     <button
                       type="button"
                       className="gc-bubble gc-artifact gc-clickable"
-                      onClick={() => onOpenArtifact?.({ title: item.title, producerName: item.human.name })}
+                      onClick={() => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name })}
                       title="查看交付物"
                     >
                       <span className="gc-artifact-line">整理好了，你看看 👇</span>

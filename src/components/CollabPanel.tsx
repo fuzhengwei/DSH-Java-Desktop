@@ -22,7 +22,7 @@ type CollabPanelProps = {
     roomId: string;
     serverRoom: ServerRoomView | null;
     onFocusItem?: (seq: number) => void;
-    onOpenArtifact?: (artifact: { title: string; producerName?: string }) => void;
+    onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
   };
 };
 
