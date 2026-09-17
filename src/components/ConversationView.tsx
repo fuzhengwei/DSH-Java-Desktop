@@ -1123,18 +1123,18 @@ export default function ConversationView({
             </div>
             <button
               className={(streaming || roomStreaming) ? "composer-action stop" : "composer-action send"}
-              onClick={streaming ? onStopGeneration : sendFromComposer}
-              disabled={streaming || roomStreaming}
+              onClick={(streaming || roomStreaming) ? onStopGeneration : sendFromComposer}
+              disabled={!streaming && !roomStreaming && (!serviceReady || !localDraft.trim())}
               title={streaming
                 ? "停止生成"
                 : roomStreaming
-                  ? "数字人协作中"
+                  ? "停止数字人协作"
                   : !serviceReady
                     ? "智能体服务未就绪"
                     : !localDraft.trim()
                       ? "请先输入消息"
                       : "发送"}
-              aria-label={streaming ? "停止生成" : roomStreaming ? "数字人协作中" : "发送"}
+              aria-label={streaming ? "停止生成" : roomStreaming ? "停止数字人协作" : "发送"}
             >
               {(streaming || roomStreaming) ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
             </button>

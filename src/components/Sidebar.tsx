@@ -514,7 +514,7 @@ export default function Sidebar({
         onClose={closeAssignPopover}
       />
       <div className="brand" title="DSH Java Desktop">
-        <img className="brand-mark" src="/dsh-icon.png" alt="DSH" />
+        <img className="brand-mark" src="/dsh-icon.png?v=20260917" alt="DSH" />
         <div>
           <div className="brand-title">
             DSH

@@ -28,7 +28,7 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": "all",
     "resources": {
       "../resources/agent/deepseek-harness-java-app.jar": "agent/deepseek-harness-java-app.jar"

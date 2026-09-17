@@ -35,6 +35,7 @@ import {
   assignDigitalHumanToProject,
   boundRoomId,
   createDigitalHuman,
+  cancelRoomTask,
   digitalHumanTokensFor,
   ensureRoomObjective,
   ensureServerRoom,
@@ -677,6 +678,24 @@ export default function App() {
 
   // 协作运行态在发送瞬间先乐观置为 true；会话切换和房间视图回调会负责复位。
   const roomStreamingEffective = roomRunning && Boolean(port);
+
+  const stopCurrentRun = useCallback(() => {
+    abortControllersRef.current.get(activeSessionId)?.abort();
+    if (!port) return;
+    const roomId = serverRoomId || boundRoomId(activeSessionId) || "";
+    if (!roomId) return;
+    void (async () => {
+      const snapshot = serverRoom?.id === roomId ? serverRoom : await fetchServerRoom(port, roomId);
+      const activeTaskIds = (snapshot.tasks || [])
+        .filter((task) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(task.state))
+        .map((task) => task.taskId);
+      if (activeTaskIds.length === 0) return;
+      await Promise.allSettled(activeTaskIds.map((taskId) => cancelRoomTask(port, roomId, taskId)));
+      const refreshed = await fetchServerRoom(port, roomId);
+      setServerRoom(refreshed);
+      setRoom(serverRoomToProjection(refreshed));
+    })().catch(() => undefined).finally(() => setRoomRunning(false));
+  }, [activeSessionId, port, serverRoom, serverRoomId]);
 
   const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
     try {
@@ -2417,7 +2436,7 @@ export default function App() {
             onMentionsChange={setDraftMentions}
             sentHistory={promptHistory}
             onHistoryEntry={appendPromptHistory}
-            onStopGeneration={() => abortControllersRef.current.get(activeSessionId)?.abort()}
+            onStopGeneration={stopCurrentRun}
             approvalMode={approvalMode}
             onApprovalModeChange={setApprovalMode}
             reasoningEffort={reasoningEffort}
