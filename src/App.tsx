@@ -4,7 +4,14 @@ import ConversationView from "./components/ConversationView";
 import Sidebar, { type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
 import InfoRail from "./components/InfoRail";
-import { SlidersIcon } from "./components/icons";
+import DigitalHumanCatalog from "./components/DigitalHumanCatalog";
+import AddDigitalHumanWizard from "./components/AddDigitalHumanWizard";
+import CollabPanel from "./components/CollabPanel";
+import { ParticipantPicker } from "./components/ParticipantPicker";
+import RoomCollaborationView from "./components/RoomCollaborationView";
+import ArtifactPreview from "./components/ArtifactPreview";
+import RightDock, { DockTabBar } from "./components/RightDock";
+import { FilePreview } from "./components/FilePreview";
 import { truncateSessionTitle } from "./lib/text";
 import {
   activateModelSetting,
@@ -24,14 +31,32 @@ import {
   streamAgentMessage,
   waitForService,
 } from "./lib/agent-client";
+import {
+  assignDigitalHumanToProject,
+  boundRoomId,
+  createDigitalHuman,
+  ensureRoomObjective,
+  ensureServerRoom,
+  fetchServerRoom,
+  joinRoom,
+  joinServerRoom,
+  leaveServerRoom,
+  listDigitalHumans,
+  postRoomMessage,
+  readRoom,
+  updatePresence,
+  type ServerRoomView,
+} from "./lib/digital-human-client";
 import type {
   AgentServiceState,
   ApprovalMode,
   AvailableModel,
   ConversationMessage,
+  DigitalHuman,
   ModelDraft,
   ModelSetting,
   ReasoningEffort,
+  RoomProjection,
   SessionSummary,
   WorkspaceEntry,
   RuntimeApproval,
@@ -144,6 +169,73 @@ function readSessionMessages(sessionId: string): ConversationMessage[] {
   } catch {
     return [];
   }
+}
+
+/** 项目当前没有可用数字人时，历史消息里的归属信息也不再展示 */
+function stripDigitalHumanAttribution(
+  list: ConversationMessage[],
+  humans: DigitalHuman[],
+): ConversationMessage[] {
+  if (humans.length > 0 || !list.some((message) => message.attribution)) return list;
+  return list.map((message) => (
+    message.attribution ? { ...message, attribution: undefined } : message
+  ));
+}
+
+/**
+ * 归属回填：服务端持久化的消息没有数字人归属（本地投影），
+ * 从本地缓存里按内容把归属补回来——同一轮对话 assistant 消息内容一致即视为同源，
+ * 其间的 tool 消息继承该轮归属。
+ */
+function mergeAttributionFromCache(
+  loaded: ConversationMessage[],
+  cached: ConversationMessage[],
+): ConversationMessage[] {
+  if (!loaded.some((message) => message.role === "assistant") || !cached.length) return loaded;
+  // 缓存中所有带归属的 assistant 内容 → 归属
+  const attributionByContent = new Map<string, NonNullable<ConversationMessage["attribution"]>>();
+  for (const message of cached) {
+    if (message.role === "assistant" && message.attribution && message.content.trim()) {
+      attributionByContent.set(message.content.trim(), message.attribution);
+    }
+  }
+  if (attributionByContent.size === 0) return loaded;
+
+  const result: ConversationMessage[] = [];
+  let currentAttribution: ConversationMessage["attribution"];
+  for (const message of loaded) {
+    if (message.attribution) {
+      // 已有归属（本地流式刚写进去的）：直接保留，并更新当前轮归属
+      currentAttribution = message.attribution;
+      result.push(message);
+      continue;
+    }
+    if (message.role === "assistant") {
+      const found = attributionByContent.get(message.content.trim());
+      if (found) {
+        currentAttribution = found;
+        result.push({ ...message, attribution: found });
+        continue;
+      }
+      // 无内容的 assistant 占位（工具间过渡）继承当前轮归属
+      if (!message.content.trim() && currentAttribution) {
+        result.push({ ...message, attribution: currentAttribution });
+        continue;
+      }
+      result.push(message);
+      continue;
+    }
+    if (message.role === "tool" && currentAttribution) {
+      result.push({ ...message, attribution: currentAttribution });
+      continue;
+    }
+    if (message.role === "user") {
+      // 新一轮用户消息：重置当前归属，避免跨轮误挂
+      currentAttribution = undefined;
+    }
+    result.push(message);
+  }
+  return result;
 }
 
 function writeSessionMessages(sessionId: string, messages: ConversationMessage[]) {
@@ -372,7 +464,34 @@ export default function App() {
   const [projectBranches, setProjectBranches] = useState<Record<string, string>>({});
   const [projectBranchOptions, setProjectBranchOptions] = useState<Record<string, string[]>>({});
   const [switchingBranchPath, setSwitchingBranchPath] = useState("");
-  const [railOpen, setRailOpen] = useState(false);
+  // ── 数字人协作 ──
+  const [digitalHumans, setDigitalHumans] = useState<DigitalHuman[]>([]);
+  const [digitalHumansLoaded, setDigitalHumansLoaded] = useState(false);
+  const [selectedHumanId, setSelectedHumanId] = useState("");
+  const [wizardOpen, setWizardOpen] = useState(false);
+  // 数字人向导的归属项目（从项目行「添加数字人」进入时带上）
+  const [wizardProjectPath, setWizardProjectPath] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [room, setRoom] = useState<RoomProjection | null>(null);
+  const [serverRoom, setServerRoom] = useState<ServerRoomView | null>(null);
+  const [serverRoomId, setServerRoomId] = useState("");
+  const [roomRunning, setRoomRunning] = useState(false);
+  // 右侧群聊点击摘要 → 中间区域滚动定位（nonce 保证同一条目可重复聚焦）
+  const [focusRequest, setFocusRequest] = useState<{ seq: number; nonce: number } | null>(null);
+  // 右侧标签栏面板：activeDockTab = "collab" | "info" | "artifact:<id>"
+  const [dockOpen, setDockOpen] = useState(false);
+  const [activeDockTab, setActiveDockTab] = useState<string>("collab");
+  /** 顶部快捷按钮：激活同一 Tab 时收起，否则切到对应 Tab 并展开 */
+  const toggleDockTab = useCallback((tab: "collab" | "info") => {
+    setActiveDockTab(tab);
+    setDockOpen((open) => !(open && activeDockTab === tab));
+  }, [activeDockTab]);
+  const [artifactTabs, setArtifactTabs] = useState<Array<{ id: string; label: string; kind?: "artifact" | "file" }>>([]);
+  const [humanMentions, setHumanMentions] = useState<DigitalHuman[]>([]);
+  const [activeHumanId, setActiveHumanId] = useState("");
+  const humanMentionsRef = useRef<DigitalHuman[]>([]);
+  const digitalHumansRef = useRef<DigitalHuman[]>([]);
+  const outgoingMessageRef = useRef("");
   const messageListRef = useRef<HTMLDivElement>(null);
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const sessionMessagesRef = useRef<Map<string, ConversationMessage[]>>(new Map());
@@ -432,6 +551,227 @@ export default function App() {
     return availableModels.find((model) => model.channelCode && model.modelCode) || availableModels[0];
   }, [availableModels, modelSettings]);
 
+  const activeHuman = useMemo(
+    () => digitalHumans.find((human) => human.id === activeHumanId) || null,
+    [activeHumanId, digitalHumans],
+  );
+
+  // 右侧协作面板可见性：房间有数字人参与者，或输入框已加入数字人 chips
+  const hasCollab = Boolean(
+    (room?.participants.length || 0) > 0 || humanMentions.length > 0,
+  );
+
+  // 普通对话里消息带数字人归属时，也自动建立服务端房间，让右侧能展示群聊；
+  // 但项目当前没有任何可用数字人时，忽略历史归属，不再带出协作入口。
+  const sessionHasAttributed = useMemo(
+    () => digitalHumansLoaded && digitalHumans.length > 0
+      && messages.some((message) => Boolean(message.attribution)),
+    [digitalHumans, digitalHumansLoaded, messages],
+  );
+  useEffect(() => {
+    if (!port || !sessionHasAttributed || serverRoomId || !activeSessionId) return;
+    let cancelled = false;
+    void ensureServerRoom(
+      port,
+      activeSessionId,
+      sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles),
+    ).then(async (ensured) => {
+      if (cancelled) return;
+      // 把消息里出现过的数字人也登记进房间参与者，右侧群聊/参与者列表才能完整
+      const attributionIds = new Set(
+        messages.map((message) => message.attribution?.digitalHumanId).filter((id): id is string => Boolean(id)),
+      );
+      let snapshot = ensured;
+      for (const id of attributionIds) {
+        if ((snapshot.participants || []).some((p) => p.digitalHumanId === id)) continue;
+        try {
+          snapshot = await joinServerRoom(port, ensured.id, id);
+        } catch {
+          // 单个加入失败不阻断房间建立
+        }
+      }
+      if (cancelled) return;
+      setServerRoomId(snapshot.id);
+      setServerRoom(snapshot);
+      setRoom(serverRoomToProjection(snapshot));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionHasAttributed, port, activeSessionId, serverRoomId]);
+
+  // 输入框胶囊上叠加的项目数字人（仅显式归属当前项目的，最多堆 3 个头像）
+  const activeProjectOwnedHumans = useMemo(() => (
+    digitalHumans.filter((human) => human.projectPath && human.projectPath === activeProjectPath)
+  ), [activeProjectPath, digitalHumans]);
+
+  // 协作运行态只在「当前会话真的挂着房间协作视图」时才可信：
+  // 视图未挂载（无 serverRoomId）时强制为 false，避免任何残留状态锁死输入框
+  const roomStreamingEffective = roomRunning && Boolean(serverRoomId && port);
+
+  const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
+    try {
+      const humans = await listDigitalHumans(servicePort);
+      setDigitalHumans(humans);
+      setDigitalHumansLoaded(true);
+      setSelectedHumanId((current) => current || humans[0]?.id || "");
+      // 首次启动且目录为空时，自动登记一个指向本地 Runtime 的默认数字人，
+      // 让「数字人」能力开箱可见，而非空目录
+      if (humans.length === 0 && servicePort) {
+        const seeded = await createDigitalHuman(servicePort, {
+          displayName: "本地助手",
+          avatarRef: "🤖",
+          purpose: "使用本机智能体服务的通用数字人，可承担开发、分析与文档任务",
+          roleTags: ["local", "general"],
+          themeColor: "#4160f0",
+          approvalPolicy: "WRITE_REQUIRES_APPROVAL",
+          concurrencyLimit: 1,
+          endpoint: { type: "local-dsh", protocolVersion: "dsh.v1", healthState: "online" },
+        });
+        setDigitalHumans([seeded]);
+        setSelectedHumanId(seeded.id);
+      }
+    } catch {
+      setDigitalHumansLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    humanMentionsRef.current = humanMentions;
+  }, [humanMentions]);
+
+  useEffect(() => {
+    digitalHumansRef.current = digitalHumans;
+  }, [digitalHumans]);
+
+  // 数字人目录：服务就绪后加载
+  useEffect(() => {
+    if (serviceReady && port) void refreshDigitalHumans(port);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serviceReady, port]);
+
+  // 房间：会话切换时解析服务端房间（已绑定则复用），并保留本地投影兜底
+  useEffect(() => {
+    setHumanMentions([]);
+    setServerRoom(null);
+    setServerRoomId("");
+    // 切会话必须复位协作运行态：旧会话的 RoomCollaborationView 卸载后不会再回调
+    // onRunningChange(false)，残留的 roomRunning 会把新会话的输入框永久禁用
+    setRoomRunning(false);
+    if (!port) {
+      setRoom(readRoom(activeSessionId));
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const bound = boundRoomId(activeSessionId);
+        if (bound) {
+          const snapshot = await fetchServerRoom(port, bound);
+          if (cancelled) return;
+          setServerRoom(snapshot);
+          setServerRoomId(snapshot.id);
+          setRoom(serverRoomToProjection(snapshot));
+        } else {
+          setRoom(readRoom(activeSessionId));
+        }
+      } catch {
+        if (!cancelled) setRoom(readRoom(activeSessionId));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeSessionId, port]);
+
+  /** 服务端房间快照 → 本地投影（成员栏/协作面板复用同一投影模型） */
+  const serverRoomToProjection = (snapshot: ServerRoomView): RoomProjection => ({
+    roomId: snapshot.id,
+    objective: snapshot.objective,
+    participants: (snapshot.participants || []).map((p) => ({
+      digitalHumanId: p.digitalHumanId,
+      presence: (p.presence || "idle") as RoomProjection["participants"][number]["presence"],
+      activeTaskLabel: p.activeTaskLabel,
+      joinedAt: "",
+    })),
+  });
+
+  // 打开产物：新增/激活对应标签并展开面板
+  const openArtifactTab = useCallback((artifact: { title: string; producerName?: string }) => {
+    const id = artifact.title;
+    setArtifactTabs((current) => (
+      current.some((tab) => tab.id === id) ? current : [...current, { id, label: artifact.title }]
+    ));
+    setActiveDockTab(`artifact:${id}`);
+    setDockOpen(true);
+  }, []);
+
+  /** 独立文件渲染：任意本地文件（md/word/excel/pdf/图片）在右侧面板打开 */
+  const openFileTab = useCallback((filePath: string) => {
+    const label = filePath.split("/").filter(Boolean).pop() || filePath;
+    setArtifactTabs((current) => (
+      current.some((tab) => tab.id === filePath) ? current : [...current, { id: filePath, label, kind: "file" }]
+    ));
+    setActiveDockTab(`file:${filePath}`);
+    setDockOpen(true);
+  }, []);
+
+  const closeArtifactTab = useCallback((id: string) => {
+    const [kind, ...rest] = id.split(":");
+    const targetId = rest.join(":");
+    const prefix = kind === "file" ? "file" : "artifact";
+    setArtifactTabs((current) => {
+      const next = current.filter((tab) => tab.id !== targetId || (tab.kind === "file") !== (prefix === "file"));
+      // 关掉的是激活标签时，回退到协作/信息
+      setActiveDockTab((active) => (
+        active === `${prefix}:${targetId}` ? (next.length > 0 ? `${next[next.length - 1].kind === "file" ? "file" : "artifact"}:${next[next.length - 1].id}` : "collab") : active
+      ));
+      return next;
+    });
+  }, []);
+
+  // Dock Esc 关闭（原 RightDock 内部逻辑，Tab 栏上移到顶栏后由 App 接管）
+  useEffect(() => {
+    if (!dockOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (activeDockTab.startsWith("artifact:") || activeDockTab.startsWith("file:")) closeArtifactTab(activeDockTab);
+      else setDockOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [dockOpen, activeDockTab, closeArtifactTab]);
+
+  const joinCurrentRoom = useCallback((human: DigitalHuman) => {
+    setPickerOpen(false);
+    if (!port) return;
+    void (async () => {
+      try {
+        // 确保房间存在（未绑定则以当前会话标题创建），再加入
+        const title = sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles);
+        const ensured = await ensureServerRoom(port, activeSessionId, title);
+        const snapshot = await joinServerRoom(port, ensured.id, human.id);
+        setServerRoom(snapshot);
+        setServerRoomId(snapshot.id);
+        setRoom(serverRoomToProjection(snapshot));
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSessionId, port]);
+
+  const leaveCurrentRoom = useCallback((digitalHumanId: string) => {
+    setHumanMentions((current) => current.filter((human) => human.id !== digitalHumanId));
+    if (!port || !serverRoomId) return;
+    void (async () => {
+      try {
+        const snapshot = await leaveServerRoom(port, serverRoomId, digitalHumanId);
+        setServerRoom(snapshot);
+        setRoom(serverRoomToProjection(snapshot));
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    })();
+  }, [port, serverRoomId]);
+
   const loadWorkspaceData = useCallback(async (servicePort: number, focusModelsIfEmpty = false) => {
     const [sessionsResult, projectsResult, modelSettingsResult, runtimeModelsResult, approvalsResult] =
       await Promise.allSettled([
@@ -470,7 +810,10 @@ export default function App() {
     }
     if (projectsResult.status === "fulfilled") {
       setProjects(projectsResult.value);
-      setActiveProjectPath((current) => current || projectsResult.value[0]?.path || "");
+      // 不主动切换激活项目：空值代表「默认工作区」，应保留用户的显式选择，
+      // 否则每次刷新都会把用户从默认工作区悄悄挪到第一个项目上，
+      // 新建的对话也会因此挂错归属，看起来就像「新对话没反应」。
+      setActiveProjectPath((current) => current);
     }
     const loadedModels = modelSettingsResult.status === "fulfilled" ? modelSettingsResult.value : [];
     const loadedRuntimeModels = runtimeModelsResult.status === "fulfilled" ? runtimeModelsResult.value : [];
@@ -497,7 +840,20 @@ export default function App() {
     }
     setSessionProjectMap(cleanedMap);
     setLocalProjects(JSON.parse(localStorage.getItem("dsh-local-projects") || "[]"));
-    setDraftSessions(readDraftSessions());
+    // 启动时如果 activeSessionId 不在草稿列表里（比如上次是点项目/会话后直接退出的，
+    // 或 localStorage 被清过但 active id 还留着），补登记一条归属默认工作区的草稿。
+    // 否则这个 id 在侧栏里不可见，「新对话」的复用判断也找不到它，点了就像没反应。
+    setDraftSessions((current) => {
+      if (current.some((session) => session.agentId === activeSessionId || session.sessionId === activeSessionId)) {
+        return current;
+      }
+      return [{
+        agentId: activeSessionId,
+        title: "新对话",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }, ...current];
+    });
   }, []);
 
   useEffect(() => {
@@ -672,7 +1028,10 @@ export default function App() {
         const normalized = loaded
           .map(normalizeConversationMessage)
           .filter((message): message is ConversationMessage => Boolean(message));
-        if (normalized.length > 0) setMessages(normalized);
+        // 本地缓存里可能已有归属信息（流式时写入），服务端拉回时回填
+        const cached = sessionMessagesRef.current.get(activeSessionId) || readSessionMessages(activeSessionId);
+        const merged = mergeAttributionFromCache(normalized, cached);
+        if (merged.length > 0) setMessages(merged);
       })
       .catch(() => undefined);
     return () => {
@@ -736,19 +1095,31 @@ export default function App() {
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (!port) return;
+    const cachedMessages = sessionMessagesRef.current.get(sessionId) || readSessionMessages(sessionId);
+    const currentHumans = digitalHumansRef.current;
+    // 先立即展示本地缓存，避免等待接口时先清空成首页、再二次闪回消息
+    sessionMessagesRef.current.set(sessionId, cachedMessages);
+    setMessages(stripDigitalHumanAttribution(cachedMessages, currentHumans));
+    setActiveSessionId(sessionId);
+    setActiveView("conversation");
+    // 同步输入框项目选择器到该会话所属项目；无归属（默认工作区）时回退为空
+    const sessionProject = sessionProjectMapRef.current[sessionId];
+    setActiveProjectPath(sessionProject ?? "");
+
     try {
       const loadedMessages = (await listMessages(port, sessionId))
         .map(normalizeConversationMessage)
         .filter((message): message is ConversationMessage => Boolean(message));
-      setMessages(loadedMessages);
-      setActiveSessionId(sessionId);
-      setActiveView("conversation");
+      // 服务端消息没有归属（本地投影），从本地缓存回填后展示
+      const withAttribution = mergeAttributionFromCache(loadedMessages, cachedMessages);
+      const nextMessages = stripDigitalHumanAttribution(withAttribution, currentHumans);
+      sessionMessagesRef.current.set(sessionId, nextMessages);
+      writeSessionMessages(sessionId, nextMessages);
+      if (activeSessionRef.current === sessionId) {
+        setMessages(nextMessages);
+      }
     } catch {
-      const cachedMessages = sessionMessagesRef.current.get(sessionId) || readSessionMessages(sessionId);
-      sessionMessagesRef.current.set(sessionId, cachedMessages);
-      setMessages(cachedMessages);
-      setActiveSessionId(sessionId);
-      setActiveView("conversation");
+      // 服务端不可用时保留本地缓存即可
     }
   }, [port]);
 
@@ -768,9 +1139,11 @@ export default function App() {
             .map(normalizeConversationMessage)
             .filter((message): message is ConversationMessage => Boolean(message));
           if (normalized.length === 0) return;
-          const currentCount = sessionMessagesRef.current.get(activeSessionId)?.length || 0;
-          if (normalized.length > currentCount) {
-            updateMessagesForAliases(aliases, () => normalized);
+          const cached = sessionMessagesRef.current.get(activeSessionId) || [];
+          const merged = mergeAttributionFromCache(normalized, cached);
+          const currentCount = cached.length;
+          if (merged.length > currentCount) {
+            updateMessagesForAliases(aliases, () => merged);
           }
         })
         .catch(() => undefined);
@@ -807,23 +1180,83 @@ export default function App() {
 
   const outgoingMessage = useMemo(() => {
     const cleanDraft = stripInvisibleChars(draft).trim();
-    if (contextProjects.length === 0) return cleanDraft;
+    if (contextProjects.length === 0) {
+      outgoingMessageRef.current = cleanDraft;
+      return cleanDraft;
+    }
     const context = contextProjects
       .map((project) => `- ${project.name}: ${project.path}`)
       .join("\n");
-    return `${cleanDraft}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+    const value = `${cleanDraft}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+    outgoingMessageRef.current = value;
+    return value;
   }, [contextProjects, draft]);
 
   const sendMessage = useCallback(async () => {
     const text = stripInvisibleChars(draft).trim();
     const originSessionId = activeSessionId;
-    if (!port || !text || sessionRunsRef.current[originSessionId]) return;
+    if (!text || sessionRunsRef.current[originSessionId]) return;
+    if (!port || !serviceReady) {
+      setError("智能体服务未就绪，请等待启动完成或查看服务日志");
+      return;
+    }
     if (!activeModel) {
       setActiveView("settings");
       setError("请先配置并激活一个可用模型");
       return;
     }
 
+    // ── 项目配置的数字人：会话归属项目下的显式归属数字人（发消息前就解析一次，
+    // 同时决定「走房间编排（多人）还是直连（单人）」与直连时的归属）
+    const sessionProjectPathForHumans = sessionProjectMapRef.current[originSessionId] ?? activeProjectPathRef.current;
+    const projectHumans = sessionProjectPathForHumans
+      ? digitalHumansRef.current.filter((human) => human.projectPath === sessionProjectPathForHumans)
+      : [];
+
+    // ── 房间协作消息：房间有参与者、输入框 @/卡片加入了数字人，
+    // 或项目配置了多个数字人（需要编排分工）时，交给服务端 Orchestrator
+    const roomHasParticipants = Boolean(
+      (serverRoom?.participants?.length || 0) > 0
+      || (room?.participants.length || 0) > 0
+      || humanMentionsRef.current.length > 0
+      || projectHumans.length > 1,
+    );
+    if (roomHasParticipants) {
+      try {
+        setError("");
+        // 确保 @chips 与项目配置的数字人都已加入房间
+        const title = sessionTitle(activeSession || { agentId: originSessionId }, customSessionTitles);
+        const ensured = await ensureServerRoom(port, originSessionId, title);
+        setServerRoomId(ensured.id);
+        let snapshot = ensured;
+        const toJoin = [...humanMentionsRef.current, ...projectHumans];
+        for (const human of toJoin) {
+          const alreadyIn = (snapshot.participants || []).some((p) => p.digitalHumanId === human.id);
+          if (!alreadyIn) {
+            try {
+              snapshot = await joinServerRoom(port, ensured.id, human.id);
+            } catch {
+              // 单个加入失败不阻断主流程
+            }
+          }
+        }
+        // @ 提及优先作为派发目标；否则项目多数字人由 Orchestrator 自行分工
+        const mentionIds = humanMentionsRef.current.map((human) => human.id);
+        await postRoomMessage(port, ensured.id, text, mentionIds, activeModel.channelCode, approvalMode);
+        setDraft("");
+        setHumanMentions([]);
+        // 协作开始：自动展开右侧协作面板
+        setActiveDockTab("collab");
+        setDockOpen(true);
+        // 房间快照刷新（事件流会持续推进，这里补一次即时同步）
+        const refreshed = await fetchServerRoom(port, ensured.id);
+        setServerRoom(refreshed);
+        setRoom(serverRoomToProjection(refreshed));
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+      return;
+    }
     const runAgentId = activeSession?.agentId || originSessionId;
     const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(text))) || text;
 
@@ -850,6 +1283,38 @@ export default function App() {
     const sessionProjectPath = sessionProjectMapRef.current[originSessionId] ?? activeProjectPath;
     setSessionProjectMap((current) => ({ ...current, [originSessionId]: sessionProjectPath }));
     const createdAt = new Date().toISOString();
+
+    // 数字人归属解析（直连路径，此时项目数字人至多 1 个，多人已在上方走房间编排）：
+    // 1. 输入框 @ 提及的数字人；
+    // 2. 房间唯一参与者；
+    // 3. 会话归属项目下配置的数字人（提示词带角色设定）
+    const roomNow = readRoom(originSessionId);
+    const mentionedHumans = humanMentionsRef.current;
+    let actingHuman: DigitalHuman | null = mentionedHumans[0] || null;
+    if (!actingHuman && roomNow?.participants.length === 1) {
+      actingHuman = digitalHumansRef.current.find((h) => h.id === roomNow.participants[0].digitalHumanId) || null;
+    }
+    if (!actingHuman && projectHumans.length > 0) {
+      actingHuman = projectHumans.find((human) => human.endpoint.healthState !== "offline") || projectHumans[0];
+    }
+    const attribution = actingHuman
+      ? {
+          digitalHumanId: actingHuman.id,
+          displayName: actingHuman.displayName,
+          avatarRef: actingHuman.avatarRef,
+          themeColor: actingHuman.themeColor,
+          taskLabel: truncateSessionTitle(text) || undefined,
+        }
+      : undefined;
+    setActiveHumanId(actingHuman?.id || "");
+    if (actingHuman) {
+      // 归属确定时同步写本地房间投影：右侧协作面板据此出现（群聊/参与者）
+      joinRoom(originSessionId, actingHuman);
+      ensureRoomObjective(originSessionId, truncateSessionTitle(text) || text);
+      updatePresence(originSessionId, actingHuman.id, "working", truncateSessionTitle(text) || undefined);
+      setRoom(readRoom(originSessionId));
+    }
+
     const userMessage: ConversationMessage = {
       role: "user",
       content: text,
@@ -857,15 +1322,23 @@ export default function App() {
       mentions: draftMentions.length > 0 ? draftMentions : undefined,
     };
     setDraftMentions([]);
-    const assistantMessage: ConversationMessage = { role: "assistant", content: "", reasoning: "", createdAt };
+    setHumanMentions([]);
+    const assistantMessage: ConversationMessage = {
+      role: "assistant", content: "", reasoning: "", createdAt, attribution,
+    };
     updateMessagesForAliases([originSessionId], (current) => [...current, userMessage, assistantMessage]);
+
+    // 有数字人时，提示词前加角色指令：让本地 Runtime 以该数字人身份与职责执行
+    const finalOutgoing = actingHuman
+      ? `[角色设定] 你是「${actingHuman.displayName}」，职责：${actingHuman.purpose}。请以该身份完成任务，回复时保持其专业视角。\n\n${outgoingMessageRef.current}`
+      : outgoingMessageRef.current;
 
     try {
       await streamAgentMessage(
         port,
         {
           agentId: runAgentId,
-          message: outgoingMessage,
+          message: finalOutgoing,
           channelCode: activeModel.channelCode,
           cwd: sessionProjectPath || undefined,
           approvalMode,
@@ -908,6 +1381,7 @@ export default function App() {
                 callId,
                 arguments: payloadArguments(payload),
                 status: typeof payload.status === "string" ? payload.status : "running",
+                attribution,
               };
               const last = next[next.length - 1];
               // 复用尾部已有的空 assistant 占位，避免每步都新加一个导致后续文字被多份累加/重复
@@ -948,12 +1422,17 @@ export default function App() {
                     + (message.result?.length || 0),
                   0,
                 );
-                if (normalized.length > current.length || richness(normalized) > richness(current)) {
-                  return normalized;
-                }
-                // 保留本地累计内容，但把仍在 running 的工具标记为完成，避免永久"执行中"
-                return current.map((message) => (
-                  message.role === "tool" && message.status === "running"
+                const adopt = normalized.length > current.length || richness(normalized) > richness(current);
+                const base = adopt ? normalized : current;
+                // 服务端不知道数字人归属（本地投影），无论采用哪份内容都要把归属补回去
+                return base.map((message) => {
+                  if (message.attribution || !attribution) return message;
+                  return (message.role === "assistant" || message.role === "tool")
+                    ? { ...message, attribution }
+                    : message;
+                }).map((message) => (
+                  // 采用本地累计内容时，把仍在 running 的工具标记为完成，避免永久"执行中"
+                  !adopt && message.role === "tool" && message.status === "running"
                     ? { ...message, status: "success" }
                     : message
                 ));
@@ -1029,6 +1508,12 @@ export default function App() {
       }
     } finally {
       window.clearTimeout(watchdog);
+      // 数字人任务结束：在场状态复位为空闲，归属头像收起
+      if (actingHuman) {
+        updatePresence(originSessionId, actingHuman.id, "idle");
+        setRoom(readRoom(originSessionId));
+        setActiveHumanId("");
+      }
       // 兜底：无论 done 载荷是否完整，结束时都不允许有工具停留在"执行中"
       updateMessagesForAliases(aliasesForSession(originSessionId), (current) => current.map((message) => (
         message.role === "tool" && message.status === "running"
@@ -1053,6 +1538,7 @@ export default function App() {
   }, [
     activeModel,
     contextProjects,
+    customSessionTitles,
     draftMentions,
     activeSession,
     activeProjectPath,
@@ -1065,6 +1551,9 @@ export default function App() {
     outgoingMessage,
     port,
     reasoningEffort,
+    room,
+    serverRoom,
+    serviceReady,
     updateMessagesForAliases,
   ]);
 
@@ -1519,6 +2008,24 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      {/* 顶部全局操作栏：跨侧栏与主区，右侧承载 协作/信息/产物 Tab */}
+      <header className="app-toolbar" data-tauri-drag-region>
+        <div className="app-toolbar-title" data-tauri-drag-region>DSH Java Desktop</div>
+        <div className="app-toolbar-actions">
+          <DockTabBar
+            activeTab={activeDockTab}
+            artifactTabs={artifactTabs}
+            hasCollab={hasCollab}
+            dockOpen={dockOpen}
+            onSelectTab={setActiveDockTab}
+            onToggle={toggleDockTab}
+            onCloseArtifact={closeArtifactTab}
+            onClose={() => setDockOpen(false)}
+          />
+        </div>
+      </header>
+
+      <div className="app-body">
       <Sidebar
         activeView={activeView}
         activeSessionId={activeSessionId}
@@ -1563,6 +2070,15 @@ export default function App() {
         }}
         onRemoveProject={(project) => void removeProject(project)}
         onRemoveLocalProject={removeLocalProject}
+        digitalHumans={digitalHumans}
+        onAssignDigitalHuman={(humanId, projectPath, checked) => {
+          void assignDigitalHumanToProject(humanId, checked ? projectPath : "");
+          void refreshDigitalHumans(port);
+        }}
+        onCreateDigitalHuman={(project) => {
+          setWizardProjectPath(project.path);
+          setWizardOpen(true);
+        }}
       />
 
       <main className="main-panel">
@@ -1573,37 +2089,24 @@ export default function App() {
               <h1>
                 {activeView === "conversation"
                   ? sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles)
-                  : "工作台"}
+                  : activeView === "digital-humans" ? "数字人" : "工作台"}
               </h1>
               <p>
                 {activeProject ? `${activeProject.name} · ` : ""}
                 {modelChoices.length > 0 ? `${modelChoices.length} 个模型可用` : "未配置模型"}
               </p>
             </div>
-            <div className="topbar-actions">
-              <button
-                type="button"
-                className={railOpen ? "topbar-icon-btn active" : "topbar-icon-btn"}
-                onClick={() => setRailOpen((open) => !open)}
-                title="信息栏"
-                aria-label="信息栏"
-              >
-                <SlidersIcon className="topbar-icon" />
-                {anyStreaming ? <span className="topbar-icon-dot" /> : null}
-              </button>
-            </div>
           </header>
         ) : (
-          <button
-            type="button"
-            className={railOpen ? "topbar-icon-btn rail-trigger active" : "topbar-icon-btn rail-trigger"}
-            onClick={() => setRailOpen((open) => !open)}
-            title="信息栏"
-            aria-label="信息栏"
-          >
-            <SlidersIcon className="topbar-icon" />
-            {anyStreaming ? <span className="topbar-icon-dot" /> : null}
-          </button>
+          <header className="topbar topbar-compact">
+            <div>
+              <h1>新对话</h1>
+              <p>
+                {activeProject ? `${activeProject.name} · ` : ""}
+                {modelChoices.length > 0 ? `${modelChoices.length} 个模型可用` : "未配置模型"}
+              </p>
+            </div>
+          </header>
         )}
 
         {error ? <div className="error-banner">{error}</div> : null}
@@ -1644,20 +2147,128 @@ export default function App() {
               !approval.sessionId || approval.sessionId === activeSessionId)}
             resolvingApprovalId={resolvingApprovalId}
             onResolveApproval={(approvalId, verdict) => void resolveApproval(approvalId, verdict)}
+            room={room}
+            // 传全量目录：消息归属头像的信息卡需要按 id 查完整档案，
+            // 只传项目子集会导致全局/其他项目数字人显示「角色详情不可用」
+            digitalHumans={digitalHumans}
+            projectHumans={activeProjectOwnedHumans}
+            onRemoveParticipant={leaveCurrentRoom}
+            humanMentions={humanMentions}
+            onHumanMentionsChange={setHumanMentions}
+            activeHuman={activeHuman}
+            roomContent={serverRoomId && port && (room?.participants.length || 0) > 0 ? (
+              <RoomCollaborationView
+                port={port}
+                roomId={serverRoomId}
+                humans={digitalHumans}
+                channelCode={activeModel?.channelCode}
+                approvalMode={approvalMode}
+                onRoomChange={(snapshot) => {
+                  setServerRoom(snapshot);
+                  setRoom(serverRoomToProjection(snapshot));
+                }}
+                onRunningChange={setRoomRunning}
+                onOpenArtifact={openArtifactTab}
+                focusRequest={focusRequest}
+              />
+            ) : null}
+            onOpenFile={openFileTab}
+            roomStreaming={roomStreamingEffective}
+          />
+        ) : activeView === "digital-humans" ? (
+          <DigitalHumanCatalog
+            humans={digitalHumans}
+            loading={!digitalHumansLoaded}
+            selectedId={selectedHumanId}
+            onSelect={setSelectedHumanId}
+            onAdd={() => {
+              setWizardProjectPath("");
+              setWizardOpen(true);
+            }}
+            onChanged={() => void refreshDigitalHumans(port)}
+            port={port}
+            projects={combinedProjects.filter((project) => !project.local || !project.parentPath)}
           />
         ) : null}
         </div>
 
-        <InfoRail
-          open={railOpen}
-          onClose={() => setRailOpen(false)}
-          servicePort={port}
-          serviceReady={serviceReady}
-          sessions={combinedSessions}
-          activeProject={activeProject}
-          activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
-        />
+        {/* 右侧面板：只承载内容，Tab 栏统一在顶部 app-toolbar */}
+        {dockOpen ? (
+          <RightDock>
+            {activeDockTab === "collab" ? (
+              <CollabPanel
+                room={room}
+                humans={digitalHumans}
+                objective={room?.objective || sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles)}
+                streaming={streaming}
+                approvals={approvals.filter((approval) =>
+                  !approval.sessionId || approval.sessionId === activeSessionId)}
+                resolvingApprovalId={resolvingApprovalId}
+                onResolveApproval={(approvalId, verdict) => void resolveApproval(approvalId, verdict)}
+                onInvite={() => setPickerOpen(true)}
+                onRemoveParticipant={leaveCurrentRoom}
+                onOpenCatalog={() => setActiveView("digital-humans")}
+                groupChat={serverRoomId && port ? {
+                  port,
+                  roomId: serverRoomId,
+                  serverRoom,
+                  onFocusItem: (seq) => setFocusRequest({ seq, nonce: Date.now() }),
+                  onOpenArtifact: openArtifactTab,
+                } : undefined}
+              />
+            ) : activeDockTab === "info" ? (
+              <InfoRail
+                open
+                onClose={() => setDockOpen(false)}
+                servicePort={port}
+                serviceReady={serviceReady}
+                sessions={combinedSessions}
+                activeProject={activeProject}
+                activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
+              />
+            ) : activeDockTab.startsWith("artifact:") ? (
+              <ArtifactPreview
+                artifact={{ title: activeDockTab.slice(9) }}
+                room={serverRoom}
+                onClose={() => closeArtifactTab(activeDockTab)}
+              />
+            ) : activeDockTab.startsWith("file:") ? (
+              <FilePreview
+                path={activeDockTab.slice(5)}
+                onClose={() => closeArtifactTab(activeDockTab)}
+              />
+            ) : null}
+          </RightDock>
+        ) : null}
       </main>
-    </div>
+      </div>{/* /.app-body */}
+
+      <AddDigitalHumanWizard
+        open={wizardOpen}
+        port={port}
+        projectPath={wizardProjectPath || undefined}
+        projectName={wizardProjectPath ? combinedProjects.find((project) => project.path === wizardProjectPath)?.name : undefined}
+        onClose={() => {
+          setWizardOpen(false);
+          setWizardProjectPath("");
+        }}
+        onCreated={(human) => {
+          setDigitalHumans((current) => [...current, human]);
+          setSelectedHumanId(human.id);
+          // 归属项目的创建完成后留在当前视图；全局创建回目录查看详情
+          if (!wizardProjectPath) setActiveView("digital-humans");
+        }}
+      />
+      <ParticipantPicker
+        open={pickerOpen}
+        humans={digitalHumans}
+        room={room}
+        onClose={() => setPickerOpen(false)}
+        onJoin={joinCurrentRoom}
+        onOpenCatalog={() => {
+          setPickerOpen(false);
+          setActiveView("digital-humans");
+        }}
+      />    </div>
   );
 }

@@ -8,8 +8,6 @@ import {
   FolderIcon,
   GitBranchIcon,
   RefreshIcon,
-  SlidersIcon,
-  XIcon,
 } from "./icons";
 
 type InfoRailProps = {
@@ -290,16 +288,6 @@ export default function InfoRail(props: InfoRailProps) {
 
   return (
       <aside className="info-rail">
-        <header className="info-rail-head">
-          <div className="info-rail-title">
-            <SlidersIcon className="info-rail-title-icon" />
-            <span>信息栏</span>
-          </div>
-          <button type="button" className="rail-close" onClick={onClose} aria-label="关闭">
-            <XIcon className="rail-close-icon" />
-          </button>
-        </header>
-
         <div className="rail-tabs">
           <button
             type="button"

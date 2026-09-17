@@ -51,6 +51,8 @@ export type ConversationMessage = {
   status?: string;
   durationMs?: number;
   createdAt?: string;
+  /** 数字人归属：assistant/tool 消息由哪个数字人产生（多数字人房间展示用） */
+  attribution?: MessageAttribution;
 };
 
 export type AgentActivity = {
@@ -154,4 +156,93 @@ export type ModelDraft = {
   apiKeyRef: string;
   protocol: string;
   enabled: boolean;
+};
+
+// ── 数字人协作 ───────────────────────────────
+
+/** 数字人健康/在场状态 */
+export type DigitalHumanHealth = "online" | "offline" | "unauthorized" | "degraded" | "unknown";
+
+/** 数字人在房间中的在场状态 */
+export type ParticipantPresence =
+  | "idle" | "thinking" | "working" | "waiting_input"
+  | "waiting_approval" | "blocked" | "done" | "error";
+
+export type DigitalHumanEndpointType = "local-dsh" | "remote-dsh" | "mcp-tool" | "a2a";
+
+export type DigitalHumanEndpoint = {
+  type: DigitalHumanEndpointType;
+  baseUrl?: string;
+  /** 凭据引用，指向 Tauri 安全存储，绝不存明文 */
+  credentialRef?: string;
+  protocolVersion?: string;
+  healthState?: DigitalHumanHealth;
+  lastCheckedAt?: string;
+  latencyMs?: number;
+};
+
+export type DigitalHuman = {
+  id: string;
+  displayName: string;
+  /** emoji 字符或本地资源引用 */
+  avatarRef: string;
+  /** 用途描述：给用户看，也给 Planner 当能力摘要 */
+  purpose: string;
+  roleTags: string[];
+  /** 头像环/任务条主题色 */
+  themeColor: string;
+  approvalPolicy: "AUTO_ALLOW" | "WRITE_REQUIRES_APPROVAL" | "ALWAYS_CONFIRM";
+  concurrencyLimit: number;
+  endpoint: DigitalHumanEndpoint;
+  createdAt: string;
+  /**
+   * 归属项目路径：有值表示该数字人挂在某个项目下（侧边栏项目行会展示其头像与数量）；
+   * 缺省为全局数字人，所有项目都可用。纯前端归属，服务端未知晓此字段也无影响。
+   */
+  projectPath?: string;
+};
+
+/** 远端 Agent Card 探测结果 */
+export type DiscoverResult = {
+  reachable: boolean;
+  protocolVersion?: string;
+  latencyMs?: number;
+  suggested?: {
+    displayName?: string;
+    avatarRef?: string;
+    purpose?: string;
+    roleTags?: string[];
+    approvalPolicy?: DigitalHuman["approvalPolicy"];
+    maxConcurrentTasks?: number;
+  };
+  error?: {
+    kind: "dns" | "tls" | "unauthorized" | "not-found" | "incompatible" | "network";
+    message: string;
+  };
+};
+
+/** 协作房间参与者（挂在会话上的轻量投影） */
+export type RoomParticipant = {
+  digitalHumanId: string;
+  presence: ParticipantPresence;
+  /** 当前任务简述，如 "#T-12 收集服务日志" */
+  activeTaskLabel?: string;
+  joinedAt: string;
+};
+
+/** 会话 ↔ 数字人房间的关联（本地投影，房间事实源后续在 JAR） */
+export type RoomProjection = {
+  /** 复用 sessionId 作为房间标识 */
+  roomId: string;
+  objective?: string;
+  participants: RoomParticipant[];
+};
+
+/** 消息归属：标注该条消息由哪个数字人产生 */
+export type MessageAttribution = {
+  digitalHumanId: string;
+  displayName: string;
+  avatarRef: string;
+  themeColor: string;
+  taskLabel?: string;
 };

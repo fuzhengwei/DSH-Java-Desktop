@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH 数字人协作 — 高保真原型</title>
+<style>
+:root{
+  color-scheme:light;
+  --background:#f6f6f7; --surface:#ffffff; --surface-2:#f2f2f4; --surface-3:#fafafa;
+  --sidebar:#fbfbfc; --brand:#4160f0;
+  --border:rgba(31,31,36,.05); --border-strong:rgba(31,31,36,.08);
+  --text:#171717; --text-muted:#606060; --text-subtle:#87878a;
+  --accent:#171717; --accent-text:#ffffff;
+  --success:#2f855a; --warning:#b7791f; --danger:#c53030; --danger-bg:#fff1f0;
+  --purple:#7c5cd6; --working:#2f6fdd;
+  --radius-sm:10px; --radius:15px; --radius-lg:21px;
+  --shadow-soft:0 1px 2px rgba(21,21,26,.02),0 12px 30px rgba(21,21,26,.04);
+  --shadow-card:0 1px 2px rgba(21,21,26,.02),0 24px 64px rgba(21,21,26,.05);
+  --focus-ring:0 0 0 3px rgba(64,96,255,.12);
+  --font:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);font-size:14px;line-height:1.6;color:var(--text);background:var(--background);-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit;border:0;background:transparent;cursor:pointer}
+input,textarea{font:inherit;color:inherit;border:0;background:transparent;outline:none;resize:none}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(31,31,36,.12);border-radius:8px}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ══════════ 框架 ══════════ */
+.app{display:grid;grid-template-columns:264px minmax(560px,1fr) 336px;height:100%}
+.app.no-panel{grid-template-columns:264px minmax(560px,1fr)}
+
+/* ══════════ 左侧导航 ══════════ */
+.sidebar{display:flex;flex-direction:column;gap:14px;padding:16px 13px 13px;border-right:1px solid var(--border);
+  background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(250,250,249,.98)),var(--sidebar)}
+.brand{display:flex;align-items:center;gap:10px;min-height:46px;padding:5px 10px;border-radius:var(--radius);
+  background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(250,250,249,.88));box-shadow:var(--shadow-soft)}
+.brand-logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#171717,#3a3a3f);display:grid;place-items:center;color:#fff;font-size:13px;font-weight:700}
+.brand-name{font-weight:600;font-size:14px}
+.brand-sub{font-size:11px;color:var(--text-subtle)}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:11px;color:var(--text-muted);font-size:13.5px;transition:background .15s,color .15s;text-align:left;width:100%}
+.nav-item:hover{background:rgba(31,31,36,.04);color:var(--text)}
+.nav-item.active{background:var(--surface);color:var(--text);font-weight:600;box-shadow:var(--shadow-soft)}
+.nav-item .badge{margin-left:auto;font-size:11px;background:var(--brand);color:#fff;border-radius:99px;padding:1px 7px;font-weight:600}
+.nav-item svg{width:16px;height:16px;flex-shrink:0}
+.side-section{font-size:11px;color:var(--text-subtle);font-weight:600;letter-spacing:.06em;padding:8px 11px 4px;text-transform:uppercase}
+.session-item{display:flex;flex-direction:column;gap:2px;padding:8px 11px;border-radius:11px;cursor:pointer;transition:background .15s}
+.session-item:hover{background:rgba(31,31,36,.04)}
+.session-item.active{background:var(--surface);box-shadow:var(--shadow-soft)}
+.session-title{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-meta{font-size:11.5px;color:var(--text-subtle);display:flex;align-items:center;gap:5px}
+.side-spacer{flex:1}
+.side-footer{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:11px;color:var(--text-muted);font-size:13px;cursor:pointer}
+.side-footer:hover{background:rgba(31,31,36,.04)}
+.dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.dot.on{background:var(--success)}
+.dot.off{background:#c9c9cd}
+
+/* ══════════ 头像体系 ══════════ */
+.avatar{position:relative;border-radius:50%;display:grid;place-items:center;flex-shrink:0;font-weight:600;color:#fff;user-select:none}
+.avatar.ring::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--ring,var(--brand));opacity:.9}
+.avatar .status-dot{position:absolute;right:-1px;bottom:-1px;width:11px;height:11px;border-radius:50%;border:2.5px solid var(--surface)}
+.status-idle{background:#b9b9be}
+.status-thinking{background:var(--purple);animation:breathe 1.6s ease-in-out infinite}
+.status-working{background:var(--working);animation:breathe 1.2s ease-in-out infinite}
+.status-waiting{background:var(--warning)}
+.status-done{background:var(--success)}
+.status-error{background:var(--danger)}
+.status-offline{background:#c9c9cd}
+@keyframes breathe{0%,100%{opacity:1}50%{opacity:.45}}
+
+/* ══════════ 中间主区 ══════════ */
+.main{display:flex;flex-direction:column;min-width:0;background:var(--background)}
+.room-header{padding:14px 26px 12px;background:var(--surface);border-bottom:1px solid var(--border)}
+.room-title-row{display:flex;align-items:center;gap:10px}
+.room-title{font-size:15.5px;font-weight:650}
+.room-mode{font-size:11px;padding:2px 8px;border-radius:99px;background:rgba(65,96,240,.09);color:var(--brand);font-weight:600}
+.room-objective{font-size:12.5px;color:var(--text-muted);margin-top:3px}
+.member-bar{display:flex;align-items:center;gap:8px;margin-top:11px}
+.member-chip{display:flex;align-items:center;gap:7px;padding:4px 11px 4px 5px;border-radius:99px;background:var(--surface-2);border:1px solid transparent;cursor:pointer;transition:all .15s;position:relative}
+.member-chip:hover{background:#ececee;border-color:var(--border-strong)}
+.member-chip .avatar{width:24px;height:24px;font-size:11px}
+.member-chip .avatar .status-dot{width:9px;height:9px;border-width:2px}
+.member-name{font-size:12.5px;font-weight:550}
+.member-state{font-size:11px;color:var(--text-subtle)}
+.member-add{width:30px;height:30px;border-radius:50%;border:1.5px dashed rgba(31,31,36,.2);display:grid;place-items:center;color:var(--text-subtle);transition:all .15s}
+.member-add:hover{border-color:var(--brand);color:var(--brand);background:rgba(65,96,240,.05)}
+
+/* 消息流 */
+.messages{flex:1;overflow-y:auto;padding:22px 26px 10px;display:flex;flex-direction:column;gap:4px}
+.msg-group{display:flex;gap:11px;margin-bottom:16px;animation:msg-in .25s ease}
+@keyframes msg-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.msg-group .avatar{width:34px;height:34px;font-size:14px;margin-top:2px}
+.msg-body{flex:1;min-width:0}
+.msg-head{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+.msg-author{font-size:13px;font-weight:650}
+.msg-tag{font-size:10.5px;padding:1px 7px;border-radius:99px;font-weight:600}
+.msg-time{font-size:11px;color:var(--text-subtle)}
+.msg-content{font-size:14px;line-height:1.7;color:var(--text);max-width:680px}
+.msg-content p{margin:4px 0}
+.msg-user{justify-content:flex-end}
+.msg-user .msg-body{flex:none}
+.msg-user .bubble{background:var(--accent);color:var(--accent-text);padding:10px 15px;border-radius:16px 16px 4px 16px;font-size:14px;max-width:560px;box-shadow:var(--shadow-soft)}
+.sys-divider{display:flex;align-items:center;gap:12px;margin:14px 0;color:var(--text-subtle);font-size:11.5px}
+.sys-divider::before,.sys-divider::after{content:"";flex:1;height:1px;background:var(--border-strong)}
+
+/* 工具卡 */
+.tool-card{margin-top:8px;max-width:680px;background:var(--surface);border:1px solid var(--border-strong);border-radius:13px;overflow:hidden;box-shadow:var(--shadow-soft)}
+.tool-card-head{display:flex;align-items:center;gap:9px;padding:9px 13px;cursor:pointer;user-select:none}
+.tool-card-head:hover{background:var(--surface-3)}
+.tool-icon{width:24px;height:24px;border-radius:7px;background:var(--surface-2);display:grid;place-items:center;font-size:12px}
+.tool-name{font-family:var(--mono);font-size:12.5px;font-weight:600}
+.tool-task{margin-left:auto;font-size:11px;color:var(--text-subtle);font-family:var(--mono)}
+.tool-chevron{color:var(--text-subtle);transition:transform .18s;font-size:11px}
+.tool-card.open .tool-chevron{transform:rotate(180deg)}
+.tool-card-body{display:none;border-top:1px solid var(--border);padding:11px 13px;font-size:12.5px}
+.tool-card.open .tool-card-body{display:block}
+.tool-cmd{font-family:var(--mono);font-size:12px;background:#171717;color:#d7f5d0;padding:9px 12px;border-radius:9px;margin-bottom:9px;overflow-x:auto;white-space:pre}
+.tool-result{color:var(--text-muted);line-height:1.65}
+.tool-result .hl{color:var(--danger);font-weight:600}
+.pill{font-size:10.5px;padding:2px 9px;border-radius:99px;font-weight:650;white-space:nowrap}
+.pill-running{background:rgba(47,111,221,.1);color:var(--working)}
+.pill-waiting{background:rgba(183,121,31,.12);color:var(--warning)}
+.pill-done{background:rgba(47,133,90,.11);color:var(--success)}
+.pill-error{background:rgba(197,48,48,.1);color:var(--danger)}
+.pill-thinking{background:rgba(124,92,214,.11);color:var(--purple)}
+
+/* 审批条 */
+.approval-card{margin-top:8px;max-width:680px;background:linear-gradient(180deg,#fffdf7,#fffbf0);border:1px solid rgba(183,121,31,.25);border-radius:13px;padding:13px 15px;box-shadow:var(--shadow-soft);animation:msg-in .3s ease}
+.approval-head{display:flex;align-items:center;gap:8px;font-weight:650;font-size:13px;color:#8a5a10}
+.approval-cmd{font-family:var(--mono);font-size:12.5px;background:rgba(23,23,23,.92);color:#f5e6c8;padding:9px 12px;border-radius:9px;margin:10px 0}
+.approval-meta{font-size:12px;color:var(--text-muted);margin-bottom:11px;display:flex;gap:14px}
+.approval-actions{display:flex;gap:8px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:10px;font-size:13px;font-weight:600;transition:all .15s}
+.btn-dark{background:var(--accent);color:var(--accent-text)}
+.btn-dark:hover{background:#292929;transform:translateY(-1px)}
+.btn-ghost{background:var(--surface);border:1px solid var(--border-strong);color:var(--text)}
+.btn-ghost:hover{border-color:rgba(31,31,36,.2)}
+.btn-danger-ghost{background:transparent;border:1px solid rgba(197,48,48,.3);color:var(--danger)}
+.btn-danger-ghost:hover{background:var(--danger-bg)}
+.btn-sm{padding:4px 11px;font-size:12px;border-radius:8px}
+
+/* 计划卡 / 交接条 / 产物卡 */
+.plan-card{margin-top:8px;max-width:680px;background:var(--surface);border:1px solid rgba(65,96,240,.18);border-radius:13px;box-shadow:var(--shadow-soft);overflow:hidden}
+.plan-head{display:flex;align-items:center;gap:8px;padding:11px 14px;background:rgba(65,96,240,.05);font-weight:650;font-size:13px;color:var(--brand)}
+.plan-steps{padding:8px 14px 12px}
+.plan-step{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px dashed var(--border)}
+.plan-step:last-child{border-bottom:0}
+.plan-seq{width:20px;height:20px;border-radius:50%;background:var(--surface-2);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--text-muted);flex-shrink:0}
+.plan-step.done .plan-seq{background:rgba(47,133,90,.12);color:var(--success)}
+.plan-step.active .plan-seq{background:rgba(47,111,221,.12);color:var(--working)}
+.plan-text{flex:1;font-size:13px}
+.plan-text small{display:block;color:var(--text-subtle);font-size:11.5px}
+.handoff{display:flex;align-items:center;gap:9px;max-width:680px;margin-top:8px;padding:9px 14px;background:var(--surface-2);border-radius:11px;font-size:12.5px;color:var(--text-muted)}
+.handoff .arrow{color:var(--brand);font-weight:700}
+.artifact-card{display:flex;align-items:center;gap:11px;margin-top:8px;max-width:420px;background:var(--surface);border:1px solid var(--border-strong);border-radius:12px;padding:10px 13px;cursor:pointer;transition:all .15s;box-shadow:var(--shadow-soft)}
+.artifact-card:hover{border-color:rgba(65,96,240,.35);transform:translateY(-1px)}
+.artifact-icon{width:34px;height:34px;border-radius:9px;background:rgba(65,96,240,.09);display:grid;place-items:center;font-size:15px}
+.artifact-name{font-size:13px;font-weight:600}
+.artifact-meta{font-size:11px;color:var(--text-subtle)}
+.artifact-open{margin-left:auto;font-size:12px;color:var(--brand);font-weight:600}
+
+/* ══════════ 输入区 ══════════ */
+.composer-zone{padding:8px 26px 20px;background:linear-gradient(180deg,transparent,var(--background) 30%)}
+.mention-chips{display:flex;gap:7px;margin-bottom:8px;flex-wrap:wrap}
+.mention-chip{display:flex;align-items:center;gap:6px;padding:3px 9px 3px 4px;border-radius:99px;background:var(--surface);border:1px solid var(--border-strong);font-size:12px;font-weight:550;box-shadow:var(--shadow-soft)}
+.mention-chip .avatar{width:20px;height:20px;font-size:10px}
+.mention-chip .x{color:var(--text-subtle);font-size:13px;padding:0 2px}
+.mention-chip .x:hover{color:var(--danger)}
+.composer{background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--radius-lg);box-shadow:var(--shadow-card);padding:13px 15px 10px;transition:box-shadow .2s,border-color .2s}
+.composer:focus-within{border-color:rgba(65,96,240,.4);box-shadow:var(--shadow-card),var(--focus-ring)}
+.composer textarea{width:100%;min-height:44px;max-height:180px;font-size:14px;line-height:1.65}
+.composer-bar{display:flex;align-items:center;gap:6px;margin-top:8px}
+.cbtn{display:flex;align-items:center;gap:5px;padding:5px 10px;border-radius:9px;font-size:12.5px;color:var(--text-muted);transition:all .15s}
+.cbtn:hover{background:var(--surface-2);color:var(--text)}
+.mode-seg{display:flex;background:var(--surface-2);border-radius:9px;padding:2px;margin-left:6px}
+.mode-seg button{padding:4px 10px;border-radius:7px;font-size:11.5px;font-weight:600;color:var(--text-muted);transition:all .15s}
+.mode-seg button.on{background:var(--surface);color:var(--text);box-shadow:var(--shadow-soft)}
+.send-btn{margin-left:auto;width:36px;height:36px;border-radius:12px;background:var(--accent);color:#fff;display:grid;place-items:center;transition:all .15s}
+.send-btn:hover{background:#292929;transform:translateY(-1px)}
+.send-btn.stop{background:var(--danger)}
+.composer-hint{font-size:11px;color:var(--text-subtle);text-align:center;margin-top:8px}
+
+/* @ 弹出 */
+.mention-pop{position:absolute;bottom:calc(100% + 8px);left:0;width:320px;background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-card),0 0 0 1px var(--border-strong);padding:7px;z-index:50;animation:pop-in .16s ease}
+@keyframes pop-in{from{opacity:0;transform:translateY(5px) scale(.98)}to{opacity:1;transform:none}}
+.mention-pop-item{display:flex;align-items:center;gap:10px;padding:8px 9px;border-radius:10px;cursor:pointer;width:100%;text-align:left}
+.mention-pop-item:hover,.mention-pop-item.hl{background:var(--surface-2)}
+.mention-pop-item .avatar{width:30px;height:30px;font-size:13px}
+.mp-name{font-size:13px;font-weight:600}
+.mp-purpose{font-size:11.5px;color:var(--text-subtle);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:210px}
+
+/* ══════════ 右侧协作面板 ══════════ */
+.panel{display:flex;flex-direction:column;background:var(--surface);border-left:1px solid var(--border);min-height:0}
+.panel-head{padding:15px 17px 11px;border-bottom:1px solid var(--border)}
+.panel-title{font-size:14px;font-weight:650}
+.panel-body{flex:1;overflow-y:auto;padding:13px 14px;display:flex;flex-direction:column;gap:15px}
+.p-section-label{font-size:11px;font-weight:700;color:var(--text-subtle);letter-spacing:.05em;margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.p-count{background:var(--surface-2);border-radius:99px;padding:0 7px;font-size:10.5px}
+.objective-box{background:var(--surface-3);border:1px solid var(--border);border-radius:12px;padding:11px 13px;font-size:12.5px;line-height:1.6;color:var(--text-muted)}
+.pt-row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:11px;cursor:pointer;transition:background .15s}
+.pt-row:hover{background:var(--surface-3)}
+.pt-row .avatar{width:32px;height:32px;font-size:13px}
+.pt-name{font-size:13px;font-weight:600}
+.pt-task{font-size:11.5px;color:var(--text-subtle);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.task-card{background:var(--surface-3);border:1px solid var(--border);border-radius:12px;padding:10px 12px;cursor:pointer;transition:all .15s;margin-bottom:8px}
+.task-card:hover{border-color:var(--border-strong);box-shadow:var(--shadow-soft)}
+.task-top{display:flex;align-items:center;gap:8px}
+.task-id{font-family:var(--mono);font-size:11px;color:var(--text-subtle)}
+.task-title{font-size:12.5px;font-weight:600;margin-top:4px;line-height:1.45}
+.task-meta{display:flex;align-items:center;gap:7px;margin-top:7px;font-size:11px;color:var(--text-subtle)}
+.progress{height:4px;border-radius:99px;background:var(--surface-2);margin-top:8px;overflow:hidden}
+.progress>i{display:block;height:100%;border-radius:99px;background:var(--working);transition:width .4s}
+.mini-approval{background:linear-gradient(180deg,#fffdf7,#fffbf0);border:1px solid rgba(183,121,31,.25);border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.mini-approval .ma-title{font-size:12.5px;font-weight:650;color:#8a5a10;display:flex;gap:6px;align-items:center}
+.mini-approval .ma-cmd{font-family:var(--mono);font-size:11px;color:var(--text-muted);margin:6px 0 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mini-approval .ma-actions{display:flex;gap:6px}
+.mini-artifact{display:flex;align-items:center;gap:9px;padding:8px 9px;border-radius:10px;cursor:pointer;margin-bottom:6px;transition:background .15s}
+.mini-artifact:hover{background:var(--surface-3)}
+.mini-artifact .ai{width:28px;height:28px;border-radius:8px;background:rgba(65,96,240,.09);display:grid;place-items:center;font-size:13px;flex-shrink:0}
+.mini-artifact .an{font-size:12.5px;font-weight:600}
+.mini-artifact .am{font-size:11px;color:var(--text-subtle)}
+
+/* ══════════ 目录视图 ══════════ */
+.view{display:none;height:100%;min-height:0}
+.view.on{display:flex}
+.catalog{flex:1;display:grid;grid-template-columns:340px minmax(0,1fr);min-height:0}
+.catalog-list{border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--surface)}
+.catalog-head{padding:17px 17px 12px;border-bottom:1px solid var(--border)}
+.catalog-title{font-size:16px;font-weight:700;display:flex;align-items:center;gap:9px}
+.catalog-scroll{flex:1;overflow-y:auto;padding:11px}
+.dh-item{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:13px;cursor:pointer;transition:all .15s;margin-bottom:4px;border:1px solid transparent}
+.dh-item:hover{background:var(--surface-3)}
+.dh-item.active{background:var(--surface-3);border-color:var(--border-strong)}
+.dh-item .avatar{width:38px;height:38px;font-size:16px}
+.dh-name{font-size:13.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+.dh-src{font-size:10px;padding:1px 6px;border-radius:99px;background:var(--surface-2);color:var(--text-subtle);font-weight:600}
+.dh-meta{font-size:11.5px;color:var(--text-subtle);margin-top:2px;display:flex;align-items:center;gap:6px}
+.dh-meta .dot{width:6px;height:6px;border-width:0}
+.catalog-detail{padding:30px 38px;overflow-y:auto}
+.detail-hero{display:flex;align-items:flex-start;gap:18px;margin-bottom:26px}
+.detail-hero .avatar{width:64px;height:64px;font-size:27px;border-radius:20px}
+.detail-name{font-size:21px;font-weight:700;display:flex;align-items:center;gap:10px}
+.detail-purpose{font-size:13.5px;color:var(--text-muted);margin-top:5px;max-width:520px;line-height:1.65}
+.detail-actions{margin-left:auto;display:flex;gap:8px}
+.kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;max-width:720px}
+.kv-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px 17px;box-shadow:var(--shadow-soft)}
+.kv-title{font-size:12px;font-weight:700;color:var(--text-subtle);letter-spacing:.04em;margin-bottom:10px}
+.tag{display:inline-block;font-size:11.5px;padding:3px 10px;border-radius:99px;background:var(--surface-2);margin:0 6px 6px 0;font-weight:550}
+.perm-row{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:5px 0;color:var(--text-muted)}
+.perm-row b{color:var(--text);font-weight:600}
+.perm-ok{color:var(--success)} .perm-warn{color:var(--warning)}
+.mono-line{font-family:var(--mono);font-size:12px;color:var(--text-muted);word-break:break-all}
+
+/* ══════════ 添加向导 ══════════ */
+.overlay{position:fixed;inset:0;background:rgba(23,23,26,.32);backdrop-filter:blur(3px);display:none;place-items:center;z-index:100;animation:ov-in .18s ease}
+.overlay.on{display:grid}
+@keyframes ov-in{from{opacity:0}to{opacity:1}}
+.wizard{width:600px;max-height:86vh;background:var(--surface);border-radius:var(--radius-lg);box-shadow:var(--shadow-card);display:flex;flex-direction:column;overflow:hidden;animation:wz-in .22s ease}
+@keyframes wz-in{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+.wiz-head{padding:19px 24px 15px;border-bottom:1px solid var(--border)}
+.wiz-title{font-size:16px;font-weight:700}
+.wiz-steps{display:flex;gap:5px;margin-top:13px}
+.wiz-step{flex:1;height:3.5px;border-radius:99px;background:var(--surface-2);position:relative;overflow:hidden}
+.wiz-step.done::after,.wiz-step.cur::after{content:"";position:absolute;inset:0;background:var(--brand);border-radius:99px}
+.wiz-step.cur::after{opacity:.55}
+.wiz-body{flex:1;overflow-y:auto;padding:22px 24px}
+.wiz-foot{display:flex;align-items:center;gap:9px;padding:14px 24px;border-top:1px solid var(--border)}
+.wiz-foot .spacer{flex:1}
+.field{margin-bottom:16px}
+.field-label{display:block;font-size:12.5px;font-weight:650;margin-bottom:6px}
+.field-label small{color:var(--text-subtle);font-weight:400;margin-left:5px}
+.field-input{width:100%;background:var(--surface-3);border:1px solid var(--border-strong);border-radius:11px;padding:9px 13px;font-size:13.5px;transition:all .15s}
+.field-input:focus{border-color:rgba(65,96,240,.45);background:var(--surface);box-shadow:var(--focus-ring)}
+.src-cards{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.src-card{border:1.5px solid var(--border-strong);border-radius:14px;padding:15px;cursor:pointer;transition:all .15s}
+.src-card:hover{border-color:rgba(31,31,36,.2)}
+.src-card.sel{border-color:var(--brand);background:rgba(65,96,240,.04)}
+.src-card.disabled{opacity:.45;cursor:not-allowed}
+.src-icon{font-size:21px;margin-bottom:8px}
+.src-name{font-size:13.5px;font-weight:650}
+.src-desc{font-size:11.5px;color:var(--text-subtle);margin-top:3px;line-height:1.5}
+.discover-box{background:var(--surface-3);border:1px solid var(--border);border-radius:12px;padding:13px 15px;margin-top:14px;display:flex;gap:12px;align-items:center}
+.discover-box .avatar{width:40px;height:40px;font-size:17px}
+.spinner{width:15px;height:15px;border:2px solid var(--surface-2);border-top-color:var(--brand);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.trust-cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
+.trust-col{border-radius:12px;padding:13px 14px;font-size:12px;line-height:1.7}
+.trust-col h5{font-size:12px;margin-bottom:7px}
+.trust-green{background:rgba(47,133,90,.06)} .trust-green h5{color:var(--success)}
+.trust-amber{background:rgba(183,121,31,.07)} .trust-amber h5{color:var(--warning)}
+.trust-gray{background:var(--surface-3)} .trust-gray h5{color:var(--text-muted)}
+.avatar-picker{display:flex;gap:9px;flex-wrap:wrap}
+.avatar-opt{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;font-size:19px;cursor:pointer;border:2px solid transparent;transition:all .15s;color:#fff}
+.avatar-opt.sel{border-color:var(--text);transform:scale(1.06)}
+.color-row{display:flex;gap:7px}
+.color-dot{width:22px;height:22px;border-radius:50%;cursor:pointer;border:2.5px solid transparent;transition:all .12s}
+.color-dot.sel{border-color:var(--text)}
+
+/* Popover 成员详情 */
+.popover{position:absolute;width:300px;background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-card),0 0 0 1px var(--border-strong);padding:16px;z-index:80;animation:pop-in .16s ease}
+.pop-head{display:flex;gap:12px;align-items:center;margin-bottom:12px}
+.pop-head .avatar{width:44px;height:44px;font-size:18px;border-radius:14px}
+.pop-name{font-size:15px;font-weight:700}
+.pop-sub{font-size:11.5px;color:var(--text-subtle)}
+.pop-sec{font-size:11px;font-weight:700;color:var(--text-subtle);margin:11px 0 6px;letter-spacing:.04em}
+.pop-actions{display:flex;gap:7px;margin-top:14px}
+
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(20px);background:var(--accent);color:#fff;padding:10px 18px;border-radius:12px;font-size:13px;font-weight:550;box-shadow:var(--shadow-card);opacity:0;transition:all .3s;z-index:200;pointer-events:none}
+.toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<div class="app" id="app">
+  <!-- ═══════ 左侧导航 ═══════ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">DS</div>
+      <div><div class="brand-name">DSH Desktop</div><div class="side-sub brand-sub">智能体工作台</div></div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="chat" onclick="switchView('chat',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        对话</button>
+      <button class="nav-item" data-view="catalog" onclick="switchView('catalog',this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="7" r="4"/><path d="M2 21v-2a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v2"/><circle cx="17.5" cy="8.5" r="2.5"/><path d="M22 21v-1.5a3 3 0 0 0-2-2.83"/></svg>
+        数字人<span class="badge">4</span></button>
+    </nav>
+    <div class="side-section">默认工作区</div>
+    <div class="session-item active"><div class="session-title">线上异常分析</div><div class="session-meta"><span class="dot on"></span>3 位数字人协作中</div></div>
+    <div class="session-item"><div class="session-title">发布 0.1.7 版本公告</div><div class="session-meta"><span class="dot off"></span>昨天</div></div>
+    <div class="session-item"><div class="session-title">支付模块重构方案</div><div class="session-meta"><span class="dot off"></span>周一</div></div>
+    <div class="side-spacer"></div>
+    <div class="side-footer"><span class="dot on"></span>智能体服务 · 运行中</div>
+    <div class="side-footer">⚙ 设置</div>
+  </aside>
+
+  <!-- ═══════ 视图 A：协作对话 ═══════ -->
+  <div class="view on" id="view-chat" style="flex-direction:column;flex:1;min-width:0">
+    <div class="main" style="flex:1">
+      <header class="room-header">
+        <div class="room-title-row">
+          <span class="room-title">线上异常分析</span>
+          <span class="room-mode">自动分工</span>
+        </div>
+        <div class="room-objective">目标：分析服务异常，输出根因、修复方案和用户公告</div>
+        <div class="member-bar" id="memberBar">
+          <!-- 成员 chip 由 JS 渲染 -->
+          <button class="member-add" onclick="toggleInvite(event)" title="加入数字人">＋</button>
+        </div>
+      </header>
+
+      <div class="messages" id="messages">
+        <div class="sys-divider">今天 10:28 · 「服务器管家」「产品分析师」「文案助手」加入了协作</div>
+
+        <!-- 用户消息 -->
+        <div class="msg-group msg-user"><div class="msg-body">
+          <div class="bubble">请分析线上服务异常，给出原因、修复方案和用户公告。</div>
+        </div></div>
+
+        <!-- 计划卡 -->
+        <div class="msg-group">
+          <div class="avatar" style="background:#4160f0">✦</div>
+          <div class="msg-body">
+            <div class="msg-head"><span class="msg-author">协作调度</span><span class="msg-tag" style="background:rgba(65,96,240,.09);color:var(--brand)">Orchestrator</span><span class="msg-time">10:28</span></div>
+            <div class="plan-card">
+              <div class="plan-head">✦ 已生成协作计划 · 5 步 <span class="pill pill-running" style="margin-left:auto">执行中</span></div>
+              <div class="plan-steps">
+                <div class="plan-step done"><span class="plan-seq">✓</span><div class="plan-text">收集服务日志与系统指标<small>服务器管家 · 输出根因报告</small></div><span class="pill pill-done">完成</span></div>
+                <div class="plan-step active"><span class="plan-seq">2</span><div class="plan-text">梳理影响范围与用户问题<small>产品分析师 · 依赖：根因报告</small></div><span class="pill pill-running">执行中</span></div>
+                <div class="plan-step active"><span class="plan-seq">3</span><div class="plan-text">生成用户公告初稿<small>文案助手 · 与步骤 2 并行</small></div><span class="pill pill-running">执行中</span></div>
+                <div class="plan-step"><span class="plan-seq">4</span><div class="plan-text">确认修复步骤风险<small>服务器管家 · 需审批</small></div><span class="pill pill-waiting">等待</span></div>
+                <div class="plan-step"><span class="plan-seq">5</span><div class="plan-text">汇总最终结论<small>协作调度</small></div><span class="pill pill-waiting">等待</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 服务器管家：完成的消息 + 工具卡 + 产物 -->
+        <div class="msg-group">
+          <div class="avatar ring" style="background:#4160f0;--ring:#4160f0">🛠<span class="status-dot status-done"></span></div>
+          <div class="msg-body">
+            <div class="msg-head"><span class="msg-author">服务器管家</span><span class="msg-tag" style="background:rgba(65,96,240,.08);color:var(--brand)">远端 DSH</span><span class="msg-time">10:31</span></div>
+            <div class="msg-content"><p>初步判断 <b>worker 进程异常</b>：最近 30 分钟内有 3 个 worker 反复重启，内存占用峰值 94%。已收集日志并完成初步分析。</p></div>
+            <div class="tool-card" onclick="this.classList.toggle('open')">
+              <div class="tool-card-head">
+                <span class="tool-icon">⌘</span><span class="tool-name">shell.execute</span>
+                <span class="pill pill-done">已完成</span>
+                <span class="tool-task">#T-12 · 4.2s</span><span class="tool-chevron">▾</span>
+              </div>
+              <div class="tool-card-body">
+                <div class="tool-cmd">tail -n 500 /var/log/nginx/error.log | grep -E "worker|OOM"</div>
+                <div class="tool-result">发现 <span class="hl">3 个 worker 异常退出</span>（signal 9, OOM），最近一次在 10:27:41。内存曲线与发布 v2.4.1 时间点吻合。</div>
+              </div>
+            </div>
+            <div class="artifact-card" onclick="toast('打开产物：根因分析报告 v1')">
+              <div class="artifact-icon">📄</div>
+              <div><div class="artifact-name">根因分析报告.md</div><div class="artifact-meta">服务器管家 · v1 · 2.4 KB</div></div>
+              <span class="artifact-open">查看 →</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 交接条 -->
+        <div class="handoff" style="margin-left:45px">
+          <span>🔀</span><span><b>服务器管家</b> 完成根因分析，交接给 <span class="arrow">产品分析师 →</span></span>
+          <span style="color:var(--text-subtle)">依据：根因分析报告 v1</span>
+        </div>
+
+        <!-- 产品分析师：执行中 -->
+        <div class="msg-group">
+          <div class="avatar ring" style="background:#2f855a;--ring:#2f855a">📊<span class="status-dot status-working"></span></div>
+          <div class="msg-body">
+            <div class="msg-head"><span class="msg-author">产品分析师</span><span class="msg-time">10:32</span></div>
+            <div class="msg-content"><p>正在基于根因报告梳理影响面：受影响接口集中在图片上传链路，预估影响约 <b>8% 的活跃用户</b>…</p></div>
+            <div class="tool-card open" onclick="this.classList.toggle('open')">
+              <div class="tool-card-head">
+                <span class="tool-icon">📖</span><span class="tool-name">knowledge.query</span>
+                <span class="pill pill-running">执行中</span>
+                <span class="tool-task">#T-13 · 12s</span><span class="tool-chevron">▾</span>
+              </div>
+              <div class="tool-card-body">
+                <div class="tool-result">查询近 7 日用户反馈工单，匹配「上传失败」关键词 47 条，正在聚类…</div>
+                <div class="progress" style="margin-top:9px"><i style="width:62%"></i></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 文案助手：等待审批 -->
+        <div class="msg-group">
+          <div class="avatar ring" style="background:#b7791f;--ring:#b7791f">✍️<span class="status-dot status-waiting"></span></div>
+          <div class="msg-body">
+            <div class="msg-head"><span class="msg-author">文案助手</span><span class="msg-time">10:33</span></div>
+            <div class="msg-content"><p>公告初稿框架已完成。在继续之前，需要引用「用户补偿方案」知识库文档，请确认授权。</p></div>
+            <div class="approval-card" id="approvalCard">
+              <div class="approval-head">🛡 需要确认 · 文案助手请求读取知识库</div>
+              <div class="approval-cmd">knowledge.read  →  kb://compensation/policy-2026</div>
+              <div class="approval-meta"><span>任务 #T-14</span><span>风险：低</span><span>Trace: tr_8f3a…c2</span></div>
+              <div class="approval-actions">
+                <button class="btn btn-dark btn-sm" onclick="resolveApproval(true)">允许一次</button>
+                <button class="btn btn-ghost btn-sm" onclick="toast('本次会话内自动允许')">会话内允许</button>
+                <button class="btn btn-danger-ghost btn-sm" onclick="resolveApproval(false)">拒绝</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 输入区 -->
+      <div class="composer-zone">
+        <div class="mention-chips" id="mentionChips"></div>
+        <div class="composer" style="position:relative">
+          <div class="mention-pop" id="mentionPop" style="display:none"></div>
+          <textarea id="composerInput" placeholder="描述任务，输入 @ 指定数字人…" rows="2"></textarea>
+          <div class="composer-bar">
+            <button class="cbtn" onclick="toggleMentionPop()">@ 指定成员</button>
+            <button class="cbtn" onclick="toast('附加上下文（原型）')">＋ 上下文</button>
+            <div class="mode-seg">
+              <button class="on" onclick="segMode(this)">自动分工</button>
+              <button onclick="segMode(this)">只执行选中</button>
+            </div>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+          </div>
+        </div>
+        <div class="composer-hint">Enter 发送 · Shift+Enter 换行 · 任务执行中可随时点击 ⏹ 停止</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ 视图 B：数字人目录 ═══════ -->
+  <div class="view" id="view-catalog" style="flex:1;min-width:0">
+    <div class="catalog">
+      <div class="catalog-list">
+        <div class="catalog-head">
+          <div class="catalog-title">数字人
+            <button class="btn btn-dark btn-sm" style="margin-left:auto" onclick="openWizard()">＋ 添加数字人</button>
+          </div>
+        </div>
+        <div class="catalog-scroll" id="catalogList"></div>
+      </div>
+      <div class="catalog-detail" id="catalogDetail"></div>
+    </div>
+  </div>
+
+  <!-- ═══════ 右侧协作面板 ═══════ -->
+  <aside class="panel" id="collabPanel">
+    <div class="panel-head"><div class="panel-title">协作面板</div></div>
+    <div class="panel-body">
+      <section>
+        <div class="p-section-label">当前目标</div>
+        <div class="objective-box">分析服务异常，输出根因、修复方案和用户公告。<div style="margin-top:8px;display:flex;gap:7px"><span class="pill pill-running">执行中 · 3/5 步</span><span style="font-size:11px;color:var(--text-subtle)">已运行 05:12</span></div></div>
+      </section>
+      <section>
+        <div class="p-section-label">参与者 <span class="p-count">3</span></div>
+        <div id="panelParticipants"></div>
+      </section>
+      <section>
+        <div class="p-section-label">等待审批 <span class="p-count" style="background:rgba(183,121,31,.14);color:var(--warning)">1</span></div>
+        <div class="mini-approval">
+          <div class="ma-title">🛡 文案助手 · knowledge.read</div>
+          <div class="ma-cmd">kb://compensation/policy-2026</div>
+          <div class="ma-actions">
+            <button class="btn btn-dark btn-sm" onclick="resolveApproval(true)">允许</button>
+            <button class="btn btn-danger-ghost btn-sm" onclick="resolveApproval(false)">拒绝</button>
+          </div>
+        </div>
+      </section>
+      <section>
+        <div class="p-section-label">任务 <span class="p-count">5</span></div>
+        <div class="task-card" onclick="toast('打开任务详情抽屉（原型）')">
+          <div class="task-top"><span class="task-id">#T-12</span><span class="pill pill-done">完成</span></div>
+          <div class="task-title">收集服务日志与系统指标</div>
+          <div class="task-meta"><span>🛠 服务器管家</span><span>·</span><span>4.2s</span></div>
+        </div>
+        <div class="task-card" onclick="toast('打开任务详情抽屉（原型）')">
+          <div class="task-top"><span class="task-id">#T-13</span><span class="pill pill-running">执行中</span></div>
+          <div class="task-title">梳理影响范围与用户问题</div>
+          <div class="task-meta"><span>📊 产品分析师</span><span>·</span><span>已运行 00:42</span></div>
+          <div class="progress"><i style="width:62%"></i></div>
+        </div>
+        <div class="task-card" onclick="toast('打开任务详情抽屉（原型）')">
+          <div class="task-top"><span class="task-id">#T-14</span><span class="pill pill-waiting">待审批</span></div>
+          <div class="task-title">生成用户公告初稿</div>
+          <div class="task-meta"><span>✍️ 文案助手</span><span>·</span><span>等待知识库授权</span></div>
+        </div>
+      </section>
+      <section>
+        <div class="p-section-label">最新产物</div>
+        <div class="mini-artifact" onclick="toast('打开产物（原型）')"><div class="ai">📄</div><div><div class="an">根因分析报告.md</div><div class="am">服务器管家 · v1 · 10:31</div></div></div>
+      </section>
+    </div>
+  </aside>
+</div>
+
+<!-- ═══════ 添加数字人向导 ═══════ -->
+<div class="overlay" id="wizardOverlay">
+  <div class="wizard">
+    <div class="wiz-head">
+      <div class="wiz-title">添加数字人</div>
+      <div class="wiz-steps">
+        <div class="wiz-step" data-s="1"></div><div class="wiz-step" data-s="2"></div>
+        <div class="wiz-step" data-s="3"></div><div class="wiz-step" data-s="4"></div><div class="wiz-step" data-s="5"></div>
+      </div>
+    </div>
+    <div class="wiz-body" id="wizBody"></div>
+    <div class="wiz-foot">
+      <button class="btn btn-ghost btn-sm" onclick="closeWizard()">取消</button>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" id="wizBack" onclick="wizNav(-1)">上一步</button>
+      <button class="btn btn-dark btn-sm" id="wizNext" onclick="wizNav(1)">下一步</button>
+    </div>
+  </div>
+</div>
+
+<div class="popover" id="memberPop" style="display:none"></div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ═══════════ 数据 ═══════════ */
+const HUMANS = [
+  {id:'ops',   name:'服务器管家', emoji:'🛠',  color:'#4160f0', state:'done',    src:'远端 DSH', purpose:'服务器巡检、日志排查、部署与回滚', tags:['server-ops','deployment','日志排查'], tasks:'1/2', baseUrl:'https://ops.internal:8080', proto:'dsh.v1'},
+  {id:'anly',  name:'产品分析师', emoji:'📊', color:'#2f855a', state:'working', src:'远端 DSH', purpose:'需求拆解、竞品与影响面分析',       tags:['product-analysis','需求拆解'],   tasks:'1/1', baseUrl:'https://pm.internal:8080',   proto:'dsh.v1'},
+  {id:'writer',name:'文案助手',   emoji:'✍️', color:'#b7791f', state:'waiting', src:'远端 DSH', purpose:'产品公告、操作说明、发布文案',     tags:['copywriting','公告'],           tasks:'1/1', baseUrl:'https://copy.internal:8080', proto:'dsh.v1'},
+  {id:'review',name:'Java Reviewer',emoji:'☕',color:'#7c5cd6', state:'idle',    src:'本地',     purpose:'代码审查、构建与测试',             tags:['java-review','构建测试'],       tasks:'0/1', baseUrl:'本地服务',                  proto:'dsh.v1'},
+];
+const STATE_TEXT = {idle:'空闲',thinking:'思考中',working:'执行中',waiting:'待审批',done:'已完成',error:'异常',offline:'离线'};
+const STATE_DOT  = {idle:'status-idle',thinking:'status-thinking',working:'status-working',waiting:'status-waiting',done:'status-done',error:'status-error',offline:'status-offline'};
+
+/* ═══════════ 视图切换 ═══════════ */
+function switchView(v, btn){
+  document.querySelectorAll('.view').forEach(e=>e.classList.remove('on'));
+  document.getElementById('view-'+v).classList.add('on');
+  document.querySelectorAll('.nav-item').forEach(e=>e.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('collabPanel').style.display = v==='chat' ? 'flex' : 'none';
+  document.getElementById('app').classList.toggle('no-panel', v!=='chat');
+}
+
+/* ═══════════ 成员栏 / 面板参与者 ═══════════ */
+function avatarHtml(h, extra=''){
+  return `<div class="avatar ${extra}" style="background:${h.color};--ring:${h.color}">${h.emoji}<span class="status-dot ${STATE_DOT[h.state]}"></span></div>`;
+}
+function renderMembers(){
+  document.getElementById('memberBar').innerHTML =
+    HUMANS.slice(0,3).map(h=>`
+      <div class="member-chip" onclick="openMemberPop('${h.id}',event)">
+        ${avatarHtml(h)}<span class="member-name">${h.name}</span><span class="member-state">${STATE_TEXT[h.state]}</span>
+      </div>`).join('') +
+    `<button class="member-add" onclick="toggleMentionPop()" title="加入数字人">＋</button>`;
+  document.getElementById('panelParticipants').innerHTML =
+    HUMANS.slice(0,3).map(h=>`
+      <div class="pt-row" onclick="openMemberPop('${h.id}',event)">
+        ${avatarHtml(h)}
+        <div><div class="pt-name">${h.name}</div><div class="pt-task">${h.state==='idle'?'空闲':(h.id==='ops'?'#T-12 收集服务日志':h.id==='anly'?'#T-13 梳理影响范围':'#T-14 生成公告初稿')}</div></div>
+        <span class="pill ${h.state==='working'?'pill-running':h.state==='waiting'?'pill-waiting':'pill-done'}" style="margin-left:auto">${STATE_TEXT[h.state]}</span>
+      </div>`).join('');
+}
+
+/* ═══════════ 目录 ═══════════ */
+let selDh = 'ops';
+function renderCatalog(){
+  document.getElementById('catalogList').innerHTML = HUMANS.map(h=>`
+    <div class="dh-item ${h.id===selDh?'active':''}" onclick="selDh='${h.id}';renderCatalog()">
+      ${avatarHtml(h)}
+      <div style="min-width:0">
+        <div class="dh-name">${h.name}<span class="dh-src">${h.src}</span></div>
+        <div class="dh-meta"><span class="dot ${STATE_DOT[h.state]}" style="width:6px;height:6px"></span>${STATE_TEXT[h.state]} · 任务 ${h.tasks}</div>
+      </div>
+    </div>`).join('');
+  const h = HUMANS.find(x=>x.id===selDh);
+  document.getElementById('catalogDetail').innerHTML = `
+    <div class="detail-hero">
+      <div class="avatar" style="background:${h.color};width:64px;height:64px;font-size:27px;border-radius:20px">${h.emoji}</div>
+      <div>
+        <div class="detail-name">${h.name}<span class="pill ${h.state==='idle'?'pill-done':'pill-running'}">${STATE_TEXT[h.state]}</span></div>
+        <div class="detail-purpose">${h.purpose}</div>
+      </div>
+      <div class="detail-actions">
+        <button class="btn btn-ghost btn-sm" onclick="toast('编辑接入策略（原型）')">编辑</button>
+        <button class="btn btn-ghost btn-sm" onclick="toast('已发起健康检查：在线 · 86ms')">健康检查</button>
+        <button class="btn btn-danger-ghost btn-sm" onclick="toast('停用需二次确认（原型）')">停用</button>
+      </div>
+    </div>
+    <div class="kv-grid">
+      <div class="kv-card"><div class="kv-title">连接</div>
+        <div class="mono-line">${h.baseUrl}</div>
+        <div class="perm-row" style="margin-top:8px">协议 <b>${h.proto}</b> · 凭据 <b>cred_${h.id}</b>（安全存储）</div>
+        <div class="perm-row">最近检查 <b>2 分钟前</b> · 延迟 <b class="perm-ok">86ms</b></div>
+      </div>
+      <div class="kv-card"><div class="kv-title">能力</div>
+        ${h.tags.map(t=>`<span class="tag">${t}</span>`).join('')}
+        <div class="perm-row" style="margin-top:6px">并发上限 <b>${h.tasks.split('/')[1]}</b></div>
+      </div>
+      <div class="kv-card"><div class="kv-title">权限</div>
+        <div class="perm-row"><span class="perm-ok">✓</span> 读操作 <b>自动允许</b></div>
+        <div class="perm-row"><span class="perm-warn">●</span> 写操作 <b>需要审批</b></div>
+        <div class="perm-row"><span class="perm-warn">●</span> 服务重启 <b>每次确认</b></div>
+      </div>
+      <div class="kv-card"><div class="kv-title">最近任务</div>
+        <div class="perm-row">#T-12 收集服务日志与指标 <b class="perm-ok" style="margin-left:auto">完成</b></div>
+        <div class="perm-row">#T-08 检查磁盘空间 <b class="perm-ok" style="margin-left:auto">完成</b></div>
+        <div class="perm-row">#T-03 nginx 配置巡检 <b style="margin-left:auto">完成</b></div>
+      </div>
+    </div>`;
+}
+
+/* ═══════════ 成员 Popover ═══════════ */
+function openMemberPop(id, ev){
+  ev.stopPropagation();
+  const h = HUMANS.find(x=>x.id===id);
+  const pop = document.getElementById('memberPop');
+  pop.innerHTML = `
+    <div class="pop-head">
+      <div class="avatar" style="background:${h.color};width:44px;height:44px;font-size:18px;border-radius:14px">${h.emoji}</div>
+      <div><div class="pop-name">${h.name}</div><div class="pop-sub">${h.src} · ${STATE_TEXT[h.state]}</div></div>
+    </div>
+    <div style="font-size:12.5px;color:var(--text-muted);line-height:1.6">${h.purpose}</div>
+    <div class="pop-sec">当前任务</div>
+    <div style="font-size:12.5px">${h.state==='idle'?'无':(h.id==='ops'?'#T-12 收集服务日志与指标':h.id==='anly'?'#T-13 梳理影响范围与用户问题':'#T-14 生成用户公告初稿')}</div>
+    <div class="pop-sec">本次房间权限</div>
+    <div class="perm-row"><span class="perm-ok">✓</span> 读文件 <b>允许</b></div>
+    <div class="perm-row"><span class="perm-warn">●</span> 写操作 <b>需要审批</b></div>
+    <div class="pop-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closePop();document.querySelector('[data-view=catalog]').click()">查看完整资料</button>
+      <button class="btn btn-ghost btn-sm" onclick="toast('已暂停（原型）');closePop()">暂停</button>
+      <button class="btn btn-danger-ghost btn-sm" onclick="toast('有进行中任务，需二次确认（原型）');closePop()">移出房间</button>
+    </div>`;
+  const r = ev.currentTarget.getBoundingClientRect();
+  pop.style.display='block';
+  pop.style.left = Math.min(r.left, innerWidth-320)+'px';
+  pop.style.top  = (r.bottom+8)+'px';
+}
+function closePop(){document.getElementById('memberPop').style.display='none'}
+document.addEventListener('click',e=>{if(!e.target.closest('.popover'))closePop()});
+
+/* ═══════════ @ 成员选择 ═══════════ */
+const mentioned = new Set();
+function toggleMentionPop(){
+  const pop = document.getElementById('mentionPop');
+  if(pop.style.display==='none'){
+    pop.innerHTML = HUMANS.map(h=>`
+      <button class="mention-pop-item" onclick="mention('${h.id}')">
+        ${avatarHtml(h)}
+        <div style="min-width:0"><div class="mp-name">${h.name}</div><div class="mp-purpose">${h.purpose}</div></div>
+      </button>`).join('');
+    pop.style.display='block';
+  } else pop.style.display='none';
+}
+function mention(id){
+  mentioned.add(id);
+  renderMentionChips();
+  document.getElementById('mentionPop').style.display='none';
+  document.getElementById('composerInput').focus();
+}
+function renderMentionChips(){
+  document.getElementById('mentionChips').innerHTML = [...mentioned].map(id=>{
+    const h = HUMANS.find(x=>x.id===id);
+    return `<span class="mention-chip"><span class="avatar" style="background:${h.color};width:20px;height:20px;font-size:10px">${h.emoji}</span>${h.name}<span class="x" onclick="mentioned.delete('${id}');renderMentionChips()">×</span></span>`;
+  }).join('');
+}
+function segMode(btn){btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));btn.classList.add('on')}
+function sendMessage(){
+  const ta = document.getElementById('composerInput');
+  if(!ta.value.trim())return;
+  const list = [...mentioned].map(id=>HUMANS.find(x=>x.id===id).name).join('、');
+  toast(list?`已派发给：${list}`:'已提交，将自动分工');
+  ta.value=''; mentioned.clear(); renderMentionChips();
+  document.getElementById('sendBtn').classList.add('stop');
+  document.getElementById('sendBtn').textContent='⏹';
+  setTimeout(()=>{const b=document.getElementById('sendBtn');b.classList.remove('stop');b.textContent='➤'},3000);
+}
+function resolveApproval(ok){
+  const card = document.getElementById('approvalCard');
+  if(card){card.style.opacity=.55;card.querySelector('.approval-actions').innerHTML = `<span class="pill ${ok?'pill-done':'pill-error'}">${ok?'已允许':'已拒绝'}</span>`}
+  toast(ok?'已允许 · 文案助手继续执行':'已拒绝 · 任务 #T-14 已暂停');
+}
+
+/* ═══════════ 添加向导 ═══════════ */
+let wizStep = 1, wizSelSrc = 'remote', wizAvatar = 0, wizColor = '#4160f0';
+const AVATARS = ['🛠','📊','✍️','☕','🔍','🚀','🧪','📦'];
+const COLORS  = ['#4160f0','#2f855a','#b7791f','#7c5cd6','#c53030','#0e7490'];
+function openWizard(){wizStep=1;document.getElementById('wizardOverlay').classList.add('on');renderWizard()}
+function closeWizard(){document.getElementById('wizardOverlay').classList.remove('on')}
+function wizNav(d){
+  if(wizStep===5 && d===1){closeWizard();toast('数字人「服务器管家」已添加');return}
+  wizStep = Math.min(5,Math.max(1,wizStep+d)); renderWizard();
+}
+function renderWizard(){
+  document.querySelectorAll('.wiz-step').forEach(s=>{
+    const n = +s.dataset.s;
+    s.className = 'wiz-step' + (n<wizStep?' done':n===wizStep?' cur':'');
+  });
+  document.getElementById('wizBack').style.visibility = wizStep===1?'hidden':'visible';
+  document.getElementById('wizNext').textContent = wizStep===5?'确认添加':'下一步';
+  const B = document.getElementById('wizBody');
+  if(wizStep===1) B.innerHTML = `
+    <div class="field-label" style="margin-bottom:11px">选择数字人来源</div>
+    <div class="src-cards">
+      <div class="src-card ${wizSelSrc==='local'?'sel':''}" onclick="wizSelSrc='local';renderWizard()"><div class="src-icon">💻</div><div class="src-name">本地 DSH</div><div class="src-desc">使用本机运行的智能体服务，配置为独立角色</div></div>
+      <div class="src-card ${wizSelSrc==='remote'?'sel':''}" onclick="wizSelSrc='remote';renderWizard()"><div class="src-icon">🌐</div><div class="src-name">远端 DSH 服务</div><div class="src-desc">连接部署在其他机器上的 deepseek-harness-java</div></div>
+      <div class="src-card disabled"><div class="src-icon">🔌</div><div class="src-name">MCP 工具型</div><div class="src-desc">仅暴露工具能力（后续版本）</div></div>
+      <div class="src-card disabled"><div class="src-icon">🤝</div><div class="src-name">A2A Agent</div><div class="src-desc">接入外部框架智能体（预留）</div></div>
+    </div>`;
+  if(wizStep===2) B.innerHTML = `
+    <div class="field"><label class="field-label">服务地址<small>远端 DSH 的 Base URL</small></label>
+      <input class="field-input" id="wizUrl" value="https://ops.internal:8080" onblur="wizDiscover()"></div>
+    <div class="field"><label class="field-label">访问凭据<small>仅保存在本机安全存储</small></label>
+      <input class="field-input" type="password" value="••••••••••••"></div>
+    <div class="discover-box" id="discoverBox">
+      <div class="spinner"></div><div style="font-size:12.5px;color:var(--text-muted)">正在探测 <span class="mono-line">/.well-known/dsh-agent-card</span>…</div>
+    </div>`;
+  if(wizStep===2) setTimeout(()=>{
+    const box = document.getElementById('discoverBox');
+    if(box) box.innerHTML = `
+      <div class="avatar" style="background:#4160f0;width:40px;height:40px;font-size:17px">🛠</div>
+      <div style="flex:1"><div style="font-size:13px;font-weight:650">发现数字人：服务器管家</div>
+      <div style="font-size:11.5px;color:var(--text-subtle)">协议 dsh.v1 · 能力：服务器巡检、日志排查、部署 · 写操作需审批</div></div>
+      <span class="pill pill-done">连接正常 · 86ms</span>`;
+  }, 1200);
+  if(wizStep===3) B.innerHTML = `
+    <div class="field"><label class="field-label">名称</label><input class="field-input" value="服务器管家"></div>
+    <div class="field"><label class="field-label">头像</label>
+      <div class="avatar-picker">${AVATARS.map((a,i)=>`<div class="avatar-opt ${i===wizAvatar?'sel':''}" style="background:${wizColor}" onclick="wizAvatar=${i};renderWizard()">${a}</div>`).join('')}</div>
+      <div class="color-row" style="margin-top:10px">${COLORS.map(c=>`<div class="color-dot ${c===wizColor?'sel':''}" style="background:${c}" onclick="wizColor='${c}';renderWizard()"></div>`).join('')}</div></div>
+    <div class="field"><label class="field-label">用途描述<small>给你看，也用于自动分工时匹配能力</small></label>
+      <textarea class="field-input" rows="2">负责服务器巡检、日志排查、部署脚本与变更回滚。</textarea></div>
+    <div class="field"><label class="field-label">能力标签</label>
+      <div><span class="tag">server-ops</span><span class="tag">deployment</span><span class="tag">日志排查</span><span class="tag" style="border:1px dashed rgba(31,31,36,.2);background:transparent">＋ 添加</span></div></div>`;
+  if(wizStep===4) B.innerHTML = `
+    <div class="field-label" style="margin-bottom:11px">工具与审批策略</div>
+    <div class="kv-card" style="margin-bottom:13px">
+      <div class="perm-row"><span class="perm-ok">✓</span> fs.read、日志读取 <b style="margin-left:auto">自动允许</b></div>
+      <div class="perm-row"><span class="perm-warn">●</span> shell.execute（写命令） <b style="margin-left:auto">需要审批</b></div>
+      <div class="perm-row"><span class="perm-warn">●</span> systemctl / 服务重启 <b style="margin-left:auto">每次确认</b></div>
+    </div>
+    <div class="field"><label class="field-label">并发上限<small>同时执行的任务数</small></label>
+      <input class="field-input" type="number" value="2" style="width:120px"></div>
+    <div class="field"><label class="field-label">任务超时</label>
+      <input class="field-input" value="10 分钟" style="width:120px"></div>`;
+  if(wizStep===5) B.innerHTML = `
+    <div class="discover-box" style="margin:0 0 16px">
+      <div class="avatar" style="background:${wizColor};width:44px;height:44px;font-size:19px">${AVATARS[wizAvatar]}</div>
+      <div><div style="font-size:14px;font-weight:700">服务器管家</div><div style="font-size:12px;color:var(--text-subtle)">远端 DSH · ops.internal:8080 · dsh.v1</div></div>
+      <span class="pill pill-done">在线</span>
+    </div>
+    <div class="trust-cols">
+      <div class="trust-col trust-green"><h5>✓ 将启用</h5>接收你明确派发的任务<br>读取服务器日志与指标<br>生成诊断报告</div>
+      <div class="trust-col trust-amber"><h5>● 需要审批</h5>修改服务器文件<br>执行写命令<br>重启服务</div>
+      <div class="trust-col trust-gray"><h5>— 不会共享</h5>本地其他项目文件<br>其他数字人的凭据<br>未被引用的历史会话</div>
+    </div>`;
+}
+
+/* ═══════════ 工具 ═══════════ */
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('on');
+  clearTimeout(t._tm); t._tm = setTimeout(()=>t.classList.remove('on'),2200);
+}
+document.getElementById('composerInput').addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage()}
+  if(e.key==='@')setTimeout(toggleMentionPop,0);
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){closeWizard();closePop();document.getElementById('mentionPop').style.display='none'}});
+document.getElementById('wizardOverlay').addEventListener('click',e=>{if(e.target.id==='wizardOverlay')closeWizard()});
+
+renderMembers(); renderCatalog();
+</script>
+</body>
+</html>

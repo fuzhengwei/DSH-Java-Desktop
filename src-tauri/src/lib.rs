@@ -542,9 +542,59 @@ fn project_git_changes(path: String) -> Result<GitChangeSummary, String> {
     Ok(summary)
 }
 
+// ── 文件渲染：读取本地文件内容（md/word/excel 等） ──────────
+
+/// 读取本地文本文件（md/txt/csv 等），大小限制 8MB，避免 UI 卡死。
 #[tauri::command]
-fn send_notification(title: String, body: String) -> Result<(), String> {
-    notify_rust::Notification::new()
+fn read_local_text_file(path: String) -> Result<String, String> {
+    let file = PathBuf::from(&path);
+    if !file.is_file() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    let meta = fs::metadata(&file).map_err(|error| format!("读取文件信息失败：{error}"))?;
+    if meta.len() > 8 * 1024 * 1024 {
+        return Err("文件过大（超过 8MB），不支持预览".to_string());
+    }
+    fs::read_to_string(&file).map_err(|error| format!("读取文件失败：{error}"))
+}
+
+/// 读取本地二进制文件（docx/xlsx/pdf 等），返回 Base64，大小限制 50MB。
+#[tauri::command]
+fn read_local_file_base64(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let file = PathBuf::from(&path);
+    if !file.is_file() {
+        return Err(format!("文件不存在：{path}"));
+    }
+    let meta = fs::metadata(&file).map_err(|error| format!("读取文件信息失败：{error}"))?;
+    if meta.len() > 50 * 1024 * 1024 {
+        return Err("文件过大（超过 50MB），不支持预览".to_string());
+    }
+    let mut handle = fs::File::open(&file).map_err(|error| format!("打开文件失败：{error}"))?;
+    let mut buffer = Vec::with_capacity(meta.len() as usize);
+    handle
+        .read_to_end(&mut buffer)
+        .map_err(|error| format!("读取文件失败：{error}"))?;
+    Ok(base64_encode(&buffer))
+}
+
+/// 轻量 Base64 编码（避免为单一命令引入依赖）
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+#[tauri::command]
+fn send_notification(title: String, body: String) -> Result<(), String> {    notify_rust::Notification::new()
         .summary(&title)
         .body(&body)
         .appname("DSH Java Desktop")
@@ -578,6 +628,66 @@ fn open_external(url: String) -> Result<(), String> {
         })
 }
 
+// ── 数字人凭据安全存储 ─────────────────────────────────────
+// 凭据（远端 Token）只写入应用数据目录下权限 0600 的独立文件，
+// 业务表/事件流/日志里只出现 credentialRef，永不出现明文。
+
+fn credentials_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    fs::create_dir_all(&dir).map_err(|error| format!("创建数据目录失败：{error}"))?;
+    Ok(dir.join("digital-human-credentials.json"))
+}
+
+fn read_credential_map(app: &tauri::AppHandle) -> Result<std::collections::HashMap<String, String>, String> {
+    let path = credentials_path(app)?;
+    match fs::read_to_string(&path) {
+        Ok(contents) => serde_json::from_str(&contents).map_err(|error| format!("读取凭据存储失败：{error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(std::collections::HashMap::new()),
+        Err(error) => Err(format!("读取凭据存储失败：{error}")),
+    }
+}
+
+fn write_credential_map(app: &tauri::AppHandle, map: &std::collections::HashMap<String, String>) -> Result<(), String> {
+    let path = credentials_path(app)?;
+    let contents = serde_json::to_vec_pretty(map).map_err(|error| format!("序列化凭据失败：{error}"))?;
+    fs::write(&path, contents).map_err(|error| format!("写入凭据存储失败：{error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn save_credential(app: tauri::AppHandle, credential_ref: String, secret: String) -> Result<(), String> {
+    if credential_ref.trim().is_empty() {
+        return Err("credentialRef 不能为空".to_string());
+    }
+    let mut map = read_credential_map(&app)?;
+    if secret.trim().is_empty() {
+        map.remove(&credential_ref);
+    } else {
+        map.insert(credential_ref, secret);
+    }
+    write_credential_map(&app, &map)
+}
+
+#[tauri::command]
+fn read_credential(app: tauri::AppHandle, credential_ref: String) -> Result<Option<String>, String> {
+    Ok(read_credential_map(&app)?.get(&credential_ref).cloned())
+}
+
+#[tauri::command]
+fn delete_credential(app: tauri::AppHandle, credential_ref: String) -> Result<(), String> {
+    let mut map = read_credential_map(&app)?;
+    map.remove(&credential_ref);
+    write_credential_map(&app, &map)
+}
+
 #[tauri::command]
 fn pick_local_directory() -> Vec<WorkspaceSelection> {
     rfd::FileDialog::new()
@@ -601,7 +711,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

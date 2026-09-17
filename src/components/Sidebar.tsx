@@ -1,17 +1,18 @@
-import { useMemo, useState } from "react";
-import type { SessionSummary, WorkspaceEntry } from "../types";
+import { useMemo, useRef, useState } from "react";
+import type { DigitalHuman, SessionSummary, WorkspaceEntry } from "../types";
 import { sanitizeDisplayName, truncateSessionTitle } from "../lib/text";
+import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./ProjectRowMenu";
 import {
   ChevronIcon,
-  FolderIcon,
-  FolderPlusIcon,
   EditIcon,
+  FolderIcon,
   PlusIcon,
   SettingsIcon,
+  UsersIcon,
   XIcon,
 } from "./icons";
 
-export type WorkspaceView = "conversation" | "settings";
+export type WorkspaceView = "conversation" | "settings" | "digital-humans";
 
 /** 侧边栏每个项目默认展示的会话条数，超出部分点击「加载更多」追加 */
 const SESSION_PAGE_SIZE = 10;
@@ -49,6 +50,12 @@ type SidebarProps = {
   onRenameProject: (name: string) => void;
   onRemoveProject: (project: WorkspaceEntry) => void;
   onRemoveLocalProject: (project: WorkspaceEntry) => void;
+  /** 全部数字人（含项目归属），用于项目行头像堆叠与数量 */
+  digitalHumans?: DigitalHuman[];
+  /** 勾选/取消勾选：把现有数字人配置到项目（checked=false 时移出项目变全局） */
+  onAssignDigitalHuman?: (humanId: string, projectPath: string, checked: boolean) => void;
+  /** 浮层底部「新建数字人并归属到该项目」（打开向导，创建后归属该项目） */
+  onCreateDigitalHuman?: (project: WorkspaceEntry) => void;
 };
 
 function sessionTitle(session: SessionSummary, customTitles?: Record<string, string>): string {
@@ -124,6 +131,9 @@ export default function Sidebar({
   onRenameProject,
   onRemoveProject,
   onRemoveLocalProject,
+  digitalHumans = [],
+  onAssignDigitalHuman,
+  onCreateDigitalHuman,
 }: SidebarProps) {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [pendingDelete, setPendingDelete] = useState<WorkspaceEntry | null>(null);
@@ -179,6 +189,38 @@ export default function Sidebar({
   const isProjectExpanded = (path: string, hasSessions: boolean) => {
     if (expandedProjects[path] !== undefined) return expandedProjects[path];
     return path === activeProjectPath || hasSessions;
+  };
+
+  // 项目路径 → 归属该项目的数字人（仅显式归属的，全局数字人不堆到每个项目上）
+  const projectHumans = useMemo(() => {
+    const map = new Map<string, DigitalHuman[]>();
+    for (const human of digitalHumans) {
+      if (!human.projectPath) continue;
+      const list = map.get(human.projectPath) || [];
+      list.push(human);
+      map.set(human.projectPath, list);
+    }
+    return map;
+  }, [digitalHumans]);
+
+  // 数字人配置浮层：记录打开的项目路径与锚点位置（相对侧边栏）
+  const [assignProjectPath, setAssignProjectPath] = useState("");
+  const [assignAnchorTop, setAssignAnchorTop] = useState(0);
+  const assignAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const projectRowRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
+  const assignCheckedIds = useMemo(() => (
+    new Set(digitalHumans.filter((human) => human.projectPath === assignProjectPath).map((human) => human.id))
+  ), [assignProjectPath, digitalHumans]);
+  const closeAssignPopover = () => setAssignProjectPath("");
+  const openAssignPopover = (project: WorkspaceEntry, anchor: HTMLButtonElement | null) => {
+    // 锚点 = 该项目行的 ⋮ 按钮；用它的纵向位置固定浮层，避免被滚动裁剪
+    assignAnchorRef.current = anchor;
+    const sidebar = anchor?.closest(".sidebar");
+    if (anchor && sidebar) {
+      const top = anchor.getBoundingClientRect().bottom - sidebar.getBoundingClientRect().top + 4;
+      setAssignAnchorTop(top);
+    }
+    setAssignProjectPath(project.path);
   };
 
   const unassignedSessions = groupedSessions.get("__unassigned__") || [];
@@ -239,11 +281,27 @@ export default function Sidebar({
   };
   return (
     <aside className="sidebar">
+      {/* 项目数字人配置浮层：固定定位在侧边栏内，锚点为触发行的 ⋮ 按钮 */}
+      <ProjectHumanAssignPopover
+        anchorRef={assignAnchorRef}
+        open={Boolean(assignProjectPath)}
+        anchorTop={assignAnchorTop}
+        humans={digitalHumans}
+        checkedIds={assignCheckedIds}
+        onAssign={(humanId: string, checked: boolean) => onAssignDigitalHuman?.(humanId, assignProjectPath, checked)}
+        onCreateNew={onCreateDigitalHuman ? () => {
+          const project = topLevelProjects.find((item) => item.path === assignProjectPath);
+          closeAssignPopover();
+          if (project) onCreateDigitalHuman(project);
+        } : undefined}
+        onClose={closeAssignPopover}
+      />
       <div className="brand" title="DSH Java Desktop">
         <img className="brand-mark" src="/dsh-icon.png" alt="DSH" />
         <div>
           <div className="brand-title">
             DSH
+            <span className="brand-version" title="应用版本">v0.1.0</span>
           </div>
           <div className="brand-subtitle">Java Desktop</div>
         </div>
@@ -271,6 +329,7 @@ export default function Sidebar({
           {topLevelProjects.map((project) => {
             const projectSessions = groupedSessions.get(project.path) || [];
             const expanded = isProjectExpanded(project.path, projectSessions.length > 0);
+            const humansOfProject = projectHumans.get(project.path) || [];
             return (
               <div key={project.path} className="project-node">
                 <div className="project-row">
@@ -285,19 +344,16 @@ export default function Sidebar({
                     <FolderIcon className="icon-16" />
                     <span>{sanitizeDisplayName(projectName(project))}</span>
                   </button>
-                  <button className="icon-button" onClick={() => onNewConversation(project)} title="新建对话">
-                    <PlusIcon className="icon-15" />
-                  </button>
-                  <button className="icon-button add-project" onClick={() => onAddLocalProject(project.path)} title="添加工程">
-                    <FolderPlusIcon className="icon-14" />
-                  </button>
-                  <button className="icon-button" onClick={() => onEditProject(project)} title="编辑项目">
-                    <EditIcon className="icon-14" />
-                  </button>
-                  <button className="icon-button remove-project" onClick={() => setPendingDelete(project)} title="删除项目">
-                    <XIcon className="icon-14" />
-                  </button>
+                  <ProjectHumanStack humans={humansOfProject} />
                   {projectSessions.length > 0 ? <span className="nav-count">{projectSessions.length}</span> : null}
+                  <ProjectRowMenu
+                    triggerRef={(node) => projectRowRefs.current.set(project.path, node)}
+                    onNewConversation={() => onNewConversation(project)}
+                    onAddLocalProject={() => onAddLocalProject(project.path)}
+                    onAddDigitalHuman={onAssignDigitalHuman ? () => openAssignPopover(project, projectRowRefs.current.get(project.path) || null) : undefined}
+                    onEdit={() => onEditProject(project)}
+                    onDelete={() => setPendingDelete(project)}
+                  />
                 </div>
 
                 {expanded ? (
@@ -358,6 +414,10 @@ export default function Sidebar({
       </div>
 
       <div className="sidebar-footer">
+        <button className={activeView === "digital-humans" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("digital-humans")}>
+          <UsersIcon className="icon-16" />
+          <span>数字人</span>
+        </button>
         <button className={activeView === "settings" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("settings")}>
           <SettingsIcon className="icon-16" />
           <span>设置</span>

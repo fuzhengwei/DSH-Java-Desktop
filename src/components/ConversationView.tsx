@@ -1,9 +1,24 @@
-import type { ApprovalMode, AvailableModel, ConversationMessage, ReasoningEffort, RuntimeApproval, WorkspaceEntry } from "../types";
+import type { ApprovalMode, AvailableModel, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, XIcon } from "./icons";
+import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
+import { AttributionAvatar } from "./AttributionAvatar";
+import { InlineFileCards } from "./FilePreview";
+import { EChartBlock } from "./EChartBlock";
+
+/** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
+function extractText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(extractText).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    return extractText((node as { props?: { children?: unknown } }).props?.children);
+  }
+  return "";
+}
 
 type ConversationViewProps = {
   serviceReady: boolean;
@@ -40,6 +55,23 @@ type ConversationViewProps = {
   approvals: RuntimeApproval[];
   resolvingApprovalId: string;
   onResolveApproval: (approvalId: string, verdict: "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY") => void;
+  /** 数字人协作：房间投影、目录、邀请与移出 */
+  room?: RoomProjection | null;
+  digitalHumans?: DigitalHuman[];
+  /** 当前项目显式归属的数字人（用于项目胶囊上的头像叠加） */
+  projectHumans?: DigitalHuman[];
+  onRemoveParticipant?: (digitalHumanId: string) => void;
+  /** @ 数字人提及（输入框 chips），发送时随消息一起清空 */
+  humanMentions?: DigitalHuman[];
+  onHumanMentionsChange?: (humans: DigitalHuman[]) => void;
+  /** 执行中的数字人（其消息带归属展示） */
+  activeHuman?: DigitalHuman | null;
+  /** 房间协作模式：存在时替换消息区为房间事件流视图（App 负责订阅与渲染） */
+  roomContent?: ReactNode;
+  /** 在右侧面板打开本地文件（独立渲染） */
+  onOpenFile?: (path: string) => void;
+  /** 房间协作运行中：禁用输入与发送（总体停止前不可继续） */
+  roomStreaming?: boolean;
 };
 
 type TimelineItem =
@@ -255,14 +287,28 @@ export default function ConversationView({
   approvals,
   resolvingApprovalId,
   onResolveApproval,
+  room = null,
+  digitalHumans = [],
+  projectHumans = [],
+  onRemoveParticipant,
+  humanMentions = [],
+  onHumanMentionsChange,
+  activeHuman = null,
+  roomContent = null,
+  onOpenFile,
+  roomStreaming = false,
 }: ConversationViewProps) {
-  const isHome = messages.length === 0;
+  // 房间协作模式下即使会话消息为空也按对话态渲染（消息由事件流提供）
+  const isHome = messages.length === 0 && !roomContent;
+
   const messageListRef = useRef<HTMLDivElement>(null);
   const followOutputRef = useRef(true);
   const composingRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [canJumpLatest, setCanJumpLatest] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  // 项目没有任何数字人时，历史消息里残留的归属信息也一并隐藏
+  const showAttribution = digitalHumans.length > 0;
   // 输入历史：historyCursor 指向 sentHistory 下标，history.length 表示未进入浏览状态
   const [historyCursor, setHistoryCursorState] = useState(sentHistory.length);
   const historyCursorRef = useRef(sentHistory.length);
@@ -294,6 +340,16 @@ export default function ConversationView({
     project.local && project.parentPath === activeProject?.path
   )), [activeProject, projects]);
 
+  // 可 @ 的数字人：已入房间时取房间参与者；未入房间时取当前项目配置的数字人
+  // （项目配置数字人 = 第一优先级使用，无需先加入房间即可 @ 指派）
+  const humanMentionCandidates = useMemo(() => {
+    if (room) {
+      const joinedIds = new Set(room.participants.map((p) => p.digitalHumanId));
+      return digitalHumans.filter((human) => joinedIds.has(human.id));
+    }
+    return projectHumans;
+  }, [digitalHumans, room, projectHumans]);
+
   // 候选工程变化（切项目/增删工程）时刷新标签对应的工程信息，丢弃已不存在的
   useEffect(() => {
     setMentionChips((current) => current
@@ -310,8 +366,23 @@ export default function ConversationView({
     ));
   }, [mentionCandidates, mentionChips, mentionTrigger]);
 
-  // 候选为空（项目未挂载工程 / 默认工作区）时不弹层，@ 视为普通字符，避免"弹个空框"
-  const mentionOpen = Boolean(mentionTrigger && !mentionDismissed && !streaming && mentionCandidates.length > 0);
+  const humanMentionResults = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const query = mentionTrigger.query.trim().toLowerCase();
+    return humanMentionCandidates.filter((human) => (
+      !humanMentions.some((item) => item.id === human.id)
+      && (!query || human.displayName.toLowerCase().includes(query) || human.purpose.toLowerCase().includes(query))
+    ));
+  }, [humanMentionCandidates, humanMentions, mentionTrigger]);
+
+  const mentionTotalCount = humanMentionResults.length + mentionResults.length;
+
+  // 候选为空（项目未挂载工程且房间无数字人 / 默认工作区）时不弹层，@ 视为普通字符，避免"弹个空框"
+  const mentionOpen = Boolean(
+    mentionTrigger && !mentionDismissed && !streaming
+    && (mentionCandidates.length > 0 || humanMentionCandidates.length > 0)
+    && mentionTotalCount > 0,
+  );
   const mentionOpenRef = useRef(mentionOpen);
   mentionOpenRef.current = mentionOpen;
 
@@ -358,6 +429,31 @@ export default function ConversationView({
     setMentionChips((current) => (
       current.some((chip) => chip.path === project.path) ? current : [...current, project]
     ));
+    setMentionTrigger(null);
+    setMentionDismissed(false);
+    onDraftChange(next);
+    requestAnimationFrame(() => {
+      const target = textareaRef.current;
+      if (target) {
+        target.focus();
+        target.selectionStart = caretAfter;
+        target.selectionEnd = caretAfter;
+      }
+    });
+  };
+
+  /** 从弹层确认一个数字人：触发词同样从输入框移除，chips 交给 App 侧管理 */
+  const confirmHumanMention = (human: DigitalHuman) => {
+    const trigger = mentionTriggerRef.current;
+    const textarea = textareaRef.current;
+    if (!trigger) return;
+    const value = draftRef.current;
+    const caret = textarea ? textarea.selectionStart : value.length;
+    const next = (value.slice(0, trigger.start) + value.slice(caret)).replace(/ {2,}/g, " ");
+    const caretAfter = Math.min(trigger.start, next.length);
+    if (!humanMentions.some((item) => item.id === human.id)) {
+      onHumanMentionsChange?.([...humanMentions, human]);
+    }
     setMentionTrigger(null);
     setMentionDismissed(false);
     onDraftChange(next);
@@ -448,6 +544,19 @@ export default function ConversationView({
         {children}
       </a>
     ),
+    // ```echarts 代码块：渲染为 ECharts 图表
+    pre: ({ children }: { children?: ReactNode }) => {
+      // react-markdown 会把 code 包在 pre 里；从中取出 language 与源码
+      const child = Array.isArray(children) ? children[0] : children;
+      const className = (child as { props?: { className?: string } })?.props?.className || "";
+      const match = /language-(\w+)/.exec(className);
+      if (match && match[1] === "echarts") {
+        const raw = extractText(child);
+        const code = raw.trim();
+        if (code.startsWith("{")) return <EChartBlock code={code} />;
+      }
+      return <pre>{children}</pre>;
+    },
   }), []);
 
   const renderMarkdown = (value: string) => (
@@ -538,9 +647,15 @@ export default function ConversationView({
     <>
       {variant === "chat" && streaming ? (
         <div className="conversation-status">
-          <span className="conversation-status-dot" />
+          {activeHuman ? (
+            <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
+              {activeHuman.avatarRef}
+            </span>
+          ) : (
+            <span className="conversation-status-dot" />
+          )}
           <span className="conversation-status-label">
-            {runningLabel}
+            {activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel}
             {elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : ""}
           </span>
         </div>
@@ -548,6 +663,14 @@ export default function ConversationView({
       {approvals.length > 0 ? (
         <div className="runtime-approval" aria-live="polite">
           <div className="runtime-approval-main">
+            {activeHuman ? (
+              <div className="msg-attribution" style={{ marginBottom: 6 }}>
+                <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
+                  {activeHuman.avatarRef}
+                </span>
+                <span className="msg-attribution-name">{activeHuman.displayName} 请求确认</span>
+              </div>
+            ) : null}
             <strong>{approvals[0].toolName || "Tool"}</strong>
             <pre>
               {approvals[0].displayCommand
@@ -580,26 +703,50 @@ export default function ConversationView({
         </div>
       ) : null}
       <div className={variant === "hero" ? "prompt-shell hero" : "prompt-shell chat"}>
-        {mentionChips.length > 0 ? (
-          <div className="mention-banner" aria-label="已引用的工程">
-            {mentionChips.map((chip) => (
-              <span key={chip.path} className="mention-chip" title={chip.path}>
-                <FolderIcon className="icon-12" />
-                <span className="mention-chip-name">{chip.name}</span>
+      {mentionChips.length > 0 || humanMentions.length > 0 ? (
+        <div className="mention-banner" aria-label="已加入的数字人与引用的工程">
+          {humanMentions.map((human) => {
+            const participant = room?.participants.find((p) => p.digitalHumanId === human.id);
+            const presence = participant?.presence || "idle";
+            return (
+              <span key={human.id} className="mention-chip human" title={`${human.purpose}\n状态：${PRESENCE_TEXT[presence]}`}>
+                <HumanAvatar human={human} size={18} presence={presence} />
+                <span className="mention-chip-name">{human.displayName}</span>
+                <span className={`mention-chip-presence presence-text-${presence}`}>{PRESENCE_TEXT[presence]}</span>
                 <button
                   type="button"
                   className="mention-banner-remove"
-                  aria-label={`移除 ${chip.name}`}
-                  title={`移除 ${chip.name}`}
+                  aria-label={`移除 ${human.displayName}`}
+                  title={`移除 ${human.displayName}`}
                   disabled={streaming}
-                  onClick={() => removeMentionChip(chip)}
+                  onClick={() => {
+                    onHumanMentionsChange?.(humanMentions.filter((item) => item.id !== human.id));
+                    onRemoveParticipant?.(human.id);
+                  }}
                 >
                   <XIcon className="icon-10" />
                 </button>
               </span>
-            ))}
-          </div>
-        ) : null}
+            );
+          })}
+          {mentionChips.map((chip) => (
+            <span key={chip.path} className="mention-chip" title={chip.path}>
+              <FolderIcon className="icon-12" />
+              <span className="mention-chip-name">{chip.name}</span>
+              <button
+                type="button"
+                className="mention-banner-remove"
+                aria-label={`移除 ${chip.name}`}
+                title={`移除 ${chip.name}`}
+                disabled={streaming}
+                onClick={() => removeMentionChip(chip)}
+              >
+                <XIcon className="icon-10" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
         <div
           className="composer-input"
           onMouseDown={(event) => {
@@ -625,9 +772,11 @@ export default function ConversationView({
             placeholder={historyBrowsing
               ? `历史消息 ${historyCursor + 1}/${sentHistory.length} · ↑↓ 切换 · Esc 返回草稿`
               : mentionCandidates.length > 0
-                ? "描述任务，输入 @ 可引用当前项目下的工程（↑ 键调出历史消息）"
-                : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
-            disabled={streaming}
+                ? "描述任务，输入 @ 可选择数字人或引用当前项目下的工程（↑ 键调出历史消息）"
+                : roomStreaming
+                  ? "数字人协作中… 可在下方状态胶囊停止全部任务"
+                  : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
+            disabled={streaming || roomStreaming}
             onChange={(event) => {
               exitHistoryBrowsing();
               const value = event.target.value;
@@ -658,18 +807,23 @@ export default function ConversationView({
               if (mentionOpenRef.current) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault();
-                  setMentionActiveIndex((index) => (index + 1) % mentionResults.length);
+                  setMentionActiveIndex((index) => (index + 1) % Math.max(1, mentionTotalCount));
                   return;
                 }
                 if (event.key === "ArrowUp") {
                   event.preventDefault();
-                  setMentionActiveIndex((index) => (index - 1 + mentionResults.length) % mentionResults.length);
+                  setMentionActiveIndex((index) => (index - 1 + Math.max(1, mentionTotalCount)) % Math.max(1, mentionTotalCount));
                   return;
                 }
                 if (event.key === "Enter" || event.key === "Tab") {
                   event.preventDefault();
-                  const target = mentionResults[mentionActiveIndex] || mentionResults[0];
-                  if (target) confirmMention(target);
+                  if (mentionActiveIndex < humanMentionResults.length) {
+                    const human = humanMentionResults[mentionActiveIndex];
+                    if (human) confirmHumanMention(human);
+                  } else {
+                    const target = mentionResults[mentionActiveIndex - humanMentionResults.length] || mentionResults[0];
+                    if (target) confirmMention(target);
+                  }
                   return;
                 }
                 if (event.key === "Escape") {
@@ -699,29 +853,51 @@ export default function ConversationView({
             }}
           />
           {mentionOpen ? (
-            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择工程">
-              <div className="mention-popup-title">引用工程</div>
-              {mentionResults.length === 0 ? (
-                <div className="mention-empty">没有匹配的工程</div>
-              ) : null}
-              {mentionResults.map((project, index) => (
+            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择数字人或工程">
+              {humanMentionResults.length > 0 ? <div className="mention-popup-title">指派给数字人</div> : null}
+              {humanMentionResults.map((human, index) => (
                 <button
-                  key={project.path}
+                  key={human.id}
                   type="button"
                   role="option"
                   aria-selected={index === mentionActiveIndex}
                   className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
                   onMouseDown={(event) => {
                     event.preventDefault();
-                    confirmMention(project);
+                    confirmHumanMention(human);
                   }}
                   onMouseEnter={() => setMentionActiveIndex(index)}
                 >
-                  <FolderIcon className="icon-14" />
-                  <span className="mention-item-name">{project.name}</span>
-                  <span className="mention-item-path" title={project.path}>{project.path}</span>
+                  <HumanAvatar human={human} size={22} />
+                  <span className="mention-item-name">{human.displayName}</span>
+                  <span className="mention-item-path" title={human.purpose}>{human.purpose}</span>
                 </button>
               ))}
+              {mentionResults.length > 0 ? <div className="mention-popup-title">引用工程</div> : null}
+              {mentionResults.length === 0 && humanMentionResults.length === 0 ? (
+                <div className="mention-empty">没有匹配项</div>
+              ) : null}
+              {mentionResults.map((project, projectIndex) => {
+                const index = humanMentionResults.length + projectIndex;
+                return (
+                  <button
+                    key={project.path}
+                    type="button"
+                    role="option"
+                    aria-selected={index === mentionActiveIndex}
+                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      confirmMention(project);
+                    }}
+                    onMouseEnter={() => setMentionActiveIndex(index)}
+                  >
+                    <FolderIcon className="icon-14" />
+                    <span className="mention-item-name">{project.name}</span>
+                    <span className="mention-item-path" title={project.path}>{project.path}</span>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -738,6 +914,7 @@ export default function ConversationView({
               >
                 <PlusIcon className="icon-15" />
               </button>
+              {/* 数字人配置入口已收敛到侧边栏项目行；输入框不再放数字人按钮 */}
               <div className="project-control" title={activeProject?.path || "选择项目"}>
                 <FolderIcon className="icon-14" />
                 <select
@@ -767,6 +944,22 @@ export default function ConversationView({
                     );
                   })}
                 </select>
+                {/* 项目归属的数字人：在胶囊内叠加头像，超过 2 个用 +N 表示 */}
+                {activeProject && projectHumans.length > 0 ? (
+                  <span
+                    className="project-chip-humans"
+                    title={`该项目数字人：${projectHumans.map((human) => human.displayName).join("、")}`}
+                  >
+                    {projectHumans.slice(0, 2).map((human) => (
+                      <span key={human.id} className="project-chip-humans-item">
+                        <HumanAvatar human={human} size={16} />
+                      </span>
+                    ))}
+                    {projectHumans.length > 2 ? (
+                      <span className="project-chip-humans-more">+{projectHumans.length - 2}</span>
+                    ) : null}
+                  </span>
+                ) : null}
               </div>
             </div>
             <div className="branch-controls">
@@ -877,8 +1070,16 @@ export default function ConversationView({
             <button
               className={streaming ? "composer-action stop" : "composer-action send"}
               onClick={streaming ? onStopGeneration : sendFromComposer}
-              disabled={!serviceReady || (!streaming && !draft.trim())}
-              title={streaming ? "停止生成" : "发送"}
+              disabled={streaming}
+              title={streaming
+                ? "停止生成"
+                : roomStreaming
+                  ? "数字人协作中（在下方胶囊停止）"
+                  : !serviceReady
+                    ? "智能体服务未就绪"
+                    : !draft.trim()
+                      ? "请先输入消息"
+                      : "发送"}
               aria-label={streaming ? "停止生成" : "发送"}
             >
               {streaming ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
@@ -915,6 +1116,11 @@ export default function ConversationView({
               </div>
             </div>
           </div>
+        ) : roomContent ? (
+          // 房间协作模式：消息区由服务端房间事件流驱动（多数字人归属、计划、工具卡、产物）
+          <div className="conversation-scroll room-mode">
+            <div className="conversation-column room-column">{roomContent}</div>
+          </div>
         ) : (
           <>
             <div
@@ -930,7 +1136,7 @@ export default function ConversationView({
               <div className="conversation-column">
                 {timelineItems.map((item) => (
                   item.kind === "activity" ? (
-                    <ActivityItem key={item.key} messages={item.messages} />
+                    <ActivityItem key={item.key} messages={item.messages} showAttribution={showAttribution} digitalHumans={digitalHumans} />
                   ) : (
                     <MessageItem
                       key={item.key}
@@ -938,6 +1144,9 @@ export default function ConversationView({
                       asThought={item.asThought}
                       renderMarkdown={renderMarkdown}
                       streaming={streaming}
+                      showAttribution={showAttribution}
+                      digitalHumans={digitalHumans}
+                      onOpenFile={onOpenFile}
                       runSummary={
                         !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
                           ? {
@@ -958,9 +1167,10 @@ export default function ConversationView({
             ) : null}
           </>
         )}
-        <div className="composer-dock">
-          {renderComposer(isHome ? "hero" : "chat")}
-        </div>
+      {/* 成员展示并入输入框 chips（含状态与删除），不再单独显示顶部成员栏，避免重复 */}
+      <div className="composer-dock">
+        {renderComposer(isHome ? "hero" : "chat")}
+      </div>
       </div>
     </div>
   );
@@ -971,17 +1181,40 @@ const MessageItem = memo(function MessageItem({
   asThought,
   renderMarkdown,
   streaming,
+  showAttribution = true,
   runSummary,
+  digitalHumans,
+  onOpenFile,
 }: {
   message: ConversationMessage;
   asThought?: boolean;
   renderMarkdown: (value: string) => ReactNode;
   streaming: boolean;
+  showAttribution?: boolean;
   runSummary?: { duration: string | null; files: string[] };
+  /** 数字人目录：归属头像点击时取完整档案 */
+  digitalHumans: DigitalHuman[];
+  /** 在右侧面板打开本地文件 */
+  onOpenFile?: (path: string) => void;
 }) {
   const isTool = message.role === "tool";
   const reasoningText = message.reasoning?.trim() || "";
   const contentText = message.content.replace(/​/g, "");
+  const attribution = showAttribution ? message.attribution : undefined;
+  const humanRecord = attribution
+    ? digitalHumans.find((human) => human.id === attribution.digitalHumanId) || null
+    : null;
+
+  // 数字人归属：小头像内嵌在思考过程/工具行行尾，点击弹出角色信息卡
+  const attributionAvatar = attribution ? (
+    <AttributionAvatar
+      name={attribution.displayName}
+      avatar={attribution.avatarRef}
+      color={attribution.themeColor}
+      human={humanRecord}
+      taskLabel={attribution.taskLabel}
+    />
+  ) : null;
 
   if (asThought) {
     return (
@@ -991,6 +1224,7 @@ const MessageItem = memo(function MessageItem({
             <summary aria-label="AI 思考过程">
               <span className="reasoning-dot" />
               <span className="reasoning-label">思考过程</span>
+              {attributionAvatar}
               <ChevronIcon className="icon-12 chevron" />
             </summary>
             <pre>{reasoningText}</pre>
@@ -1001,8 +1235,20 @@ const MessageItem = memo(function MessageItem({
   }
 
   return (
-    <article className={`message ${message.role}`} aria-live={streaming ? "polite" : undefined}>
+    <article className={`message ${message.role}${attribution ? " attributed" : ""}`} aria-live={streaming ? "polite" : undefined}>
       <div className="message-body">
+        {attribution ? (
+          <div className="message-attribution-row">
+            <AttributionAvatar
+              name={attribution.displayName}
+              avatar={attribution.avatarRef}
+              color={attribution.themeColor}
+              human={humanRecord}
+              taskLabel={attribution.taskLabel}
+            />
+            <span className="message-attribution-name">{attribution.displayName}</span>
+          </div>
+        ) : null}
         {isTool ? (
           <div className="tool-card">
             <details className="tool-card-detail">
@@ -1013,6 +1259,7 @@ const MessageItem = memo(function MessageItem({
                     {message.status === "success" ? "完成" : message.status === "running" ? "执行中" : "失败"}
                   </span>
                 ) : null}
+                {attributionAvatar}
               </summary>
               <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
             </details>
@@ -1024,6 +1271,7 @@ const MessageItem = memo(function MessageItem({
                 <summary aria-label="AI 思考过程">
                   <span className="reasoning-dot" />
                   <span className="reasoning-label">思考过程</span>
+                  {attributionAvatar}
                   <ChevronIcon className="icon-12 chevron" />
                 </summary>
                 <pre>{reasoningText}</pre>
@@ -1040,7 +1288,9 @@ const MessageItem = memo(function MessageItem({
               </div>
             ) : null}
             {contentText ? (
-              <div className="message-content">{renderMarkdown(contentText)}</div>
+              <div className="message-content">
+                {renderMarkdown(contentText)}
+              </div>
             ) : streaming ? (
               <div className="typing-indicator" aria-label="正在生成回复">
                 <span />
@@ -1048,6 +1298,8 @@ const MessageItem = memo(function MessageItem({
                 <span />
               </div>
             ) : null}
+            {/* 产出的本地文件（md/word/excel/pdf 等）：内嵌渲染卡片，点击展开预览 */}
+            {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} /> : null}
             {runSummary ? (
               <div className="run-summary">
                 {runSummary.duration ? (
@@ -1119,7 +1371,15 @@ function MessageMeta({ message }: { message: ConversationMessage }) {
   );
 }
 
-const ActivityItem = memo(function ActivityItem({ messages }: { messages: ConversationMessage[] }) {
+const ActivityItem = memo(function ActivityItem({
+  messages,
+  showAttribution = true,
+  digitalHumans,
+}: {
+  messages: ConversationMessage[];
+  showAttribution?: boolean;
+  digitalHumans: DigitalHuman[];
+}) {
   const state = activityState(messages);
   const running = state === "running";
 
@@ -1129,7 +1389,7 @@ const ActivityItem = memo(function ActivityItem({ messages }: { messages: Conver
     return (
       <article className="message activity flat">
         <div className="message-body">
-          <ToolStep message={messages[0]} />
+          <ToolStep message={messages[0]} showAttribution={showAttribution} digitalHumans={digitalHumans} />
         </div>
       </article>
     );
@@ -1149,7 +1409,7 @@ const ActivityItem = memo(function ActivityItem({ messages }: { messages: Conver
           {running ? <div className="activity-progress" aria-hidden="true" /> : null}
           <div className="activity-list">
             {messages.map((message, index) => (
-              <ToolStep key={activityKey(message, index)} message={message} />
+              <ToolStep key={activityKey(message, index)} message={message} showAttribution={showAttribution} digitalHumans={digitalHumans} />
             ))}
           </div>
         </details>
@@ -1225,12 +1485,21 @@ function toolActionLabel(message: ConversationMessage): string {
   return toolTitle(message);
 }
 
-const ToolStep = memo(function ToolStep({ message }: { message: ConversationMessage }) {
+const ToolStep = memo(function ToolStep({
+  message,
+  showAttribution = true,
+  digitalHumans,
+}: {
+  message: ConversationMessage;
+  showAttribution?: boolean;
+  digitalHumans: DigitalHuman[];
+}) {
   const file = toolFilePath(message);
   const diff = isEditTool(message.toolName) ? toolDiffStats(message) : null;
   const failed = message.status === "error" || message.status === "failed";
   const detail = !file ? toolDetail(message) : "";
   const statusClass = failed ? " failed" : message.status === "running" ? " running" : "";
+  const attribution = showAttribution ? message.attribution : undefined;
 
   return (
     <details className={`tool-step${statusClass}`}>
@@ -1254,6 +1523,15 @@ const ToolStep = memo(function ToolStep({ message }: { message: ConversationMess
           </span>
         ) : null}
         {failed ? <span className="tool-status failed">失败</span> : null}
+        {attribution ? (
+          <AttributionAvatar
+            name={attribution.displayName}
+            avatar={attribution.avatarRef}
+            color={attribution.themeColor}
+            human={digitalHumans.find((human) => human.id === attribution.digitalHumanId) || null}
+            taskLabel={attribution.taskLabel}
+          />
+        ) : null}
       </summary>
       <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
     </details>
