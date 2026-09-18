@@ -29,6 +29,29 @@ export function fileKindOf(name: string): FileKind {
   return "unknown";
 }
 
+/** 将 Markdown 链接中的本地文件 URL 转成 read_local_* 可读取的磁盘路径。 */
+export function localFilePathFromHref(href?: string): string | null {
+  if (!href) return null;
+  const value = href.trim();
+  if (!value) return null;
+
+  try {
+    if (value.toLowerCase().startsWith("file:")) {
+      const url = new URL(value);
+      if (url.hostname && url.hostname !== "localhost") return null;
+      const path = decodeURIComponent(url.pathname);
+      return fileKindOf(path) === "unknown" ? null : path;
+    }
+    if (value.startsWith("/")) {
+      const path = decodeURIComponent(value.split(/[?#]/, 1)[0]);
+      return fileKindOf(path) === "unknown" ? null : path;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 const KIND_LABEL: Record<FileKind, string> = {
   markdown: "Markdown",
   text: "文本",
@@ -57,10 +80,18 @@ export function extractFilePaths(text: string): string[] {
   const results: string[] = [];
   const re = /(?:\/[^\s<>）)」】"'，。；]+?\.(?:md|markdown|txt|csv|docx|xlsx|xls|json|pdf|png|jpe?g|gif|webp|svg|html?))/gi;
   for (const match of text.matchAll(re)) {
-    const cleaned = match[0].replace(/[.,;:!?）)」】'"]+$/, "");
+    const cleaned = decodeLocalPath(match[0].replace(/[.,;:!?）)」】'"]+$/, ""));
     if (!results.includes(cleaned)) results.push(cleaned);
   }
   return results;
+}
+
+function decodeLocalPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
 }
 
 export const FilePreview = function FilePreview({ path, name, onClose, compact }: Props) {
@@ -144,7 +175,13 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
         ) : kind === "pdf" ? (
           <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
         ) : kind === "html" ? (
-          <iframe className="file-preview-frame" title={displayName} srcDoc={binaryToText(binary)} sandbox="allow-scripts" />
+          <iframe
+            className="file-preview-frame"
+            title={displayName}
+            srcDoc={binaryToText(binary)}
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+          />
         ) : (
           <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
         )}

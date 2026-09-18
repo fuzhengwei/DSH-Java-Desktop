@@ -1,0 +1,110 @@
+name: Release Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            runtime-target: darwin-arm64
+            rust-target: aarch64-apple-darwin
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            runtime-target: darwin-x64
+            rust-target: x86_64-apple-darwin
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            runtime-target: win32-x64
+            rust-target: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            runtime-target: linux-x64
+            rust-target: x86_64-unknown-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libjavascriptcoregtk-4.1-dev \
+            libsoup-3.0-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup macOS signing and notarization
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          (echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 --decode > certificate.p12) || (echo "${{ secrets.APPLE_CERTIFICATE }}" | base64 -D > certificate.p12)
+          security import certificate.p12 -k "$KEYCHAIN_PATH" -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -T /usr/bin/codesign -T /usr/bin/security -T /usr/bin/productsign -A
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -q "\".*\"" || (echo "No valid codesigning identity found." && exit 1)
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep -Fq "${{ secrets.APPLE_SIGNING_IDENTITY }}" || (echo "APPLE_SIGNING_IDENTITY not found." && exit 1)
+
+      - name: Verify bundled agent JAR
+        run: npm run agent:verify
+
+      - name: Prepare bundled Java runtime
+        env:
+          DSH_JRE_TARGET: ${{ matrix.runtime-target }}
+        run: npm run agent:runtime
+
+      - name: Build and publish Tauri release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: dsh-java-desktop-v__VERSION__
+          releaseName: 'DSH Java Desktop v__VERSION__'
+          releaseBody: 'This release bundles the DeepSeek Harness Java runtime and updater artifacts.'
+          releaseDraft: false
+          prerelease: false
+          args: '--target ${{ matrix.target }}'

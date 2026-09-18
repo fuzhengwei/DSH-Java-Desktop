@@ -7,6 +7,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use tauri::{Manager, RunEvent, State};
+use tauri_plugin_process::init as process_plugin;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,6 +16,10 @@ struct ServiceState {
     port: Option<u16>,
     jar_path: Option<String>,
     message: String,
+    runtime_status: String,
+    runtime_source: Option<String>,
+    java_path: Option<String>,
+    java_version: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -67,9 +72,26 @@ struct AgentRuntime {
     port: u16,
     jar_path: PathBuf,
     runtime_path: PathBuf,
+    java_runtime: JavaRuntime,
 }
 
 struct AgentRuntimeState(Mutex<Option<AgentRuntime>>);
+
+#[derive(Clone)]
+struct JavaRuntime {
+    path: PathBuf,
+    source: String,
+    version: String,
+}
+
+struct RuntimeCheck {
+    status: String,
+    source: Option<String>,
+    java_path: Option<String>,
+    java_version: Option<String>,
+    message: String,
+    runtime: Option<JavaRuntime>,
+}
 
 impl Drop for AgentRuntimeState {
     fn drop(&mut self) {
@@ -173,6 +195,42 @@ fn default_state(message: &str) -> ServiceState {
         port: None,
         jar_path: None,
         message: message.to_string(),
+        runtime_status: "unknown".to_string(),
+        runtime_source: None,
+        java_path: None,
+        java_version: None,
+    }
+}
+
+fn state_with_runtime(
+    status: &str,
+    port: Option<u16>,
+    jar_path: Option<String>,
+    message: String,
+    runtime: &RuntimeCheck,
+) -> ServiceState {
+    ServiceState {
+        status: status.to_string(),
+        port,
+        jar_path,
+        message,
+        runtime_status: runtime.status.clone(),
+        runtime_source: runtime.source.clone(),
+        java_path: runtime.java_path.clone(),
+        java_version: runtime.java_version.clone(),
+    }
+}
+
+fn running_state(runtime: &AgentRuntime, message: String) -> ServiceState {
+    ServiceState {
+        status: "running".to_string(),
+        port: Some(runtime.port),
+        jar_path: Some(runtime.jar_path.display().to_string()),
+        message,
+        runtime_status: "ready".to_string(),
+        runtime_source: Some(runtime.java_runtime.source.clone()),
+        java_path: Some(runtime.java_runtime.path.display().to_string()),
+        java_version: Some(runtime.java_runtime.version.clone()),
     }
 }
 
@@ -201,13 +259,167 @@ fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Err("未找到智能体 JAR。请先执行 npm run agent:prepare，或设置 DSH_AGENT_JAR。".to_string())
 }
 
+fn runtime_java_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "java.exe"
+    } else {
+        "java"
+    }
+}
+
+fn bundled_java_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let path = resource_dir.join("agent/runtime/bin").join(runtime_java_name());
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let development_runtime = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/agent/runtime/bin")
+        .join(runtime_java_name());
+    development_runtime.is_file().then_some(development_runtime)
+}
+
+fn parse_java_version(output: &[u8]) -> Option<(String, u32)> {
+    let text = String::from_utf8_lossy(output);
+    let raw_version = text
+        .split_once("version \"")
+        .and_then(|(_, rest)| rest.split_once('"').map(|(version, _)| version.to_string()))
+        .or_else(|| {
+            text.split_whitespace()
+                .map(|token| token.trim_matches(['"', '\'']))
+                .find(|token| token.chars().next().is_some_and(|character| character.is_ascii_digit()))
+                .map(ToString::to_string)
+        })?;
+
+    let major_text = raw_version
+        .strip_prefix("1.")
+        .unwrap_or(&raw_version)
+        .split(['.', '-'])
+        .next()?;
+    let major = major_text.parse::<u32>().ok()?;
+    Some((raw_version, major))
+}
+
+fn runtime_source_message(source: &str, version: &str, path: &str) -> String {
+    match source {
+        "bundled" => format!("已使用应用内置 Java {version} Runtime"),
+        "custom" => format!("已使用 DSH_AGENT_JAVA 指定的 Java {version}"),
+        _ => format!("未找到应用内置 Runtime，当前使用系统 Java {version}：{path}"),
+    }
+}
+
+fn missing_runtime_check(message: &str) -> RuntimeCheck {
+    RuntimeCheck {
+        status: "missing".to_string(),
+        source: None,
+        java_path: None,
+        java_version: None,
+        message: message.to_string(),
+        runtime: None,
+    }
+}
+
+fn inspect_java(path: PathBuf, source: &str) -> RuntimeCheck {
+    let java_path = path.display().to_string();
+    let output = Command::new(&path).arg("-version").output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return RuntimeCheck {
+                status: "missing".to_string(),
+                source: Some(source.to_string()),
+                java_path: (source != "system").then_some(java_path),
+                java_version: None,
+                message: "未检测到可用的 Java Runtime。发布版应包含应用内置 Java 17；请重新安装应用。".to_string(),
+                runtime: None,
+            };
+        }
+        Err(error) => {
+            return RuntimeCheck {
+                status: "invalid".to_string(),
+                source: Some(source.to_string()),
+                java_path: Some(java_path.clone()),
+                java_version: None,
+                message: format!("Java Runtime 无法启动：{java_path}（{error}）"),
+                runtime: None,
+            };
+        }
+    };
+
+    let version_output = [output.stdout.as_slice(), output.stderr.as_slice()].concat();
+    let parsed_version = parse_java_version(&version_output);
+    let Some((version, major)) = parsed_version else {
+        return RuntimeCheck {
+            status: "invalid".to_string(),
+            source: Some(source.to_string()),
+            java_path: Some(java_path.clone()),
+            java_version: None,
+            message: format!("无法识别 Java Runtime 版本：{java_path}"),
+            runtime: None,
+        };
+    };
+
+    if !output.status.success() {
+        return RuntimeCheck {
+            status: "invalid".to_string(),
+            source: Some(source.to_string()),
+            java_path: Some(java_path.clone()),
+            java_version: Some(version),
+            message: format!("Java Runtime 启动检查失败：{java_path}"),
+            runtime: None,
+        };
+    }
+
+    if major < 17 {
+        return RuntimeCheck {
+            status: "too_old".to_string(),
+            source: Some(source.to_string()),
+            java_path: Some(java_path.clone()),
+            java_version: Some(version.clone()),
+            message: format!("检测到 Java {version}，智能体服务需要 Java 17 或更高版本。"),
+            runtime: None,
+        };
+    }
+
+    RuntimeCheck {
+        status: "ready".to_string(),
+        source: Some(source.to_string()),
+        java_path: Some(java_path.clone()),
+        java_version: Some(version.clone()),
+        message: runtime_source_message(source, &version, &java_path),
+        runtime: Some(JavaRuntime {
+            path,
+            source: source.to_string(),
+            version,
+        }),
+    }
+}
+
+fn inspect_java_runtime(app: &tauri::AppHandle) -> RuntimeCheck {
+    if let Ok(path) = std::env::var("DSH_AGENT_JAVA") {
+        return inspect_java(PathBuf::from(path), "custom");
+    }
+
+    if let Some(path) = bundled_java_path(app) {
+        return inspect_java(path, "bundled");
+    }
+
+    if cfg!(debug_assertions) {
+        return inspect_java(PathBuf::from("java"), "system");
+    }
+
+    missing_runtime_check("发布包未包含应用内置 Java 17 Runtime，请重新运行 npm run agent:prepare 后构建。")
+}
+
 fn find_free_port() -> Result<u16, String> {
     TcpListener::bind(("127.0.0.1", 0))
         .map(|listener| listener.local_addr().map(|addr| addr.port()).unwrap_or(8090))
         .map_err(|error| format!("分配端口失败：{error}"))
 }
 
-fn service_snapshot(state: &State<AgentRuntimeState>) -> ServiceState {
+fn service_snapshot(app: &tauri::AppHandle, state: &State<AgentRuntimeState>) -> ServiceState {
     let mut guard = state.0.lock().unwrap();
     if let Some(runtime) = guard.as_mut() {
         if let Ok(Some(exit_status)) = runtime.child.try_wait() {
@@ -217,23 +429,23 @@ fn service_snapshot(state: &State<AgentRuntimeState>) -> ServiceState {
             if let Some(finished) = finished {
                 let _ = fs::remove_file(finished.runtime_path);
             }
-            return ServiceState {
-                status: "stopped".to_string(),
-                port: Some(port),
-                jar_path: Some(jar_path),
-                message: format!("智能体进程已退出：{exit_status}"),
-            };
+            let runtime_check = inspect_java_runtime(app);
+            return state_with_runtime(
+                "stopped",
+                Some(port),
+                Some(jar_path),
+                format!("智能体进程已退出：{exit_status}"),
+                &runtime_check,
+            );
         }
     }
 
     match guard.as_ref() {
-        Some(runtime) => ServiceState {
-            status: "running".to_string(),
-            port: Some(runtime.port),
-            jar_path: Some(runtime.jar_path.display().to_string()),
-            message: format!("HTTP 服务监听 127.0.0.1:{}", runtime.port),
-        },
-        None => default_state("智能体服务未启动"),
+        Some(runtime) => running_state(runtime, format!("HTTP 服务监听 127.0.0.1:{}", runtime.port)),
+        None => {
+            let runtime_check = inspect_java_runtime(app);
+            state_with_runtime("stopped", None, None, "智能体服务未启动".to_string(), &runtime_check)
+        }
     }
 }
 
@@ -247,16 +459,15 @@ fn start_agent(
         if let Ok(Some(_)) = runtime.child.try_wait() {
             guard.take();
         } else {
-            let port = runtime.port;
-            return Ok(ServiceState {
-                status: "running".to_string(),
-                port: Some(port),
-                jar_path: Some(runtime.jar_path.display().to_string()),
-                message: "智能体服务已在运行".to_string(),
-            });
+            return Ok(running_state(runtime, "智能体服务已在运行".to_string()));
         }
     }
 
+    let runtime_check = inspect_java_runtime(&app);
+    let java_runtime = runtime_check
+        .runtime
+        .clone()
+        .ok_or_else(|| runtime_check.message.clone())?;
     let jar_path = locate_agent_jar(&app)?;
     let port = find_free_port()?;
     let data_dir = app
@@ -279,8 +490,7 @@ fn start_agent(
         data_dir.join("deepseek-harness-java").display()
     );
 
-    let java = std::env::var("DSH_AGENT_JAVA").unwrap_or_else(|_| "java".to_string());
-    let child = Command::new(java)
+    let child = Command::new(&java_runtime.path)
         .arg(format!("-Dserver.port={port}"))
         .arg("-jar")
         .arg(&jar_path)
@@ -292,7 +502,7 @@ fn start_agent(
         .stdout(Stdio::from(log_file.try_clone().map_err(|error| format!("复制日志句柄失败：{error}"))?))
         .stderr(Stdio::from(log_file))
         .spawn()
-        .map_err(|error| format!("启动 JAR 失败：{error}"))?;
+        .map_err(|error| format!("启动 JAR 失败（Java {}）：{error}", java_runtime.version))?;
 
     if let Err(error) = persist_runtime(&runtime_path, &child, port, &jar_path) {
         let mut child = child;
@@ -306,6 +516,7 @@ fn start_agent(
         port,
         jar_path: jar_path.clone(),
         runtime_path,
+        java_runtime: java_runtime.clone(),
     });
 
     Ok(ServiceState {
@@ -313,6 +524,10 @@ fn start_agent(
         port: Some(port),
         jar_path: Some(jar_path.display().to_string()),
         message: "进程已启动，等待 HTTP 健康检查".to_string(),
+        runtime_status: runtime_check.status,
+        runtime_source: runtime_check.source,
+        java_path: runtime_check.java_path,
+        java_version: runtime_check.java_version,
     })
 }
 
@@ -323,8 +538,8 @@ fn stop_agent(state: State<AgentRuntimeState>) -> Result<ServiceState, String> {
 }
 
 #[tauri::command]
-fn agent_status(state: State<AgentRuntimeState>) -> ServiceState {
-    service_snapshot(&state)
+fn agent_status(app: tauri::AppHandle, state: State<AgentRuntimeState>) -> ServiceState {
+    service_snapshot(&app, &state)
 }
 
 #[tauri::command]
@@ -749,6 +964,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(AgentRuntimeState(Mutex::new(None)))
         .plugin(tauri_plugin_http::init())
+        .plugin(process_plugin())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");

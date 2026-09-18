@@ -4,13 +4,14 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ServerRoomView } from "../lib/digital-human-client";
 import { EChartBlock } from "./EChartBlock";
-import { FilePreview, extractFilePaths } from "./FilePreview";
+import { FilePreview, extractFilePaths, localFilePathFromHref } from "./FilePreview";
 import { XIcon } from "./icons";
 
 type Props = {
   artifact: { artifactId?: string; title: string; producerName?: string };
   room: ServerRoomView | null;
   onClose: () => void;
+  onOpenFile?: (path: string) => void;
 };
 
 function extractText(node: unknown): string {
@@ -37,6 +38,7 @@ function kindFromPath(path: string): string | null {
   if (["doc", "docx"].includes(ext)) return "word";
   if (["xls", "xlsx", "csv", "tsv"].includes(ext)) return "excel";
   if (["md", "markdown"].includes(ext)) return "markdown";
+  if (["html", "htm"].includes(ext)) return "html";
   return null;
 }
 
@@ -52,7 +54,7 @@ function parseEchartsOption(content: string): string | null {
 }
 
 /** 产物右侧滑出预览（workbuddy 式侧滑面板） */
-const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose }: Props) {
+const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose, onOpenFile }: Props) {
   // 从房间产物里按标题找完整内容
   const full = (room?.artifacts || []).find((a) => (
     artifact.artifactId ? a.artifactId === artifact.artifactId : a.title === artifact.title
@@ -70,6 +72,27 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose 
   ), [content, full?.echartsOption]);
   const previewKind = echartOption ? "echarts" : kindFromPath(filePaths[0] || "") || kind;
   const markdownComponents = useMemo(() => ({
+    a: ({ href, children }: { href?: string; children?: ReactNode }) => (
+      <a
+        href={href}
+        onClick={(event) => {
+          const localFilePath = localFilePathFromHref(href);
+          if (localFilePath && onOpenFile) {
+            event.preventDefault();
+            onOpenFile(localFilePath);
+            return;
+          }
+          if (href) {
+            event.preventDefault();
+            void invoke("open_external", { url: href }).catch((error) => {
+              console.error("打开外部链接失败:", error);
+            });
+          }
+        }}
+      >
+        {children}
+      </a>
+    ),
     pre: ({ children }: { children?: ReactNode }) => {
       const child = Array.isArray(children) ? children[0] : children;
       const className = (child as { props?: { className?: string } })?.props?.className || "";
@@ -80,7 +103,7 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose 
       }
       return <pre>{children}</pre>;
     },
-  }), []);
+  }), [onOpenFile]);
 
   useEffect(() => {
     if (filePaths.length === 0) {

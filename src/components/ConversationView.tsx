@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, XIcon } from "./icons";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
 import { AttributionAvatar } from "./AttributionAvatar";
-import { InlineFileCards } from "./FilePreview";
+import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
 import { EChartBlock } from "./EChartBlock";
 
 /** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
@@ -559,6 +559,12 @@ export default function ConversationView({
       <a
         href={href}
         onClick={(event) => {
+          const localFilePath = localFilePathFromHref(href);
+          if (localFilePath && onOpenFile) {
+            event.preventDefault();
+            onOpenFile(localFilePath);
+            return;
+          }
           if (href) {
             event.preventDefault();
             openExternal(href);
@@ -581,7 +587,7 @@ export default function ConversationView({
       }
       return <pre>{children}</pre>;
     },
-  }), []);
+  }), [onOpenFile]);
 
   const renderMarkdown = (value: string) => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
@@ -672,7 +678,7 @@ export default function ConversationView({
       const isLast = index === messages.length - 1;
       const hasAnything = Boolean(reasoning || content);
       // 跳过完全为空的消息项（流式占位除外），避免空 article 产生多余间距
-      if (!hasAnything && !(isLast && streaming)) return nextItems;
+      if (!hasAnything && !(isLast && (streaming || roomStreaming))) return nextItems;
 
       nextItems.push({
         kind: "message",
@@ -689,7 +695,7 @@ export default function ConversationView({
       && lastItem.message.role === "assistant"
       && !lastItem.message.reasoning?.trim()
       && !lastItem.message.content.trim();
-    const waitingForFirstAssistantChunk = streaming
+    const waitingForFirstAssistantChunk = (streaming || roomStreaming)
       && messages.length > 0
       && messages[messages.length - 1]?.role === "user";
     if (waitingForFirstAssistantChunk && !hasVisiblePendingAssistant) {
@@ -700,7 +706,7 @@ export default function ConversationView({
       });
     }
     return items;
-  }, [messages, streaming]);
+  }, [messages, roomStreaming, streaming]);
 
   const renderComposer = (variant: "hero" | "chat") => (
     <>
@@ -1197,7 +1203,7 @@ export default function ConversationView({
                       message={item.message}
                       asThought={item.asThought}
                       renderMarkdown={renderMarkdown}
-                      streaming={streaming}
+                      streaming={streaming || roomStreaming}
                       showAttribution={showAttribution}
                       digitalHumans={digitalHumans}
                       onOpenFile={onOpenFile}

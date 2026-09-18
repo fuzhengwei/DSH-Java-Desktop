@@ -76,6 +76,7 @@ export function DockTabBar({
         <SlidersIcon className="icon-14" />
         <span>信息</span>
       </button>
+      {artifactTabs.length > 0 ? <span className="right-dock-tab-divider" aria-hidden="true" /> : null}
       {artifactTabs.map((tab) => {
         const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
         const active = dockOpen && activeTab === tabId;

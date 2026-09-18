@@ -5,8 +5,10 @@ workspaces/
 plugins/
 src-tauri/target/
 src-tauri/gen/schemas/
-resources/agent/*.jar
+src-tauri/updater.key
 resources/agent/*.log
+resources/agent/runtime/*
+!resources/agent/runtime/.gitkeep
 data/
 .DS_Store
 Thumbs.db

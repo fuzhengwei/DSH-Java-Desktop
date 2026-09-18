@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowLeftIcon, ShieldIcon } from "./icons";
+import { ArrowLeftIcon } from "./icons";
 import PluginsSettings from "./PluginsSettings";
 import type {
   AgentServiceState,
@@ -57,6 +57,21 @@ function protocolLabel(protocol?: string) {
   if (protocol === "anthropic") return "Anthropic Messages";
   if (protocol === "ollama") return "Ollama 原生";
   return "OpenAI 兼容";
+}
+
+function runtimeSourceLabel(source: AgentServiceState["runtimeSource"]) {
+  if (source === "bundled") return "应用内置";
+  if (source === "custom") return "自定义路径";
+  if (source === "system") return "系统环境";
+  return "未检测到";
+}
+
+function runtimeStatusDetail(service: AgentServiceState | null, serviceError: string) {
+  if (!service) return serviceError || "正在检测 Java Runtime…";
+  if (service.runtimeStatus === "missing") return serviceError || "未检测到 Java 17 Runtime。发布版请重新安装应用。";
+  if (service.runtimeStatus === "too_old") return serviceError || "当前 Java 版本过低，需要 Java 17 或更高版本。";
+  if (service.runtimeStatus === "invalid") return serviceError || "Java Runtime 无法启动或版本无法识别。";
+  return service.javaPath || serviceError || "Runtime 检测正常";
 }
 
 export default function SettingsView({
@@ -177,6 +192,13 @@ export default function SettingsView({
                   <strong>{service?.jarPath || "由桌面端后台托管"}</strong>
                   <small>应用启动时自动拉起智能体服务。</small>
                 </div>
+                <div className="service-status-card wide">
+                  <span>Java Runtime</span>
+                  <strong>
+                    {service?.javaVersion ? `Java ${service.javaVersion} · ${runtimeSourceLabel(service.runtimeSource)}` : runtimeSourceLabel(service?.runtimeSource || null)}
+                  </strong>
+                  <small>{runtimeStatusDetail(service, serviceError)}</small>
+                </div>
                 <div className="service-status-card">
                   <span>运行时模型</span>
                   <strong>{availableModels.length}</strong>
@@ -193,41 +215,53 @@ export default function SettingsView({
                   <h2>对话偏好</h2>
                   <p>设置新消息使用的工具审批策略和推理强度。</p>
                 </div>
-                <ShieldIcon className="settings-panel-icon" />
+                <span className="settings-pill">新消息生效</span>
               </div>
-              <h3>工具执行审批</h3>
-              <div className="preference-list">
-                {approvalOptions.map((option) => (
-                  <label key={option.value} className={`preference-option ${approvalMode === option.value ? "active" : ""}`}>
-                    <input
-                      type="radio"
-                      name="approval-mode"
-                      checked={approvalMode === option.value}
-                      onChange={() => onApprovalModeChange(option.value)}
-                    />
-                    <div>
-                      <strong>{option.title}</strong>
-                      <span>{option.detail}</span>
-                    </div>
-                  </label>
-                ))}
+              <div className="preference-group">
+                <div className="preference-group-head">
+                  <h3>工具执行审批</h3>
+                  <span>控制智能体运行工具时的安全边界。</span>
+                </div>
+                <div className="preference-list" role="radiogroup" aria-label="工具执行审批">
+                  {approvalOptions.map((option) => (
+                    <label key={option.value} className={`preference-option ${approvalMode === option.value ? "active" : ""}`}>
+                      <input
+                        type="radio"
+                        name="approval-mode"
+                        checked={approvalMode === option.value}
+                        onChange={() => onApprovalModeChange(option.value)}
+                      />
+                      <div>
+                        <strong>{option.title}</strong>
+                        <span>{option.detail}</span>
+                      </div>
+                      <i aria-hidden="true">{approvalMode === option.value ? "当前" : ""}</i>
+                    </label>
+                  ))}
+                </div>
               </div>
-              <h3>推理强度</h3>
-              <div className="preference-list">
-                {reasoningOptions.map((option) => (
-                  <label key={option.value} className={`preference-option ${reasoningEffort === option.value ? "active" : ""}`}>
-                    <input
-                      type="radio"
-                      name="reasoning-effort"
-                      checked={reasoningEffort === option.value}
-                      onChange={() => onReasoningEffortChange(option.value)}
-                    />
-                    <div>
-                      <strong>{option.title}</strong>
-                      <span>{option.detail}</span>
-                    </div>
-                  </label>
-                ))}
+              <div className="preference-group">
+                <div className="preference-group-head">
+                  <h3>推理强度</h3>
+                  <span>在响应速度和处理复杂任务的能力之间平衡。</span>
+                </div>
+                <div className="preference-list" role="radiogroup" aria-label="推理强度">
+                  {reasoningOptions.map((option) => (
+                    <label key={option.value} className={`preference-option ${reasoningEffort === option.value ? "active" : ""}`}>
+                      <input
+                        type="radio"
+                        name="reasoning-effort"
+                        checked={reasoningEffort === option.value}
+                        onChange={() => onReasoningEffortChange(option.value)}
+                      />
+                      <div>
+                        <strong>{option.title}</strong>
+                        <span>{option.detail}</span>
+                      </div>
+                      <i aria-hidden="true">{reasoningEffort === option.value ? "当前" : ""}</i>
+                    </label>
+                  ))}
+                </div>
               </div>
             </section>
           ) : null}

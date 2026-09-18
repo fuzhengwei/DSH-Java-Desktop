@@ -8,13 +8,18 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:build": "npm run agent:prepare && tauri build",
     "agent:build": "cd ../deepseek-harness-java && mvn -DskipTests package",
     "agent:copy": "cp ../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app-0.1.6.jar resources/agent/deepseek-harness-java-app.jar",
-    "agent:prepare": "npm run agent:build && npm run agent:copy"
+    "agent:runtime": "node scripts/prepare-runtime.mjs",
+    "agent:prepare": "npm run agent:build && npm run agent:copy && npm run agent:runtime",
+    "agent:verify": "test -f resources/agent/deepseek-harness-java-app.jar"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
     "@tauri-apps/plugin-http": "^2.5.3",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "echarts": "^6.1.0",
     "mammoth": "^1.12.3",
     "react": "^19.2.0",

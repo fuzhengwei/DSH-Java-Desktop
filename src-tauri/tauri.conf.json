@@ -30,8 +30,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "resources": {
-      "../resources/agent/deepseek-harness-java-app.jar": "agent/deepseek-harness-java-app.jar"
+      "../resources/agent/deepseek-harness-java-app.jar": "agent/deepseek-harness-java-app.jar",
+      "../resources/agent/runtime": "agent/runtime"
     },
     "icon": [
       "icons/32x32.png",
@@ -40,5 +42,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  }
+  ,
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDU5ODNCNDc2MzY1OTRDMzYKUldRMlRGazJkclNEV2ZiM25JV2l4d0RKRGtKV09kc1oxdWdYamc0Uzl3SzhGd1NVb0pJK1U4VmQK",
+      "endpoints": [
+        "https://github.com/fuzhengwei/DSH-Java-Desktop/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

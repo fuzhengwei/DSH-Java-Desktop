@@ -15,7 +15,7 @@ import {
 import { buildRoomFeed, foldToolRuns } from "../lib/room-feed";
 import type { FeedRow, HumanRef, ToolRun } from "../lib/room-feed";
 import { EChartBlock } from "./EChartBlock";
-import { InlineFileCards } from "./FilePreview";
+import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
 import { ArrowDownIcon, ChevronIcon } from "./icons";
 import { AttributionAvatar } from "./AttributionAvatar";
 
@@ -32,6 +32,8 @@ type Props = {
   onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
   /** 点击正文里的文件路径：右侧文件预览 */
   onOpenFile?: (path: string) => void;
+  /** 房间刚开始执行、服务端快照尚未返回时也显示输出占位 */
+  starting?: boolean;
   /** 右侧群聊点击摘要：中间区域滚动定位到对应 seq 的条目 */
   focusRequest?: { seq: number; nonce: number } | null;
 };
@@ -267,7 +269,7 @@ function ToolGroupBlock({ group, focusSeq, forceOpen, humans }: {
 
 // ── 主视图 ───────────────────────────────────────
 
-const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, focusRequest }: Props) {
+const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, starting = false, focusRequest }: Props) {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [room, setRoom] = useState<ServerRoomView | null>(null);
   const [existingArtifactFiles, setExistingArtifactFiles] = useState<Set<string> | null>(null);
@@ -399,9 +401,18 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
 
   // 运行态上抛：输入框据此禁用，避免协作任务并发提交
   const running = activeTasks.length > 0;
+  const latestUserSeq = settledFeed.reduce(
+    (seq, item) => item.kind === "user" ? Math.max(seq, item.seq) : seq,
+    -1,
+  );
+  const hasCurrentResponse = settledFeed.some((item) => (
+    item.seq > latestUserSeq
+    && ["human-message", "tool-group", "plan", "artifact", "approval", "error"].includes(item.kind)
+  ));
+  const showTypingIndicator = (running || (starting && !room)) && !hasCurrentResponse;
   useEffect(() => {
-    onRunningChange?.(running);
-  }, [onRunningChange, running]);
+    if (room) onRunningChange?.(running);
+  }, [onRunningChange, room, running]);
 
   const scrollToBottom = () => {
     followOutputRef.current = true;
@@ -413,6 +424,27 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   }
 
   const markdownComponents = useMemo(() => ({
+    a: ({ href, children }: { href?: string; children?: ReactNode }) => (
+      <a
+        href={href}
+        onClick={(event) => {
+          const localFilePath = localFilePathFromHref(href);
+          if (localFilePath && onOpenFile) {
+            event.preventDefault();
+            onOpenFile(localFilePath);
+            return;
+          }
+          if (href) {
+            event.preventDefault();
+            void invoke("open_external", { url: href }).catch((error) => {
+              console.error("打开外部链接失败:", error);
+            });
+          }
+        }}
+      >
+        {children}
+      </a>
+    ),
     pre: ({ children }: { children?: ReactNode }) => {
       const child = Array.isArray(children) ? children[0] : children;
       const className = (child as { props?: { className?: string } })?.props?.className || "";
@@ -423,7 +455,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
       }
       return <pre>{children}</pre>;
     },
-  }), []);
+  }), [onOpenFile]);
 
   const renderMarkdown = (value: string): ReactNode => (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{value}</ReactMarkdown>
@@ -442,13 +474,14 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
         }}
       >
         <div className="conversation-column">
-      {rows.length === 0 ? (
+      {rows.length === 0 && !showTypingIndicator ? (
         <div className="room-empty">
           <div className="dh-empty-icon">💬</div>
           <p>把数字人加入后，@ 或直接描述目标开始协作</p>
         </div>
       ) : (
-        rows.map((item) => {
+        <>
+        {rows.map((item) => {
           const focusClass = focusSeq === item.seq ? " room-focus" : "";
           const dataSeq = { "data-seq": item.seq };
           if (item.kind === "tool-group") {
@@ -621,7 +654,19 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
             );
           }
           return null;
-        })
+        })}
+        {showTypingIndicator ? (
+          <article className="message assistant" aria-live="polite">
+            <div className="message-body">
+              <div className="typing-indicator" role="status" aria-label="正在生成回复">
+                <span>.</span>
+                <span>.</span>
+                <span>.</span>
+              </div>
+            </div>
+          </article>
+        ) : null}
+        </>
       )}
         </div>
       </div>

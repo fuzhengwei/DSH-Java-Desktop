@@ -12,6 +12,10 @@ export type AgentServiceState = {
   port: number | null;
   jarPath: string | null;
   message: string;
+  runtimeStatus: "unknown" | "missing" | "too_old" | "invalid" | "ready";
+  runtimeSource: "bundled" | "system" | "custom" | null;
+  javaPath: string | null;
+  javaVersion: string | null;
 };
 
 export type ApiEnvelope<T> = {

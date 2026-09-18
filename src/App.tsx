@@ -11,6 +11,7 @@ import { ParticipantPicker } from "./components/ParticipantPicker";
 import RoomCollaborationView from "./components/RoomCollaborationView";
 import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
+import UpdatePrompt from "./components/UpdatePrompt";
 import { FilePreview } from "./components/FilePreview";
 import { truncateSessionTitle } from "./lib/text";
 import {
@@ -1044,8 +1045,8 @@ export default function App() {
     let lastError = "智能体服务启动失败";
     try {
       const existingState = await invoke<AgentServiceState>("agent_status");
+      setService(existingState);
       if (existingState.status === "running" && existingState.port) {
-        setService(existingState);
         await waitForService(existingState.port);
         setServiceStatus("running");
         await loadWorkspaceData(existingState.port, focusModelsIfEmpty);
@@ -2470,6 +2471,7 @@ export default function App() {
                 onRunningChange={setRoomRunning}
                 onOpenArtifact={openArtifactTab}
                 onOpenFile={openFileTab}
+                starting={roomStreamingEffective}
                 focusRequest={focusRequest}
               />
             ) : null}
@@ -2534,6 +2536,7 @@ export default function App() {
                 artifact={{ artifactId: activeDockTab.slice(9), title: artifactTabs.find((tab) => tab.id === activeDockTab.slice(9))?.label || activeDockTab.slice(9) }}
                 room={serverRoom}
                 onClose={() => closeArtifactTab(activeDockTab)}
+                onOpenFile={openFileTab}
               />
             ) : activeDockTab.startsWith("file:") ? (
               <FilePreview
@@ -2562,6 +2565,7 @@ export default function App() {
           if (!wizardProjectPath) setActiveView("digital-humans");
         }}
       />
+      <UpdatePrompt />
       <ParticipantPicker
         open={pickerOpen}
         humans={digitalHumans}
