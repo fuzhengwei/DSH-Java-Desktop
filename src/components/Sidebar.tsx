@@ -5,6 +5,7 @@ import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./
 import UpdateStatusBadge from "./UpdateStatusBadge";
 import {
   ChevronIcon,
+  ChatDotsIcon,
   EditIcon,
   FolderIcon,
   PlusIcon,
@@ -20,6 +21,7 @@ const SESSION_PAGE_SIZE = 10;
 
 type SidebarProps = {
   activeView: WorkspaceView;
+  collapsed?: boolean;
   activeSessionId: string;
   activeProjectPath: string;
   streaming?: boolean;
@@ -113,8 +115,6 @@ function projectName(project: WorkspaceEntry): string {
   return project.name || project.path.split("/").filter(Boolean).pop() || "项目";
 }
 
-/** 移除名称中的 emoji 与特殊符号变体，避免在部分字体下渲染为占位框。 */
-
 function sessionTime(session: SessionSummary): string {
   const value = session.updatedAt || session.createdAt;
   if (!value) return "";
@@ -130,6 +130,7 @@ function sessionTime(session: SessionSummary): string {
 
 export default function Sidebar({
   activeView,
+  collapsed = false,
   activeSessionId,
   activeProjectPath,
   streaming = false,
@@ -489,7 +490,7 @@ export default function Sidebar({
     );
   };
   return (
-    <aside className={`sidebar${dragging ? " dragging-sidebar" : ""}`}>
+    <aside className={`sidebar${dragging ? " dragging-sidebar" : ""}${collapsed ? " collapsed" : ""}`}>
       {dragPreview ? (
         <div
           className="sidebar-drag-preview"
@@ -516,7 +517,7 @@ export default function Sidebar({
       />
       <div className="brand" title="DSH Java Desktop">
         <img className="brand-mark" src="/dsh-icon.png?v=20260917" alt="DSH" />
-        <div>
+        <div className="brand-copy">
           <div className="brand-title">
             DSH
             <UpdateStatusBadge />
@@ -532,6 +533,7 @@ export default function Sidebar({
         </button>
       </nav>
 
+      {!collapsed ? (
       <div className="sidebar-scroll">
         <div className="section-heading-row">
           <div className="section-heading">项目</div>
@@ -582,10 +584,22 @@ export default function Sidebar({
                     title={expanded ? "折叠；拖动可排序" : "展开；拖动可排序"}
                   >
                     <FolderIcon className="icon-16" />
-                    <span>{sanitizeDisplayName(projectName(project))}</span>
+                    <span>{projectName(project)}</span>
                   </button>
                   <ProjectHumanStack humans={humansOfProject} />
                   {projectSessions.length > 0 ? <span className="nav-count">{projectSessions.length}</span> : null}
+                  <button
+                    type="button"
+                    className="icon-button project-chat-button"
+                    title="在当前项目创建新对话"
+                    aria-label={`在 ${sanitizeDisplayName(projectName(project))} 创建新对话`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onNewConversation(project);
+                    }}
+                  >
+                    <ChatDotsIcon className="icon-14" />
+                  </button>
                   <ProjectRowMenu
                     triggerRef={(node) => projectRowRefs.current.set(project.path, node)}
                     onNewConversation={() => onNewConversation(project)}
@@ -656,6 +670,7 @@ export default function Sidebar({
           </div>
         </div>
       </div>
+      ) : null}
 
       <div className="sidebar-footer">
         <button className={activeView === "digital-humans" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("digital-humans")}>

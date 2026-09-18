@@ -38,16 +38,19 @@ export async function readHealth(port: number): Promise<boolean> {
 
 export async function waitForService(
   port: number,
-  timeoutMs = 60_000,
+  timeoutMs = 45_000,
+  onTick?: (elapsedMs: number, timeoutMs: number) => void,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
   while (Date.now() < deadline) {
     if (await readHealth(port)) {
       return;
     }
+    onTick?.(Date.now() - startedAt, timeoutMs);
     await new Promise((resolve) => setTimeout(resolve, 400));
   }
-  throw new Error("智能体服务健康检查超时");
+  throw new Error(`智能体服务健康检查超时（已等待 ${Math.round(timeoutMs / 1000)} 秒）`);
 }
 
 async function request<T>(port: number, path: string, init?: RequestInit): Promise<T> {
@@ -273,6 +276,8 @@ export async function streamAgentMessage(
     approvalMode?: string;
     reasoningEffort?: string;
     cwd?: string;
+    /** 图片附件 data URL，用于多模态模型识别图片内容 */
+    images?: string[];
     /** 项目下授权的工程目录，workspace-write 沙箱据此放行 */
     sandboxRoots?: string[];
   },

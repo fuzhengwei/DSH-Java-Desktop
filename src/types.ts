@@ -42,12 +42,26 @@ export type WorkspaceEntry = {
   parentPath?: string;
 };
 
+export type ResourcePluginKind = "word" | "excel" | "md" | "echart";
+
+export type ComposerResource = {
+  id: string;
+  kind: "folder" | "file" | "project" | "plugin";
+  name: string;
+  path?: string;
+  pluginKind?: ResourcePluginKind;
+  mimeType?: string;
+  dataUrl?: string;
+};
+
 export type ConversationMessage = {
   role: string;
   content: string;
   reasoning?: string;
   /** 用户消息中 @ 提及的工程（本地缓存与展示用） */
   mentions?: WorkspaceEntry[];
+  /** 用户消息中通过 + 添加的资源（本地缓存与展示用） */
+  resources?: ComposerResource[];
   toolName?: string;
   callId?: string;
   arguments?: Record<string, unknown>;

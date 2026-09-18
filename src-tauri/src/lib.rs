@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
@@ -39,6 +39,14 @@ struct GitBranchesState {
 struct WorkspaceSelection {
     name: String,
     path: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalFileSelection {
+    name: String,
+    path: String,
+    mime_type: String,
 }
 
 #[derive(Clone, Serialize, Default)]
@@ -959,6 +967,50 @@ fn pick_local_directory() -> Vec<WorkspaceSelection> {
         .collect()
 }
 
+#[tauri::command]
+fn pick_local_file() -> Option<LocalFileSelection> {
+    rfd::FileDialog::new()
+        .set_title("选择资源文件")
+        .pick_file()
+        .map(|selected| {
+            let path = selected.to_string_lossy().to_string();
+            let name = selected
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            let mime_type = mime_type_for_path(&selected);
+            LocalFileSelection { name, path, mime_type }
+        })
+}
+
+fn mime_type_for_path(path: &Path) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "md" | "markdown" => "text/markdown",
+        "txt" => "text/plain",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "pdf" => "application/pdf",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        _ => "application/octet-stream",
+    }
+    .to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -966,7 +1018,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(process_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowLeftIcon } from "./icons";
+import { useState, type ReactNode } from "react";
+import { ArrowLeftIcon, SettingsIcon, ShieldIcon, SlidersIcon } from "./icons";
 import PluginsSettings from "./PluginsSettings";
 import type {
   AgentServiceState,
@@ -66,6 +66,14 @@ function runtimeSourceLabel(source: AgentServiceState["runtimeSource"]) {
   return "未检测到";
 }
 
+function PuzzleIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M9.5 4.5h5v3.2a2.3 2.3 0 1 0 2.6 0V4.5h2.4v5h-3.2a2.3 2.3 0 1 1 0 2.6h3.2v7.4h-5v-3.2a2.3 2.3 0 1 0-2.6 0v3.2H4.5v-5h3.2a2.3 2.3 0 1 1 0-2.6H4.5V4.5z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function runtimeStatusDetail(service: AgentServiceState | null, serviceError: string) {
   if (!service) return serviceError || "正在检测 Java Runtime…";
   if (service.runtimeStatus === "missing") return serviceError || "未检测到 Java 17 Runtime。发布版请重新安装应用。";
@@ -122,45 +130,78 @@ export default function SettingsView({
     if (saved) closeForm();
   };
 
-  const sections: Array<{ id: SettingsSection; title: string; description: string; badge?: string }> = [
-    { id: "models", title: "模型设置", description: "渠道、API Key 与激活", badge: String(modelSettings.length) },
-    { id: "plugins", title: "插件管理", description: "安装、启停与参数配置" },
-    { id: "service", title: "智能体服务", description: "连接状态与本地 Runtime" },
-    { id: "preferences", title: "对话偏好", description: "审批、沙箱与推理" },
+  const sections: Array<{ id: SettingsSection; title: string; description: string; badge?: string; icon: ReactNode; group: string }> = [
+    { id: "models", title: "模型", description: "管理模型渠道、API Key，切换当前使用的模型", badge: String(modelSettings.length), icon: <SlidersIcon className="icon-16" />, group: "AI 能力" },
+    { id: "plugins", title: "插件", description: "安装插件包、上传 JAR，配置插件参数", icon: <PuzzleIcon className="icon-16" />, group: "扩展" },
+    { id: "service", title: "服务", description: "查看本地智能体服务连接状态与 Java Runtime", icon: <SettingsIcon className="icon-16" />, group: "系统" },
+    { id: "preferences", title: "偏好", description: "工具执行审批策略、沙箱边界与推理强度", icon: <ShieldIcon className="icon-16" />, group: "系统" },
   ];
-  const activeTitle = sections.find((section) => section.id === activeSection)?.title || "设置";
+  const activeMeta = sections.find((section) => section.id === activeSection) || sections[0];
+  const activeTitle = activeMeta.title;
+  const groupedSections = sections.reduce<Array<{ group: string; items: typeof sections }>>((groups, section) => {
+    const group = groups.find((item) => item.group === section.group);
+    if (group) group.items.push(section);
+    else groups.push({ group: section.group, items: [section] });
+    return groups;
+  }, []);
 
   return (
-    <div className="settings-page">
-      <header className="settings-page-header">
-        <button className="settings-back" onClick={onBack}>
-          <ArrowLeftIcon className="icon-16" />
-          <span>返回应用</span>
-        </button>
-        <div className="settings-page-title">
-          <h1>设置</h1>
-          <p>{activeTitle}</p>
-        </div>
-      </header>
-
-      {error ? <div className="settings-page-error">{error}</div> : null}
-
+    <div className="settings-page settings-modern">
       <div className="settings-page-body">
         <nav className="settings-nav" aria-label="设置目录">
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              className={activeSection === section.id ? "settings-nav-item active" : "settings-nav-item"}
-              onClick={() => onSectionChange(section.id)}
-            >
-              <strong>{section.title}</strong>
-              <span>{section.description}</span>
-              {section.badge ? <i>{section.badge}</i> : null}
-            </button>
+          <button className="settings-back" onClick={onBack}>
+            <ArrowLeftIcon className="icon-16" />
+            <span>返回应用</span>
+          </button>
+          {error ? <div className="settings-page-error">{error}</div> : null}
+          <div className="settings-nav-profile">
+            <div className="settings-nav-avatar">DSH</div>
+            <div>
+              <strong>DSH Java Desktop</strong>
+              <span>{serviceStatus === "running" ? "本地服务已连接" : serviceStatus === "starting" ? "服务启动中" : "等待服务连接"}</span>
+            </div>
+          </div>
+          {groupedSections.map((group) => (
+            <div key={group.group} className="settings-nav-group">
+              <div className="settings-nav-group-title">{group.group}</div>
+              {group.items.map((section) => (
+                <button
+                  key={section.id}
+                  className={activeSection === section.id ? "settings-nav-item active" : "settings-nav-item"}
+                  onClick={() => onSectionChange(section.id)}
+                >
+                  <span className="settings-nav-icon" aria-hidden="true">{section.icon}</span>
+                  <span className="settings-nav-copy">
+                    <strong>{section.title}</strong>
+                    <span>{section.description}</span>
+                  </span>
+                  {section.badge ? <i>{section.badge}</i> : null}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
 
         <main className="settings-content">
+          <div className="settings-content-toolbar">
+            <div className="settings-content-heading">
+              <span className="settings-kicker">Settings / {activeMeta.group}</span>
+              <h2>{activeTitle}</h2>
+              <p>{activeMeta.description}</p>
+            </div>
+            <div className="settings-content-actions">
+              {activeSection === "models" ? (
+                <>
+                  <button className="ghost-action compact" onClick={onDiscover} disabled={syncingModels}>{syncingModels ? "同步中…" : "同步模型"}</button>
+                  <button className="primary-action compact settings-add-model-fixed" onClick={() => setShowForm(true)}>添加模型</button>
+                </>
+              ) : null}
+              {activeSection === "service" ? (
+                <button className="primary-action compact" onClick={onReconnect} disabled={serviceStatus === "starting"}>{serviceStatus === "starting" ? "连接中…" : "重新连接"}</button>
+              ) : null}
+            </div>
+          </div>
+
           {activeSection === "plugins" ? (
             <PluginsSettings servicePort={service?.port ?? null} />
           ) : null}
@@ -172,9 +213,6 @@ export default function SettingsView({
                   <h2>智能体服务连接</h2>
                   <p>服务由桌面端自动托管。模型渠道和凭据在「模型设置」中管理。</p>
                 </div>
-                <button className="ghost-action compact" onClick={onReconnect} disabled={serviceStatus === "starting"}>
-                  {serviceStatus === "starting" ? "连接中…" : "重新连接"}
-                </button>
               </div>
               <div className="service-status-grid">
                 <div className="service-status-card">
@@ -274,7 +312,9 @@ export default function SettingsView({
                     <h2>模型配置</h2>
                     <p>添加、启用、停用、切换或删除模型渠道。</p>
                   </div>
-                  <span className="settings-pill">{modelSettings.length}</span>
+                  <div className="settings-panel-actions">
+                    <span className="settings-pill">{modelSettings.length}</span>
+                  </div>
                 </div>
                 <div className="model-list">
                   {modelSettings.length === 0 ? <div className="empty-card">还没有模型配置</div> : null}

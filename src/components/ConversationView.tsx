@@ -1,9 +1,9 @@
-import type { ApprovalMode, AvailableModel, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
+import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDownIcon, ChevronIcon, CopyIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, XIcon } from "./icons";
+import { ArrowDownIcon, ChevronIcon, CopyIcon, FileIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, ToolIcon, XIcon } from "./icons";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
 import { AttributionAvatar } from "./AttributionAvatar";
 import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
@@ -37,7 +37,6 @@ type ConversationViewProps = {
   onSelectProject: (project: WorkspaceEntry) => void;
   onSelectDefaultWorkspace: () => void;
   onSwitchProjectBranch: (project: WorkspaceEntry, branch: string) => void;
-  onCreateSession?: () => void;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   /** 输入框中 @ 引用的工程（App 侧用于拼上下文与消息展示） */
@@ -72,7 +71,32 @@ type ConversationViewProps = {
   onOpenFile?: (path: string) => void;
   /** 房间协作运行中：禁用输入与发送（总体停止前不可继续） */
   roomStreaming?: boolean;
+  resources: ComposerResource[];
+  onResourcesChange: (resources: ComposerResource[]) => void;
+  onPickResourceFolder: () => void;
+  onPickResourceFile: () => void;
+  onAddResourceProject: (project: WorkspaceEntry) => void;
+  onAddResourcePlugin: (kind: ComposerResource["pluginKind"]) => void;
 };
+
+const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
+  word: "Word",
+  excel: "Excel",
+  md: "MD",
+  echart: "EChart",
+};
+
+function resourceLabel(resource: ComposerResource): string {
+  if (resource.kind === "plugin" && resource.pluginKind) return PLUGIN_RESOURCE_LABELS[resource.pluginKind];
+  return resource.name;
+}
+
+function resourceKindLabel(resource: ComposerResource): string {
+  if (resource.kind === "folder") return "文件夹";
+  if (resource.kind === "file") return resource.mimeType?.startsWith("image/") ? "图片" : "文件";
+  if (resource.kind === "project") return "项目";
+  return "插件";
+}
 
 type TimelineItem =
   | { kind: "message"; key: string; message: ConversationMessage; asThought?: boolean }
@@ -270,7 +294,6 @@ export default function ConversationView({
   onSelectProject,
   onSelectDefaultWorkspace,
   onSwitchProjectBranch,
-  onCreateSession,
   onDraftChange,
   onSend,
   mentions: mentionsProp,
@@ -297,6 +320,12 @@ export default function ConversationView({
   roomContent = null,
   onOpenFile,
   roomStreaming = false,
+  resources,
+  onResourcesChange,
+  onPickResourceFolder,
+  onPickResourceFile,
+  onAddResourceProject,
+  onAddResourcePlugin,
 }: ConversationViewProps) {
   // 房间协作模式下即使会话消息为空也按对话态渲染（消息由事件流提供）
   const isHome = messages.length === 0 && !roomContent;
@@ -319,6 +348,8 @@ export default function ConversationView({
   };
   const draftBackupRef = useRef("");
   const [localDraft, setLocalDraft] = useState(draft);
+  const [resourceMenuOpen, setResourceMenuOpen] = useState(false);
+  const resourceMenuRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef(localDraft);
   const lastCommittedDraftRef = useRef(draft);
   draftRef.current = localDraft;
@@ -336,6 +367,33 @@ export default function ConversationView({
     lastCommittedDraftRef.current = draft;
     setLocalDraft(draft);
   }, [draft]);
+
+  useEffect(() => {
+    if (!resourceMenuOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (resourceMenuRef.current && !resourceMenuRef.current.contains(event.target as Node)) {
+        setResourceMenuOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setResourceMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [resourceMenuOpen]);
+
+  const runResourceAction = (action: () => void) => {
+    setResourceMenuOpen(false);
+    action();
+  };
+
+  const removeResource = (resource: ComposerResource) => {
+    onResourcesChange(resources.filter((item) => item.id !== resource.id));
+  };
   const sentHistoryRef = useRef(sentHistory);
   sentHistoryRef.current = sentHistory;
   const historyBrowsing = historyCursor < sentHistory.length;
@@ -827,6 +885,26 @@ export default function ConversationView({
           ))}
         </div>
       ) : null}
+      {resources.length > 0 ? (
+        <div className="resource-banner" aria-label="已添加资源">
+          {resources.map((resource) => (
+            <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
+              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <ToolIcon className="icon-12" />}
+              <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
+              <span className="resource-chip-name">{resourceLabel(resource)}</span>
+              <button
+                type="button"
+                className="resource-banner-remove"
+                title={`移除 ${resourceLabel(resource)}`}
+                disabled={streaming}
+                onClick={() => removeResource(resource)}
+              >
+                <XIcon className="icon-10" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : null}
         <div
           className="composer-input"
           onMouseDown={(event) => {
@@ -980,16 +1058,53 @@ export default function ConversationView({
         <div className="prompt-toolbar">
           <div className="prompt-leading">
             <div className="composer-project">
-              <button
-                className="composer-project-add"
-                type="button"
-                title="创建会话"
-                aria-label="创建会话"
-                disabled={streaming}
-                onClick={onCreateSession}
-              >
-                <PlusIcon className="icon-15" />
-              </button>
+              <div className="resource-add" ref={resourceMenuRef}>
+                <button
+                  className="composer-project-add"
+                  type="button"
+                  title="加资源"
+                  aria-label="加资源"
+                  aria-haspopup="menu"
+                  aria-expanded={resourceMenuOpen}
+                  disabled={streaming}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setResourceMenuOpen((open) => !open);
+                  }}
+                >
+                  <PlusIcon className="icon-15" />
+                </button>
+                {resourceMenuOpen ? (
+                  <div className="resource-menu" role="menu">
+                    <div className="resource-menu-title">资源</div>
+                    <button type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(onPickResourceFolder)}>
+                      <FolderIcon className="icon-14" />
+                      文件夹
+                    </button>
+                    <button type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(onPickResourceFile)}>
+                      <FileIcon className="icon-14" />
+                      文件（图片、MD 等）
+                    </button>
+                    <div className="resource-menu-subtitle">项目</div>
+                    {(activeProject ? [activeProject] : []).concat(projects.filter((project) => (
+                      (!project.local || !project.parentPath) && project.path !== activeProject?.path
+                    ))).slice(0, 6).map((project) => (
+                      <button key={project.path} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourceProject(project))}>
+                        <FolderIcon className="icon-14" />
+                        <span className="resource-menu-name">{project.name}</span>
+                      </button>
+                    ))}
+                    <div className="resource-menu-divider" />
+                    <div className="resource-menu-title">插件</div>
+                    {(["word", "excel", "md", "echart"] as const).map((kind) => (
+                      <button key={kind} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourcePlugin(kind))}>
+                        <ToolIcon className="icon-14" />
+                        {PLUGIN_RESOURCE_LABELS[kind]}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               {/* 数字人配置入口已收敛到侧边栏项目行；输入框不再放数字人按钮 */}
               <div className="project-control" title={activeProject?.path || "选择项目"}>
                 <FolderIcon className="icon-14" />
@@ -1130,15 +1245,15 @@ export default function ConversationView({
             <button
               className={(streaming || roomStreaming) ? "composer-action stop" : "composer-action send"}
               onClick={(streaming || roomStreaming) ? onStopGeneration : sendFromComposer}
-              disabled={!streaming && !roomStreaming && (!serviceReady || !localDraft.trim())}
+              disabled={!streaming && !roomStreaming && (!serviceReady || (!localDraft.trim() && resources.length === 0))}
               title={streaming
                 ? "停止生成"
                 : roomStreaming
                   ? "停止数字人协作"
                   : !serviceReady
                     ? "智能体服务未就绪"
-                    : !localDraft.trim()
-                      ? "请先输入消息"
+                    : !localDraft.trim() && resources.length === 0
+                      ? "请先输入消息或添加资源"
                       : "发送"}
               aria-label={streaming ? "停止生成" : roomStreaming ? "停止数字人协作" : "发送"}
             >
@@ -1344,6 +1459,17 @@ const MessageItem = memo(function MessageItem({
                   <span key={project.path} className="mention-chip static" title={project.path}>
                     <FolderIcon className="icon-12" />
                     <span className="mention-chip-name">{project.name}</span>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {message.role === "user" && message.resources && message.resources.length > 0 ? (
+              <div className="message-mentions">
+                {message.resources.map((resource) => (
+                  <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
+                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <ToolIcon className="icon-12" />}
+                    <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
+                    <span className="resource-chip-name">{resourceLabel(resource)}</span>
                   </span>
                 ))}
               </div>

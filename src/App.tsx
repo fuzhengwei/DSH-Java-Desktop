@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ConversationView from "./components/ConversationView";
 import Sidebar, { type WorkspaceView } from "./components/Sidebar";
@@ -12,6 +12,7 @@ import RoomCollaborationView from "./components/RoomCollaborationView";
 import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
 import { FilePreview } from "./components/FilePreview";
+import { ArrowLeftIcon, PlusIcon, RefreshIcon, UsersIcon } from "./components/icons";
 import { truncateSessionTitle } from "./lib/text";
 import {
   activateModelSetting,
@@ -53,6 +54,7 @@ import type {
   AgentServiceState,
   ApprovalMode,
   AvailableModel,
+  ComposerResource,
   ConversationMessage,
   DigitalHuman,
   ModelDraft,
@@ -74,6 +76,24 @@ const emptyModelDraft: ModelDraft = {
   enabled: true,
 };
 
+const SIDEBAR_DEFAULT_WIDTH = 306;
+const SIDEBAR_COLLAPSED_WIDTH = 68;
+const SIDEBAR_COLLAPSE_THRESHOLD = 132;
+const SIDEBAR_MIN_WIDTH = 236;
+const SIDEBAR_MAX_WIDTH = 460;
+
+function readSidebarWidth(): number {
+  const stored = Number(localStorage.getItem("dsh-sidebar-width"));
+  if (!Number.isFinite(stored) || stored <= 0) return SIDEBAR_DEFAULT_WIDTH;
+  if (stored <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_COLLAPSED_WIDTH;
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, stored));
+}
+
+function normalizeSidebarWidth(width: number): number {
+  if (width <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_COLLAPSED_WIDTH;
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+}
+
 type ProjectEditTarget = {
   path: string;
   name: string;
@@ -84,6 +104,55 @@ type GitBranchesState = {
   current: string;
   branches: string[];
 };
+
+type LocalFileSelection = {
+  name: string;
+  path: string;
+  mimeType: string;
+};
+
+const RESOURCE_PLUGIN_PROMPTS: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
+  word: "按 Word 文档交付，优先生成或编辑 .docx 内容。",
+  excel: "按 Excel 表格交付，优先生成或编辑 .xlsx 内容。",
+  md: "按 Markdown 文档交付，优先生成或编辑 .md 内容。",
+  echart: "按 ECharts 图表交付，优先生成可渲染的 echarts 代码块或图表配置。",
+};
+
+function resourceDisplayName(resource: ComposerResource): string {
+  if (resource.kind === "plugin" && resource.pluginKind) return resource.pluginKind.toUpperCase();
+  return resource.name;
+}
+
+function parentDir(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index > 0 ? normalized.slice(0, index) : normalized;
+}
+
+function resourcesHiddenContext(resources: ComposerResource[]): string {
+  if (resources.length === 0) return "";
+  const lines = resources.map((resource) => {
+    if (resource.kind === "folder") return `- 文件夹：${resource.name} (${resource.path})`;
+    if (resource.kind === "file") {
+      const multimodal = resource.mimeType?.startsWith("image/") ? "；图片已作为多模态附件提供，请先识别图片内容" : "";
+      return `- 文件：${resource.name} (${resource.path || "无本地路径"})${resource.mimeType ? `；类型：${resource.mimeType}` : ""}${multimodal}`;
+    }
+    if (resource.kind === "project") return `- 项目：${resource.name} (${resource.path})`;
+    const prompt = resource.pluginKind ? RESOURCE_PLUGIN_PROMPTS[resource.pluginKind] : "按指定插件类型交付内容。";
+    return `- 插件：${resourceDisplayName(resource)}；${prompt}`;
+  });
+  return `[用户添加的资源]\n${lines.join("\n")}\n\n[重要] 文件夹/文件/项目资源均已由用户授权使用。若资源是图片，请使用多模态能力识别图片内容；若资源是插件，请按插件类型明确产出目标文件内容。`;
+}
+
+function dedupeResources(resources: ComposerResource[]): ComposerResource[] {
+  const seen = new Set<string>();
+  return resources.filter((resource) => {
+    const key = `${resource.kind}:${resource.path || resource.pluginKind || resource.id}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 function readDraftSessions(): SessionSummary[] {
   try {
@@ -189,6 +258,21 @@ function readSessionOrder(): Record<string, string[]> {
     return next;
   } catch {
     return {};
+  }
+}
+
+function readLocalProjects(): WorkspaceEntry[] {
+  try {
+    const value = JSON.parse(localStorage.getItem("dsh-local-projects") || "[]");
+    if (!Array.isArray(value)) return [];
+    return value.filter((project): project is WorkspaceEntry => (
+      project
+      && typeof project === "object"
+      && typeof (project as WorkspaceEntry).path === "string"
+      && Boolean((project as WorkspaceEntry).path)
+    ));
+  } catch {
+    return [];
   }
 }
 
@@ -418,6 +502,21 @@ function stripInvisibleChars(value: string): string {
   return value.replace(/​/g, "");
 }
 
+function buildOutgoingMessage(draft: string, resources: ComposerResource[], projects: WorkspaceEntry[]): string {
+  const cleanDraft = stripInvisibleChars(draft).trim();
+  const resourceContext = resourcesHiddenContext(resources);
+  const projectContext = projects.length > 0 ? projects
+    .map((project) => `- ${project.name}: ${project.path}`)
+    .join("\n") : "";
+  const hiddenBlocks = [
+    projectContext ? `[当前选择的工程]\n${projectContext}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${projects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。` : "",
+    resourceContext,
+  ].filter(Boolean);
+  return hiddenBlocks.length > 0
+    ? `${cleanDraft || "请根据我添加的资源完成任务。"}\n\n${HIDDEN_CONTEXT_OPEN}\n${hiddenBlocks.join("\n\n")}\n${HIDDEN_CONTEXT_CLOSE}`
+    : cleanDraft;
+}
+
 function visibleMessageText(value: string): string {
   let text = stripInvisibleChars(value);
   const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
@@ -477,8 +576,12 @@ function messagesFromPayload(payload: unknown): ConversationMessage[] | null {
 
 export default function App() {
   const [activeView, setActiveView] = useState<WorkspaceView>("conversation");
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const [sidebarResizing, setSidebarResizing] = useState(false);
   const [service, setService] = useState<AgentServiceState | null>(null);
   const [serviceStatus, setServiceStatus] = useState<"checking" | "stopped" | "running" | "starting">("checking");
+  const [serviceBoot, setServiceBoot] = useState<{ stage: string; progress: number }>({ stage: "正在检查智能体服务状态", progress: 6 });
+  const [dismissedBoot, setDismissedBoot] = useState(false);
   const [error, setError] = useState("");
   const [serviceError, setServiceError] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
@@ -488,7 +591,7 @@ export default function App() {
   const [projects, setProjects] = useState<WorkspaceEntry[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState(readActiveProjectPath);
   const [sessionProjectMap, setSessionProjectMap] = useState<Record<string, string>>(readSessionProjectMap);
-  const [localProjects, setLocalProjects] = useState<WorkspaceEntry[]>([]);
+  const [localProjects, setLocalProjects] = useState<WorkspaceEntry[]>(readLocalProjects);
   const [projectOrder, setProjectOrder] = useState<string[]>(readProjectOrder);
   const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(readSessionOrder);
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
@@ -503,6 +606,7 @@ export default function App() {
   const [savingModel, setSavingModel] = useState(false);
   const [syncingModels, setSyncingModels] = useState(false);
   const [draft, setDraft] = useState("");
+  const [draftResources, setDraftResources] = useState<ComposerResource[]>([]);
   const [promptHistory, setPromptHistory] = useState<string[]>(readPromptHistory);
   const appendPromptHistory = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -577,6 +681,33 @@ export default function App() {
 
   const port = service?.port ?? null;
   const serviceReady = serviceStatus === "running" && Boolean(port);
+  const sidebarCollapsed = sidebarWidth <= SIDEBAR_COLLAPSE_THRESHOLD;
+  const appShellStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties & Record<string, string>;
+
+  const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    setSidebarResizing(true);
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setSidebarWidth(normalizeSidebarWidth(startWidth + moveEvent.clientX - startX));
+    };
+    const handlePointerUp = () => {
+      setSidebarResizing(false);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerUp);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerUp);
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-sidebar-width", String(sidebarWidth));
+  }, [sidebarWidth]);
   const combinedSessions = useMemo(() => {
     // 同一会话在服务端和 draft 里可能分别用 sessionId / agentId 记录，
     // 去重时要检查任一 ID 是否已存在，避免重复出现
@@ -936,7 +1067,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    setLocalProjects(JSON.parse(localStorage.getItem("dsh-local-projects") || "[]"));
+    setLocalProjects(readLocalProjects());
     // 启动时如果 activeSessionId 不在草稿列表里（比如上次是点项目/会话后直接退出的，
     // 或 localStorage 被清过但 active id 还留着），补登记一条归属默认工作区的草稿。
     // 否则这个 id 在侧栏里不可见，「新对话」的复用判断也找不到它，点了就像没反应。
@@ -1041,30 +1172,48 @@ export default function App() {
   const connectService = useCallback(async (focusModelsIfEmpty = false) => {
     setServiceStatus("starting");
     setServiceError("");
+    setDismissedBoot(false);
+    setServiceBoot({ stage: "正在检查智能体服务状态", progress: 6 });
     let lastError = "智能体服务启动失败";
     try {
       const existingState = await invoke<AgentServiceState>("agent_status");
       setService(existingState);
       if (existingState.status === "running" && existingState.port) {
-        await waitForService(existingState.port);
+        setServiceBoot({ stage: "服务进程已在运行，正在等待接口就绪", progress: 45 });
+        await waitForService(existingState.port, 45_000, (elapsed, timeout) => {
+          setServiceBoot({
+            stage: "正在等待智能体服务接口就绪",
+            progress: Math.min(92, 45 + Math.round((elapsed / timeout) * 47)),
+          });
+        });
+        setServiceBoot({ stage: "正在加载工作区数据", progress: 96 });
         setServiceStatus("running");
         await loadWorkspaceData(existingState.port, focusModelsIfEmpty);
         return;
       }
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
+          setServiceBoot({ stage: "正在检查 Java Runtime 并定位智能体 JAR", progress: 14 });
           const state = await invoke<AgentServiceState>("start_agent");
           if (!state.port) throw new Error(state.message || "服务启动失败");
           setService(state);
-          await waitForService(state.port);
+          setServiceBoot({ stage: "智能体进程已拉起，正在等待服务就绪", progress: 30 });
+          await waitForService(state.port, 45_000, (elapsed, timeout) => {
+            setServiceBoot({
+              stage: "正在等待智能体服务接口就绪（Spring Boot 启动中）",
+              progress: Math.min(92, 30 + Math.round((elapsed / timeout) * 62)),
+            });
+          });
+          setServiceBoot({ stage: "正在加载工作区数据", progress: 96 });
           setServiceStatus("running");
           setServiceError("");
           await loadWorkspaceData(state.port, focusModelsIfEmpty);
           return;
         } catch (caught) {
           lastError = caught instanceof Error ? caught.message : String(caught);
-          if (attempt < 2) {
+          if (attempt < 1) {
+            setServiceBoot({ stage: "本次启动未成功，正在清理并准备重试", progress: 10 });
             await invoke("stop_agent").catch(() => undefined);
             await new Promise((resolve) => setTimeout(resolve, 1_000));
           }
@@ -1075,6 +1224,7 @@ export default function App() {
     }
     setServiceStatus("stopped");
     setServiceError(lastError);
+    setServiceBoot({ stage: "智能体服务未能就绪", progress: 100 });
   }, [loadWorkspaceData]);
 
   const startService = useCallback(() => {
@@ -1303,24 +1453,87 @@ export default function App() {
   const [draftMentions, setDraftMentions] = useState<WorkspaceEntry[]>([]);
   const contextProjects = draftMentions.length > 0 ? draftMentions : sessionSelectedProjects;
 
-  const outgoingMessage = useMemo(() => {
-    const cleanDraft = stripInvisibleChars(draft).trim();
-    if (contextProjects.length === 0) {
-      outgoingMessageRef.current = cleanDraft;
-      return cleanDraft;
+  const addDraftResource = useCallback((resource: ComposerResource) => {
+    setDraftResources((current) => dedupeResources([...current.filter((item) => item.id !== resource.id), resource]));
+  }, []);
+
+  const pickResourceFolder = useCallback(async () => {
+    try {
+      const selected = await invoke<WorkspaceEntry[]>("pick_local_directory");
+      for (const entry of selected || []) {
+        if (!entry.path) continue;
+        addDraftResource({
+          id: `folder:${entry.path}`,
+          kind: "folder",
+          name: entry.name || entry.path.split("/").filter(Boolean).pop() || entry.path,
+          path: entry.path,
+        });
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
     }
-    const context = contextProjects
-      .map((project) => `- ${project.name}: ${project.path}`)
-      .join("\n");
-    const value = `${cleanDraft}\n\n${HIDDEN_CONTEXT_OPEN}\n[当前选择的工程]\n${context}\n\n[重要] 上述工程目录已被用户授权为本项目的工作目录。所有文件读取、写入、编辑都必须在这些工程目录内进行，请使用绝对路径（如 ${contextProjects[0]?.path ?? ""}/...），不要使用用户主目录、桌面或其他无关路径。${HIDDEN_CONTEXT_CLOSE}`;
+  }, [addDraftResource]);
+
+  const pickResourceFile = useCallback(async () => {
+    try {
+      const selected = await invoke<LocalFileSelection | null>("pick_local_file");
+      if (!selected?.path) return;
+      const dataUrl = selected.mimeType.startsWith("image/")
+        ? `data:${selected.mimeType};base64,${await invoke<string>("read_local_file_base64", { path: selected.path })}`
+        : undefined;
+      addDraftResource({
+        id: `file:${selected.path}`,
+        kind: "file",
+        name: selected.name || selected.path.split("/").filter(Boolean).pop() || selected.path,
+        path: selected.path,
+        mimeType: selected.mimeType,
+        dataUrl,
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    }
+  }, [addDraftResource]);
+
+  const addResourceProject = useCallback((project: WorkspaceEntry) => {
+    addDraftResource({
+      id: `project:${project.path}`,
+      kind: "project",
+      name: project.name || project.path.split("/").filter(Boolean).pop() || project.path,
+      path: project.path,
+    });
+  }, [addDraftResource]);
+
+  const addResourcePlugin = useCallback((kind: ComposerResource["pluginKind"]) => {
+    if (!kind) return;
+    addDraftResource({
+      id: `plugin:${kind}`,
+      kind: "plugin",
+      name: kind,
+      pluginKind: kind,
+    });
+  }, [addDraftResource]);
+
+  const resourceRoots = useMemo(() => draftResources
+    .filter((resource) => resource.path && (resource.kind === "folder" || resource.kind === "project" || resource.kind === "file"))
+    .map((resource) => (resource.kind === "file" ? parentDir(resource.path as string) : resource.path as string)), [draftResources]);
+  const resourceImages = useMemo(() => draftResources
+    .filter((resource) => resource.kind === "file" && resource.mimeType?.startsWith("image/") && resource.dataUrl)
+    .map((resource) => resource.dataUrl as string), [draftResources]);
+
+  const outgoingMessage = useMemo(() => {
+    const value = buildOutgoingMessage(draft, draftResources, contextProjects);
     outgoingMessageRef.current = value;
     return value;
-  }, [contextProjects, draft]);
+  }, [contextProjects, draft, draftResources]);
 
   const sendMessage = useCallback(async () => {
     const text = stripInvisibleChars(draft).trim();
+    const currentOutgoingMessage = buildOutgoingMessage(draft, draftResources, contextProjects);
+    outgoingMessageRef.current = currentOutgoingMessage;
     const originSessionId = activeSessionId;
-    if (!text || sessionRunsRef.current[originSessionId]) return;
+    const messageResources = dedupeResources(draftResources);
+    const visibleText = text || (messageResources.length > 0 ? "请根据我添加的资源完成任务。" : "");
+    if (!visibleText || sessionRunsRef.current[originSessionId]) return;
     if (!port || !serviceReady) {
       setError("智能体服务未就绪，请等待启动完成或查看服务日志");
       return;
@@ -1330,7 +1543,7 @@ export default function App() {
       setError("请先配置并激活一个可用模型");
       return;
     }
-    const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(text))) || text;
+    const runTitle = truncateSessionTitle(visibleMessageText(visibleUserMessage(visibleText))) || visibleText;
 
     // ── 项目配置的数字人：会话归属项目下的显式归属数字人（发消息前就解析一次，
     // 同时决定「走房间编排（多人）还是直连（单人）」与直连时的归属）
@@ -1342,25 +1555,28 @@ export default function App() {
     // ── 房间协作消息：房间有参与者、输入框 @/卡片加入了数字人，
     // 或项目配置了数字人时，交给服务端 Orchestrator（含单个远端数字人的真实执行）
     const roomHasParticipants = Boolean(
-      (serverRoom?.participants?.length || 0) > 0
-      || (room?.participants.length || 0) > 0
-      || humanMentionsRef.current.length > 0
-      || projectHumans.length > 0,
+      resourceImages.length === 0
+      && ((serverRoom?.participants?.length || 0) > 0
+        || (room?.participants.length || 0) > 0
+        || humanMentionsRef.current.length > 0
+        || projectHumans.length > 0),
     );
     if (roomHasParticipants) {
       const mentionedHumans = humanMentionsRef.current;
       const createdAt = new Date().toISOString();
       const userMessage: ConversationMessage = {
         role: "user",
-        content: text,
+        content: visibleText,
         createdAt,
         mentions: draftMentions.length > 0 ? draftMentions : undefined,
+        resources: messageResources.length > 0 ? messageResources : undefined,
       };
       try {
         setError("");
         setRoomRunning(true);
         setDraft("");
         setDraftMentions([]);
+        setDraftResources([]);
         setHumanMentions([]);
         setSessionProjectMap((current) => ({ ...current, [originSessionId]: storedProjectPath(sessionProjectPathForHumans) }));
         setDraftSessions((current) => {
@@ -1395,7 +1611,7 @@ export default function App() {
           (snapshot.participants || []).some((participant) => participant.digitalHumanId === human.id)
         ));
         const digitalHumanTokens = await digitalHumanTokensFor(tokenHumans);
-        await postRoomMessage(port, ensured.id, text, mentionIds, activeModel.channelCode, approvalMode, digitalHumanTokens);
+        await postRoomMessage(port, ensured.id, currentOutgoingMessage, mentionIds, activeModel.channelCode, approvalMode, digitalHumanTokens);
         setServerRoomId(ensured.id);
         // 协作开始：自动展开右侧协作面板
         setActiveDockTab("collab");
@@ -1455,25 +1671,27 @@ export default function App() {
           displayName: actingHuman.displayName,
           avatarRef: actingHuman.avatarRef,
           themeColor: actingHuman.themeColor,
-          taskLabel: truncateSessionTitle(text) || undefined,
+          taskLabel: truncateSessionTitle(visibleText) || undefined,
         }
       : undefined;
     setActiveHumanId(actingHuman?.id || "");
     if (actingHuman) {
       // 归属确定时同步写本地房间投影：右侧协作面板据此出现（群聊/参与者）
       joinRoom(originSessionId, actingHuman);
-      ensureRoomObjective(originSessionId, truncateSessionTitle(text) || text);
-      updatePresence(originSessionId, actingHuman.id, "working", truncateSessionTitle(text) || undefined);
+      ensureRoomObjective(originSessionId, truncateSessionTitle(visibleText) || visibleText);
+      updatePresence(originSessionId, actingHuman.id, "working", truncateSessionTitle(visibleText) || undefined);
       setRoom(readRoom(originSessionId));
     }
 
     const userMessage: ConversationMessage = {
       role: "user",
-      content: text,
+      content: visibleText,
       createdAt,
       mentions: draftMentions.length > 0 ? draftMentions : undefined,
+      resources: messageResources.length > 0 ? messageResources : undefined,
     };
     setDraftMentions([]);
+    setDraftResources([]);
     setHumanMentions([]);
     const assistantMessage: ConversationMessage = {
       role: "assistant", content: "", reasoning: "", createdAt, attribution,
@@ -1482,8 +1700,8 @@ export default function App() {
 
     // 有数字人时，提示词前加角色指令：让本地 Runtime 以该数字人身份与职责执行
     const finalOutgoing = actingHuman
-      ? `[角色设定] 你是「${actingHuman.displayName}」，职责：${actingHuman.purpose}。请以该身份完成任务，回复时保持其专业视角。\n\n${outgoingMessageRef.current}`
-      : outgoingMessageRef.current;
+      ? `[角色设定] 你是「${actingHuman.displayName}」，职责：${actingHuman.purpose}。请以该身份完成任务，回复时保持其专业视角。\n\n${currentOutgoingMessage}`
+      : currentOutgoingMessage;
 
     try {
       await streamAgentMessage(
@@ -1495,10 +1713,12 @@ export default function App() {
           cwd: sessionProjectPath || undefined,
           approvalMode,
           reasoningEffort,
+          images: resourceImages.length > 0 ? resourceImages : undefined,
           // @ 引用工程（无引用时退回会话归属项目下挂载的工程）作为沙箱额外可写根
-          sandboxRoots: contextProjects.length > 0
-            ? contextProjects.map((project) => project.path)
-            : undefined,
+          sandboxRoots: [...new Set([
+            ...contextProjects.map((project) => project.path),
+            ...resourceRoots,
+          ])],
         },
         (event) => {
           const aliases = aliasesForSession(originSessionId);
@@ -1696,18 +1916,21 @@ export default function App() {
     activeProjectPath,
     activeSessionId,
     aliasesForSession,
-    approvalMode,
-    draft,
-    loadWorkspaceData,
+	    approvalMode,
+	    draft,
+	    draftResources,
+	    loadWorkspaceData,
     notifyRunFinished,
     outgoingMessage,
     port,
     reasoningEffort,
+    resourceImages,
+    resourceRoots,
     room,
     serverRoom,
-    serviceReady,
-    updateMessagesForAliases,
-  ]);
+	    serviceReady,
+	    updateMessagesForAliases,
+	  ]);
 
   const createProject = useCallback(async () => {
     const name = projectName.trim();
@@ -2271,39 +2494,140 @@ export default function App() {
 
   if (activeView === "settings") {
     return (
-      <SettingsView
-        service={service}
-        serviceStatus={serviceStatus}
-        serviceError={serviceError}
-        error={error}
-        activeSection={settingsSection}
-        onSectionChange={setSettingsSection}
-        onBack={() => setActiveView("conversation")}
-        approvalMode={approvalMode}
-        reasoningEffort={reasoningEffort}
-        onApprovalModeChange={setApprovalMode}
-        onReasoningEffortChange={setReasoningEffort}
-        draft={modelDraft}
-        modelSettings={modelSettings}
-        availableModels={availableModels}
-        discoveredModels={discoveredModels}
-        savingModel={savingModel}
-        syncingModels={syncingModels}
-        onDraftChange={setModelDraft}
-        onDiscover={() => void syncAvailableModels()}
-        onSave={() => submitModel()}
-        onCancelEdit={() => setModelDraft(emptyModelDraft)}
-        onActivate={(channelCode) => void activateModel(channelCode)}
-        onDelete={(channelCode) => void removeModel(channelCode)}
-        onEdit={editModel}
-        onToggleModel={(model) => void toggleModel(model)}
-        onReconnect={() => void startService()}
-      />
+      <div className="standalone-page settings-standalone-page">
+        <SettingsView
+          service={service}
+          serviceStatus={serviceStatus}
+          serviceError={serviceError}
+          error={error}
+          activeSection={settingsSection}
+          onSectionChange={setSettingsSection}
+          onBack={() => setActiveView("conversation")}
+          approvalMode={approvalMode}
+          reasoningEffort={reasoningEffort}
+          onApprovalModeChange={setApprovalMode}
+          onReasoningEffortChange={setReasoningEffort}
+          draft={modelDraft}
+          modelSettings={modelSettings}
+          availableModels={availableModels}
+          discoveredModels={discoveredModels}
+          savingModel={savingModel}
+          syncingModels={syncingModels}
+          onDraftChange={setModelDraft}
+          onDiscover={() => void syncAvailableModels()}
+          onSave={() => submitModel()}
+          onCancelEdit={() => setModelDraft(emptyModelDraft)}
+          onActivate={(channelCode) => void activateModel(channelCode)}
+          onDelete={(channelCode) => void removeModel(channelCode)}
+          onEdit={editModel}
+          onToggleModel={(model) => void toggleModel(model)}
+          onReconnect={() => void startService()}
+        />
+      </div>
+    );
+  }
+
+  if (activeView === "digital-humans") {
+    return (
+      <div className="standalone-page digital-human-standalone-page">
+        <header className="standalone-hero" data-tauri-drag-region>
+          <button className="settings-back" onClick={() => setActiveView("conversation")}>
+            <ArrowLeftIcon className="icon-16" />
+            <span>返回应用</span>
+          </button>
+          <div className="standalone-hero-main" data-tauri-drag-region>
+            <div className="standalone-hero-icon">
+              <UsersIcon className="icon-18" />
+            </div>
+            <div>
+              <h1>数字人配置</h1>
+              <p>管理角色、授权、项目归属与健康状态，让协作能力像产品功能一样稳定可控。</p>
+            </div>
+          </div>
+          <div className="standalone-hero-actions">
+            <button className="ghost-action compact" onClick={() => void refreshDigitalHumans(port)} disabled={!port || !digitalHumansLoaded}>
+              <RefreshIcon className="icon-14" />
+              刷新
+            </button>
+            <button
+              className="primary-action compact"
+              onClick={() => {
+                setWizardProjectPath("");
+                setWizardOpen(true);
+              }}
+            >
+              <PlusIcon className="icon-14" />
+              新建数字人
+            </button>
+          </div>
+        </header>
+        <main className="standalone-body digital-human-standalone-body">
+          <DigitalHumanCatalog
+            humans={digitalHumans}
+            loading={!digitalHumansLoaded}
+            selectedId={selectedHumanId}
+            onSelect={setSelectedHumanId}
+            onAdd={() => {
+              setWizardProjectPath("");
+              setWizardOpen(true);
+            }}
+            onChanged={() => void refreshDigitalHumans(port)}
+            port={port}
+            projects={combinedProjects.filter((project) => !project.local || !project.parentPath)}
+          />
+        </main>
+        <AddDigitalHumanWizard
+          open={wizardOpen}
+          port={port}
+          projectPath={wizardProjectPath || undefined}
+          projectName={wizardProjectPath ? combinedProjects.find((project) => project.path === wizardProjectPath)?.name : undefined}
+          onClose={() => {
+            setWizardOpen(false);
+            setWizardProjectPath("");
+          }}
+          onCreated={(human) => {
+            setDigitalHumans((current) => [...current, human]);
+            setSelectedHumanId(human.id);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // 启动进度屏：智能体服务（Java JAR）就绪前挡住主界面，避免项目目录等区域长时间空白。
+  // 启动失败/超时后允许「仍然进入」，进入后主界面顶部通过错误横幅持续提示。
+  if (!dismissedBoot && serviceStatus !== "running") {
+    const bootFailed = serviceStatus === "stopped";
+    return (
+      <div className="boot-screen">
+        <div className="boot-card">
+          <img className="boot-logo" src="/dsh-icon.png" alt="DSH" />
+          <h1 className="boot-title">DSH Java Desktop</h1>
+          <div className={`boot-stage${bootFailed ? " failed" : ""}`}>{serviceBoot.stage}</div>
+          <div className="boot-progress">
+            <div
+              className={`boot-progress-bar${bootFailed ? " failed" : ""}`}
+              style={{ width: `${serviceBoot.progress}%` }}
+            />
+          </div>
+          <div className="boot-hint">
+            {bootFailed
+              ? (serviceError || "智能体服务启动失败")
+              : "首次启动需要拉起 Java 智能体服务，可能需要几十秒"}
+          </div>
+          {bootFailed ? (
+            <div className="boot-actions">
+              <button className="boot-btn primary" onClick={() => void startService()}>重试启动</button>
+              <button className="boot-btn" onClick={() => setDismissedBoot(true)}>仍然进入</button>
+            </div>
+          ) : null}
+        </div>
+      </div>
     );
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarResizing ? " sidebar-resizing" : ""}`} style={appShellStyle}>
       {/* 顶部全局操作栏：跨侧栏与主区，右侧承载 协作/信息/产物 Tab */}
       <header className="app-toolbar" data-tauri-drag-region>
         <div className="app-toolbar-title" data-tauri-drag-region>DSH Java Desktop</div>
@@ -2324,6 +2648,7 @@ export default function App() {
       <div className="app-body">
       <Sidebar
         activeView={activeView}
+        collapsed={sidebarCollapsed}
         activeSessionId={activeSessionId}
         activeProjectPath={activeProjectPath}
         streaming={streaming}
@@ -2343,7 +2668,7 @@ export default function App() {
         onDeleteSession={deleteSession}
         onMoveSessionToProject={moveSessionToProject}
         onReorderSessions={reorderSessions}
-        onNewConversation={() => startConversation(activeProject)}
+        onNewConversation={(project) => startConversation(project ?? activeProject)}
         editingProject={editingProject}
         savingProject={savingProject}
         onProjectModalChange={(open, name, project) => {
@@ -2380,6 +2705,14 @@ export default function App() {
           setWizardOpen(true);
         }}
       />
+      <div
+        className="sidebar-resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="调整侧边栏宽度"
+        title={sidebarCollapsed ? "向右拖动展开侧边栏" : "拖动调整侧边栏宽度，拖到最左自动收起"}
+        onPointerDown={startSidebarResize}
+      />
 
       <main className="main-panel">
         <div className="main-panel-content">
@@ -2389,7 +2722,7 @@ export default function App() {
               <h1>
                 {activeView === "conversation"
                   ? sessionTitle(activeSession || { agentId: activeSessionId }, customSessionTitles)
-                  : activeView === "digital-humans" ? "数字人" : "工作台"}
+                  : "工作台"}
               </h1>
               <p>
                 {activeProject ? `${activeProject.name} · ` : ""}
@@ -2410,6 +2743,12 @@ export default function App() {
         )}
 
         {error ? <div className="error-banner">{error}</div> : null}
+        {serviceStatus !== "running" && serviceError ? (
+          <div className="error-banner">
+            智能体服务未就绪：{serviceError}。项目与会话数据暂不可用，
+            <button className="error-banner-action" onClick={() => void startService()}>重新连接</button>
+          </div>
+        ) : null}
 
         {activeView === "conversation" ? (
           <ConversationView
@@ -2429,7 +2768,6 @@ export default function App() {
             onSelectProject={selectProject}
             onSelectDefaultWorkspace={selectDefaultWorkspace}
             onSwitchProjectBranch={(project, branch) => void switchProjectBranch(project, branch)}
-            onCreateSession={() => startConversation(activeProject)}
             onDraftChange={setDraft}
             onSend={() => void sendMessage()}
             mentions={draftMentions}
@@ -2474,23 +2812,15 @@ export default function App() {
                 focusRequest={focusRequest}
               />
             ) : null}
-            onOpenFile={openFileTab}
-            roomStreaming={roomStreamingEffective}
-          />
-        ) : activeView === "digital-humans" ? (
-          <DigitalHumanCatalog
-            humans={digitalHumans}
-            loading={!digitalHumansLoaded}
-            selectedId={selectedHumanId}
-            onSelect={setSelectedHumanId}
-            onAdd={() => {
-              setWizardProjectPath("");
-              setWizardOpen(true);
-            }}
-            onChanged={() => void refreshDigitalHumans(port)}
-            port={port}
-            projects={combinedProjects.filter((project) => !project.local || !project.parentPath)}
-          />
+	            onOpenFile={openFileTab}
+	            roomStreaming={roomStreamingEffective}
+	            resources={draftResources}
+	            onResourcesChange={(resources) => setDraftResources(dedupeResources(resources))}
+	            onPickResourceFolder={() => void pickResourceFolder()}
+	            onPickResourceFile={() => void pickResourceFile()}
+	            onAddResourceProject={addResourceProject}
+	            onAddResourcePlugin={addResourcePlugin}
+	          />
         ) : null}
         </div>
 
