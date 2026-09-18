@@ -1184,7 +1184,9 @@ export default function ConversationView({
           </div>
           <div className="prompt-controls">
             {modelChoices.length > 0 ? (
-              <div className="model-control" title="选择对话模型">
+              <div className="model-control" title={activeModel
+                ? `${activeModel.displayName || activeModel.modelCode || activeModel.channelCode || "模型"} · ${activeModel.modelCode || ""}`.replace(/ · $/, "")
+                : "选择对话模型"}>
                 <select
                   className="model-chip"
                   value={activeModel?.channelCode || ""}
@@ -1194,11 +1196,10 @@ export default function ConversationView({
                 >
                   {modelChoices.map((model) => {
                     const value = model.channelCode || model.modelCode || "";
+                    // chip 与选项均展示短标签（模型名），完整「渠道 · 模型」信息放在悬浮提示中
                     return (
                       <option key={value} value={value}>
-                        {[model.displayName || model.modelCode, model.modelCode]
-                          .filter((label, index, labels) => label && labels.indexOf(label) === index)
-                          .join(" · ")}
+                        {model.modelCode || model.displayName || value}
                       </option>
                     );
                   })}
@@ -1217,9 +1218,9 @@ export default function ConversationView({
                 disabled={streaming}
                 onChange={(event) => onReasoningEffortChange(event.target.value as ReasoningEffort)}
               >
-                <option value="low">低推理</option>
-                <option value="medium">中推理</option>
-                <option value="high">高推理</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
               </select>
             </div>
             <div

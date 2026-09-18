@@ -468,6 +468,15 @@ select:focus-visible {
   color: var(--text);
 }
 
+/* 项目行可直接拖动排序：整行 grab 光标提示 */
+.project-row .project-main {
+  cursor: grab;
+}
+
+.project-node.dragging .project-main {
+  cursor: grabbing;
+}
+
 .project-row.drop-target {
   background: rgba(65, 96, 240, .08);
   box-shadow: inset 0 0 0 1px rgba(65, 96, 240, .22);
@@ -2314,6 +2323,8 @@ select:focus-visible {
 
 .permission-chip {
   appearance: none;
+  max-width: 72px;
+  text-overflow: ellipsis;
   padding-right: 18px;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
   background-position: calc(100% - 11px) 13px, calc(100% - 7px) 13px;
@@ -2389,7 +2400,7 @@ select:focus-visible {
 }
 
 .model-control {
-  max-width: 170px;
+  max-width: 110px;
 }
 
 .model-control > span:first-child {
@@ -7766,3 +7777,7 @@ select:focus-visible {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ═══════════ 房间协作：运行期待决审批卡（实时轮询） ═══════════ */
+.room-approval-session { font-weight: 500; color: inherit; opacity: .75; }
+.room-approval .room-approval-actions button:disabled { opacity: .6; cursor: default; }

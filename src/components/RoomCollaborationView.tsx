@@ -2,8 +2,9 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
-import type { ConversationMessage, DigitalHuman } from "../types";
+import type { ConversationMessage, DigitalHuman, RuntimeApproval } from "../types";
 import type { RoomEvent, ServerRoomView } from "../lib/digital-human-client";
+import { listRuntimeApprovals, resolveRuntimeApproval } from "../lib/agent-client";
 import {
   cancelRoomTask,
   digitalHumanTokensFor,
@@ -347,6 +348,38 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
 
   const feed = useMemo(() => buildRoomFeed(events, humans), [events, humans]);
 
+  // ── 运行期审批：协作 Agent 走 REQUEST_APPROVAL 时会挂起等待桌面端裁决 ──
+  // 桌面端配置的审批模式随任务下发；需审批时 Agent 阻塞在审批点，
+  // 这里轮询待决审批并渲染裁决卡片，裁决后 Agent 就地继续执行。
+  const [runtimeApprovals, setRuntimeApprovals] = useState<RuntimeApproval[]>([]);
+  const [resolvingApprovalId, setResolvingApprovalId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const items = await listRuntimeApprovals(port);
+        if (!cancelled) setRuntimeApprovals(items);
+      } catch {
+        // 服务未就绪时静默忽略，下一轮重试
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 1_500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [port]);
+
+  const resolveApproval = (approvalId: string, verdict: "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY") => {
+    setResolvingApprovalId(approvalId);
+    void resolveRuntimeApproval(port, approvalId, verdict)
+      .then(() => setRuntimeApprovals((current) => current.filter((item) => item.approvalId !== approvalId)))
+      .catch(() => undefined)
+      .finally(() => setResolvingApprovalId((id) => (id === approvalId ? null : id)));
+  };
+
+
   // 兜底收口：服务端任务已全部结束但仍有消息/工具卡停留在 streaming/running（结束事件丢失）时，
   // 强制标记为完成，避免头像光圈或"正在执行 N 步"永久闪烁。
   const hasActiveTask = (room?.tasks || []).some((t) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(t.state));
@@ -655,6 +688,48 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
           }
           return null;
         })}
+        {runtimeApprovals.map((approval) => (
+          <article key={approval.approvalId} className="message assistant">
+            <div className="message-body">
+              <div className="room-approval">
+                <div className="room-approval-head">
+                  ⚠️ 数字人请求执行需审批操作
+                  {approval.sessionId ? <span className="room-approval-session" title={approval.sessionId}>（{approval.toolName || "工具调用"}）</span> : null}
+                </div>
+                <div className="room-approval-cmd">
+                  {approval.displayCommand
+                    || (approval.arguments ? JSON.stringify(approval.arguments) : approval.toolName || "执行写操作")}
+                </div>
+                <div className="room-approval-actions">
+                  <button
+                    type="button"
+                    className="primary-action compact"
+                    disabled={resolvingApprovalId === approval.approvalId}
+                    onClick={() => resolveApproval(approval.approvalId, "ALLOW_ONCE")}
+                  >
+                    {resolvingApprovalId === approval.approvalId ? "处理中…" : "允许一次"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action compact"
+                    disabled={resolvingApprovalId === approval.approvalId}
+                    onClick={() => resolveApproval(approval.approvalId, "ALLOW_SESSION")}
+                  >
+                    允许本会话
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-action compact danger-text"
+                    disabled={resolvingApprovalId === approval.approvalId}
+                    onClick={() => resolveApproval(approval.approvalId, "DENY")}
+                  >
+                    拒绝
+                  </button>
+                </div>
+              </div>
+            </div>
+          </article>
+        ))}
         {showTypingIndicator ? (
           <article className="message assistant" aria-live="polite">
             <div className="message-body">
