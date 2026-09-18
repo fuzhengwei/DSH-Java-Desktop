@@ -1,41 +1,30 @@
-name: Release Desktop
+name: Build Desktop
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      platform:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      target:
+        required: true
+        type: string
+      runtime-target:
+        required: true
+        type: string
+      release-tag-prefix:
+        required: true
+        type: string
 
 jobs:
   build:
-    name: ${{ matrix.name }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ inputs.platform }}
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS Apple Silicon
-            os: macos-latest
-            target: aarch64-apple-darwin
-            runtime-target: darwin-arm64
-            rust-target: aarch64-apple-darwin
-          - name: macOS Intel
-            os: macos-15-intel
-            target: x86_64-apple-darwin
-            runtime-target: darwin-x64
-            rust-target: x86_64-apple-darwin
-          - name: Windows x64
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            runtime-target: win32-x64
-            rust-target: x86_64-pc-windows-msvc
-          - name: Linux x64
-            os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            runtime-target: linux-x64
-            rust-target: x86_64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v5
@@ -47,10 +36,10 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.rust-target }}
+          targets: ${{ inputs.target }}
 
       - name: Install Linux build dependencies
-        if: matrix.os == 'ubuntu-latest'
+        if: inputs.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -66,7 +55,7 @@ jobs:
         run: npm ci
 
       - name: Setup macOS signing and notarization
-        if: runner.os == 'macOS'
+        if: inputs.platform == 'macos'
         run: |
           set -euo pipefail
           KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
@@ -88,7 +77,7 @@ jobs:
 
       - name: Prepare bundled Java runtime
         env:
-          DSH_JRE_TARGET: ${{ matrix.runtime-target }}
+          DSH_JRE_TARGET: ${{ inputs.runtime-target }}
         run: npm run agent:runtime
 
       - name: Build and publish Tauri release
@@ -102,9 +91,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: dsh-java-desktop-v__VERSION__
+          tagName: ${{ inputs.release-tag-prefix }}__VERSION__
           releaseName: 'DSH Java Desktop v__VERSION__'
           releaseBody: 'This release bundles the DeepSeek Harness Java runtime and updater artifacts.'
           releaseDraft: false
           prerelease: false
-          args: '--target ${{ matrix.target }}'
+          args: '--target ${{ inputs.target }}'

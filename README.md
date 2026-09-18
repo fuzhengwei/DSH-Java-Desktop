@@ -66,7 +66,16 @@ DSH_JRE_TARGET=win32-x64 npm run agent:runtime
 
 ## 发布与自动更新
 
-推送 `v*` 标签后，`.github/workflows/release.yml` 会在 macOS Apple Silicon、macOS Intel、Windows x64 和 Linux x64 上构建安装包，并把 Tauri updater 签名文件上传到 GitHub Release。应用通过以下端点检查更新：
+四个平台使用独立 tag 分别触发构建；成功后会把安装包和 Tauri updater 签名文件上传到同一个版本对应的 `dsh-java-desktop-v*` GitHub Release：
+
+| 平台 | Tag |
+| --- | --- |
+| Linux x64 | `linux-x64-v*` |
+| Windows x64 | `windows-x64-v*` |
+| macOS Apple Silicon | `macos-apple-silicon-v*` |
+| macOS Intel | `macos-intel-v*` |
+
+应用通过以下端点检查更新：
 
 ```text
 https://github.com/fuzhengwei/DSH-Java-Desktop/releases/latest/download/latest.json

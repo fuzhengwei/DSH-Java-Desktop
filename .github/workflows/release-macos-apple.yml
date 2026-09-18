@@ -1,0 +1,19 @@
+name: Release macOS Apple Silicon
+
+on:
+  push:
+    tags:
+      - 'macos-apple-silicon-v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: macOS Apple Silicon
+    uses: ./.github/workflows/build-desktop.yml
+    secrets: inherit
+    with:
+      platform: macos
+      runner: macos-latest
+      target: aarch64-apple-darwin
+      runtime-target: darwin-arm64
+      release-tag-prefix: dsh-java-desktop-v

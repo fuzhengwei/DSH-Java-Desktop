@@ -1,0 +1,19 @@
+name: Release Windows x64
+
+on:
+  push:
+    tags:
+      - 'windows-x64-v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: Windows x64
+    uses: ./.github/workflows/build-desktop.yml
+    secrets: inherit
+    with:
+      platform: windows
+      runner: windows-latest
+      target: x86_64-pc-windows-msvc
+      runtime-target: win32-x64
+      release-tag-prefix: dsh-java-desktop-v

@@ -1,0 +1,19 @@
+name: Release macOS Intel
+
+on:
+  push:
+    tags:
+      - 'macos-intel-v*'
+  workflow_dispatch:
+
+jobs:
+  release:
+    name: macOS Intel
+    uses: ./.github/workflows/build-desktop.yml
+    secrets: inherit
+    with:
+      platform: macos
+      runner: macos-15-intel
+      target: x86_64-apple-darwin
+      runtime-target: darwin-x64
+      release-tag-prefix: dsh-java-desktop-v
