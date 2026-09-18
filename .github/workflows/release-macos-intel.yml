@@ -10,6 +10,8 @@ jobs:
   release:
     name: macOS Intel
     uses: ./.github/workflows/build-desktop.yml
+    permissions:
+      contents: write
     secrets: inherit
     with:
       platform: macos
