@@ -129,6 +129,30 @@ function parentDir(path: string): string {
   return index > 0 ? normalized.slice(0, index) : normalized;
 }
 
+/**
+ * 将 SVG data URL 栅格化为 PNG data URL。
+ * 视觉模型接口不接受 image/svg+xml（统计图片 token 时直接报错），
+ * 因此 SVG 附件必须在发送前转成位图。
+ */
+async function svgDataUrlToPngDataUrl(svgDataUrl: string): Promise<string> {
+  const image = new Image();
+  image.src = svgDataUrl;
+  await new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("SVG 图片解析失败，无法转换为 PNG"));
+  });
+  const scale = 2; // 放大一倍，保证文字清晰可识别
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.floor((image.naturalWidth || 640) * scale));
+  canvas.height = Math.max(1, Math.floor((image.naturalHeight || 440) * scale));
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas 不可用，无法将 SVG 转换为 PNG");
+  context.fillStyle = "#ffffff"; // SVG 透明底转白底，避免模型看到黑底黑字
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}
+
 function resourcesHiddenContext(resources: ComposerResource[]): string {
   if (resources.length === 0) return "";
   const lines = resources.map((resource) => {
@@ -1478,9 +1502,20 @@ export default function App() {
     try {
       const selected = await invoke<LocalFileSelection | null>("pick_local_file");
       if (!selected?.path) return;
-      const dataUrl = selected.mimeType.startsWith("image/")
-        ? `data:${selected.mimeType};base64,${await invoke<string>("read_local_file_base64", { path: selected.path })}`
-        : undefined;
+      let dataUrl: string | undefined;
+      if (selected.mimeType.startsWith("image/")) {
+        dataUrl = `data:${selected.mimeType};base64,${await invoke<string>("read_local_file_base64", { path: selected.path })}`;
+        // SVG 不是视觉模型支持的位图格式，先栅格化为 PNG 再作为多模态附件；
+        // 转换失败则降级为普通文件（SVG 是 XML 文本，模型仍可读取文件内容）
+        if (selected.mimeType.includes("svg")) {
+          try {
+            dataUrl = await svgDataUrlToPngDataUrl(dataUrl);
+          } catch (caught) {
+            console.warn("SVG 转 PNG 失败，降级为文件文本上下文", caught);
+            dataUrl = undefined;
+          }
+        }
+      }
       addDraftResource({
         id: `file:${selected.path}`,
         kind: "file",
