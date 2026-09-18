@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 
 /**
  * 通用文件预览：按扩展名路由渲染方式。
@@ -160,7 +160,7 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
       <div className="file-preview-body">
         {kind === "markdown" ? (
           <div className="file-preview-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfmCompatible]}>{text}</ReactMarkdown>
           </div>
         ) : kind === "text" ? (
           <pre className="file-preview-plain">{text}</pre>

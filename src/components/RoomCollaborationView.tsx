@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import type { ConversationMessage, DigitalHuman } from "../types";
 import type { RoomEvent, ServerRoomView } from "../lib/digital-human-client";
 import {
@@ -458,7 +458,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   }), [onOpenFile]);
 
   const renderMarkdown = (value: string): ReactNode => (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{value}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} components={markdownComponents}>{value}</ReactMarkdown>
   );
 
   return (

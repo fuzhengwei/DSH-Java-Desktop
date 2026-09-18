@@ -28,10 +28,19 @@
       "csp": null
     }
   },
-  "bundle": {
+    "bundle": {
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "macOS": {
+      "minimumSystemVersion": "10.15"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller",
+        "silent": true
+      }
+    },
     "resources": {
       "../resources/agent/deepseek-harness-java-app.jar": "agent/deepseek-harness-java-app.jar",
       "../resources/agent/runtime": "agent/runtime"

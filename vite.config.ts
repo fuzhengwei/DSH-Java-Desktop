@@ -10,7 +10,8 @@ export default defineConfig({
     watch: { ignored: ["**/src-tauri/**"] },
   },
   build: {
-    target: "es2022",
+    target: "es2017",
+    chunkSizeWarningLimit: 1500,
     minify: "esbuild",
     sourcemap: false,
   },
