@@ -111,6 +111,11 @@ function sessionIsActive(session: SessionSummary, activeSessionId: string): bool
   return sessionIds(session).includes(activeSessionId);
 }
 
+/** 项目行会话数量角标：超过 99 显示 99+ */
+function sessionCountLabel(count: number): string {
+  return count > 99 ? "99+" : String(count);
+}
+
 function projectName(project: WorkspaceEntry): string {
   return project.name || project.path.split("/").filter(Boolean).pop() || "项目";
 }
@@ -276,6 +281,21 @@ export default function Sidebar({
   const isSessionRunning = (session: SessionSummary) => (
     sessionIds(session).some((id) => runningIds.has(id))
   );
+  // 项目内正在运行的会话数（当前激活且正在流式输出的会话也算进行中）
+  const runningCountOf = (list: SessionSummary[]) => (
+    list.filter((session) => isSessionRunning(session) || (sessionIsActive(session, activeSessionId) && streaming)).length
+  );
+
+  /** 项目行角标文案：有进行中的对话时显示「进行中/总数」，否则只显示总数 */
+  const projectCountBadge = (list: SessionSummary[]) => {
+    const total = list.length;
+    const running = runningCountOf(list);
+    return {
+      running,
+      label: running > 0 ? `${sessionCountLabel(running)}/${sessionCountLabel(total)}` : sessionCountLabel(total),
+      title: running > 0 ? `${total} 个对话，${running} 个进行中` : `${total} 个对话`,
+    };
+  };
 
   const suppressClickRef = useRef(false);
   const pointerDragRef = useRef<{
@@ -432,12 +452,13 @@ export default function Sidebar({
         }}
       >
         <span className="session-drag-handle" aria-hidden="true">
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
+          <svg viewBox="0 0 6 14" width="6" height="14" fill="currentColor">
+            {[2, 7, 12].map((cy) =>
+              [1.5, 4.5].map((cx) => (
+                <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.4" />
+              )),
+            )}
+          </svg>
         </span>
         <button
           type="button"
@@ -587,7 +608,14 @@ export default function Sidebar({
                     <span>{projectName(project)}</span>
                   </button>
                   <ProjectHumanStack humans={humansOfProject} />
-                  {projectSessions.length > 0 ? <span className="nav-count">{projectSessions.length}</span> : null}
+                  {projectSessions.length > 0 ? (() => {
+                    const badge = projectCountBadge(projectSessions);
+                    return (
+                      <span className={`nav-count${badge.running > 0 ? " has-running" : ""}`} title={badge.title}>
+                        {badge.label}
+                      </span>
+                    );
+                  })() : null}
                   <button
                     type="button"
                     className="icon-button project-chat-button"
@@ -650,7 +678,14 @@ export default function Sidebar({
                 <FolderIcon className="icon-16" />
                 <span>默认工作区</span>
               </button>
-              {unassignedSessions.length > 0 ? <span className="nav-count">{unassignedSessions.length}</span> : null}
+              {unassignedSessions.length > 0 ? (() => {
+                const badge = projectCountBadge(unassignedSessions);
+                return (
+                  <span className={`nav-count${badge.running > 0 ? " has-running" : ""}`} title={badge.title}>
+                    {badge.label}
+                  </span>
+                );
+              })() : null}
             </div>
             {expandedProjects.__unassigned__ ? (
               <div className="project-sessions">

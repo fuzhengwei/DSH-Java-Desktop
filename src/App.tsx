@@ -153,13 +153,41 @@ async function svgDataUrlToPngDataUrl(svgDataUrl: string): Promise<string> {
   return canvas.toDataURL("image/png");
 }
 
+/** docx 注入对话的文本长度上限，超出截断（约 6 万字） */
+const DOCX_TEXT_CONTEXT_LIMIT = 120_000;
+
+/**
+ * .docx 是 zip 二进制包，Agent 端的文件读取工具读出来是乱码；
+ * 在选择文件时用 mammoth 提取纯文本，随隐藏上下文注入对话。
+ * 提取失败返回 undefined（旧格式 .doc 不支持，保持原路径提示）。
+ */
+async function extractDocxText(path: string): Promise<string | undefined> {
+  try {
+    const base64 = await invoke<string>("read_local_file_base64", { path });
+    const mammoth = await import("mammoth/mammoth.browser");
+    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+    const result = await mammoth.extractRawText({ arrayBuffer: bytes.buffer });
+    const text = result.value.trim();
+    return text || undefined;
+  } catch (caught) {
+    console.warn("Word 文本提取失败", path, caught);
+    return undefined;
+  }
+}
+
 function resourcesHiddenContext(resources: ComposerResource[]): string {
   if (resources.length === 0) return "";
   const lines = resources.map((resource) => {
     if (resource.kind === "folder") return `- 文件夹：${resource.name} (${resource.path})`;
     if (resource.kind === "file") {
       const multimodal = resource.mimeType?.startsWith("image/") ? "；图片已作为多模态附件提供，请先识别图片内容" : "";
-      return `- 文件：${resource.name} (${resource.path || "无本地路径"})${resource.mimeType ? `；类型：${resource.mimeType}` : ""}${multimodal}`;
+      let docText = "";
+      if (resource.textContent) {
+        const truncated = resource.textContent.length > DOCX_TEXT_CONTEXT_LIMIT;
+        const body = truncated ? `${resource.textContent.slice(0, DOCX_TEXT_CONTEXT_LIMIT)}\n…（内容过长已截断）` : resource.textContent;
+        docText = `；文档文本内容如下（已由前端提取）：\n[文件内容开始]\n${body}\n[文件内容结束]`;
+      }
+      return `- 文件：${resource.name} (${resource.path || "无本地路径"})${resource.mimeType ? `；类型：${resource.mimeType}` : ""}${multimodal}${docText}`;
     }
     if (resource.kind === "project") return `- 项目：${resource.name} (${resource.path})`;
     const prompt = resource.pluginKind ? RESOURCE_PLUGIN_PROMPTS[resource.pluginKind] : "按指定插件类型交付内容。";
@@ -1516,6 +1544,10 @@ export default function App() {
           }
         }
       }
+      // Word (.docx)：提取纯文本注入上下文，否则 Agent 端读二进制会乱码
+      const textContent = selected.name.toLowerCase().endsWith(".docx")
+        ? await extractDocxText(selected.path)
+        : undefined;
       addDraftResource({
         id: `file:${selected.path}`,
         kind: "file",
@@ -1523,6 +1555,7 @@ export default function App() {
         path: selected.path,
         mimeType: selected.mimeType,
         dataUrl,
+        textContent,
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));

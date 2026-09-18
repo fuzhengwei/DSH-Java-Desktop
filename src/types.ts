@@ -52,6 +52,8 @@ export type ComposerResource = {
   pluginKind?: ResourcePluginKind;
   mimeType?: string;
   dataUrl?: string;
+  /** 文档类附件（如 .docx）在前端提取的纯文本，随隐藏上下文注入对话 */
+  textContent?: string;
 };
 
 export type ConversationMessage = {
