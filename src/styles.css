@@ -185,6 +185,9 @@ select:focus-visible {
 }
 
 .brand-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 10px;
   font-weight: 600;
   color: var(--muted, #8a8f98);
@@ -192,6 +195,37 @@ select:focus-visible {
   border-radius: 999px;
   padding: 1px 6px;
   line-height: 1.4;
+}
+
+.version-breath-light {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #b4b4b2;
+  box-shadow: 0 0 0 0 rgba(180, 180, 178, 0.28);
+}
+
+.update-status-checking .version-breath-light {
+  background: var(--warning);
+  animation: version-breath 1.3s ease-in-out infinite;
+}
+
+.update-status-latest .version-breath-light {
+  background: var(--success);
+}
+
+.update-status-available .version-breath-light {
+  background: #2f6fdd;
+  animation: version-breath 1.15s ease-in-out infinite;
+}
+
+.update-status-failed .version-breath-light {
+  background: #b4b4b2;
+}
+
+@keyframes version-breath {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(47,111,221,.34); }
+  50% { opacity: .55; box-shadow: 0 0 0 5px rgba(47,111,221,0); }
 }
 
 .brand-subtitle {
@@ -6189,73 +6223,3 @@ select:focus-visible {
 }
 .echart-source summary { font-size: 11.5px; color: var(--text-subtle); cursor: pointer; margin-top: 6px; }
 .echart-source pre { font-size: 11.5px; padding: 10px; background: var(--surface-raised, #f6f7f9); border-radius: 8px; overflow: auto; }
-
-.updater-overlay {
-  position: fixed;
-  z-index: 999;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  inset: 0;
-  padding: 24px;
-  background: rgba(4, 8, 16, 0.68);
-  backdrop-filter: blur(8px);
-}
-
-.updater-card {
-  width: min(440px, 100%);
-  padding: 26px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 18px;
-  background: rgba(15, 19, 28, 0.98);
-  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.42);
-}
-
-.updater-card h2 {
-  margin: 0 0 10px;
-  color: #f7fafc;
-}
-
-.updater-card p {
-  margin: 0 0 14px;
-  color: #cbd5e1;
-}
-
-.updater-notes {
-  max-height: 150px;
-  overflow: auto;
-  margin: 0 0 18px;
-  padding: 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #e2e8f0;
-  white-space: pre-wrap;
-}
-
-.updater-progress {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.updater-progress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, #60a5fa, #34d399);
-  transition: width 0.2s ease;
-}
-
-.updater-card small {
-  display: block;
-  margin-top: 8px;
-  color: #94a3b8;
-}
-
-.updater-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 20px;
-}

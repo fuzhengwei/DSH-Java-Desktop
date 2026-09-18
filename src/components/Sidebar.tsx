@@ -2,6 +2,7 @@ import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } fro
 import type { DigitalHuman, SessionSummary, WorkspaceEntry } from "../types";
 import { sanitizeDisplayName, truncateSessionTitle } from "../lib/text";
 import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./ProjectRowMenu";
+import UpdateStatusBadge from "./UpdateStatusBadge";
 import {
   ChevronIcon,
   EditIcon,
@@ -518,7 +519,7 @@ export default function Sidebar({
         <div>
           <div className="brand-title">
             DSH
-            <span className="brand-version" title="应用版本">v0.1.0</span>
+            <UpdateStatusBadge />
           </div>
           <div className="brand-subtitle">Java Desktop</div>
         </div>

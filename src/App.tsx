@@ -11,7 +11,6 @@ import { ParticipantPicker } from "./components/ParticipantPicker";
 import RoomCollaborationView from "./components/RoomCollaborationView";
 import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
-import UpdatePrompt from "./components/UpdatePrompt";
 import { FilePreview } from "./components/FilePreview";
 import { truncateSessionTitle } from "./lib/text";
 import {
@@ -2565,7 +2564,6 @@ export default function App() {
           if (!wizardProjectPath) setActiveView("digital-humans");
         }}
       />
-      <UpdatePrompt />
       <ParticipantPicker
         open={pickerOpen}
         humans={digitalHumans}

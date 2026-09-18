@@ -6,6 +6,25 @@
     <link rel="icon" type="image/png" href="/dsh-icon.png?v=20260917" />
     <link rel="apple-touch-icon" href="/dsh-icon.png?v=20260917" />
     <title>DSH Java Desktop</title>
+    <script>
+      window.addEventListener("error", (event) => {
+        const detail = event.error?.stack || event.message || event.filename;
+        if (!detail) return;
+        const overlay = document.createElement("div");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:99999;padding:24px;background:#fff;color:#dc2626;font:14px/1.5 ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;overflow:auto";
+        overlay.textContent = `桌面界面启动失败：\n${detail}`;
+        document.body?.append(overlay);
+      }, true);
+      window.addEventListener("unhandledrejection", (event) => {
+        const detail = event.reason?.stack || String(event.reason);
+        const overlay = document.createElement("div");
+        overlay.style.cssText =
+          "position:fixed;inset:0;z-index:99999;padding:24px;background:#fff;color:#dc2626;font:14px/1.5 ui-monospace,SFMono-Regular,monospace;white-space:pre-wrap;overflow:auto";
+        overlay.textContent = `桌面界面启动失败：\n${detail}`;
+        document.body?.append(overlay);
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
