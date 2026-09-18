@@ -563,10 +563,14 @@ export async function postRoomMessage(
   channelCode?: string,
   approvalMode?: string,
   digitalHumanTokens?: Record<string, string>,
+  /** 会话归属项目路径：数字人执行时的工作目录（直连路径同款语义） */
+  cwd?: string,
+  /** 用户授权的额外可写根：@ 引用工程目录 + 资源文件所在目录 */
+  sandboxRoots?: string[],
 ): Promise<{ accepted: boolean; mode?: string }> {
   return collabRequest(port, `/rooms/${encodeURIComponent(roomId)}/messages`, {
     method: "POST",
-    body: JSON.stringify({ content, mentions, channelCode, approvalMode, digitalHumanTokens }),
+    body: JSON.stringify({ content, mentions, channelCode, approvalMode, digitalHumanTokens, cwd, sandboxRoots }),
   });
 }
 

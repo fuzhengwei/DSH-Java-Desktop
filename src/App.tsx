@@ -13,7 +13,7 @@ import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
 import { FilePreview } from "./components/FilePreview";
 import { ArrowLeftIcon, PlusIcon, RefreshIcon, UsersIcon } from "./components/icons";
-import { truncateSessionTitle } from "./lib/text";
+import { stripHiddenContext, truncateSessionTitle } from "./lib/text";
 import {
   activateModelSetting,
   deleteModelSetting,
@@ -570,15 +570,7 @@ function buildOutgoingMessage(draft: string, resources: ComposerResource[], proj
 }
 
 function visibleMessageText(value: string): string {
-  let text = stripInvisibleChars(value);
-  const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
-  if (openIndex >= 0) {
-    const closeIndex = text.indexOf(HIDDEN_CONTEXT_CLOSE, openIndex);
-    text = closeIndex >= 0
-      ? text.slice(0, openIndex) + text.slice(closeIndex + HIDDEN_CONTEXT_CLOSE.length)
-      : text.slice(0, openIndex);
-  }
-  return text.replace(/\n?\[当前选择的工程\][\s\S]*$/, "").trim();
+  return stripHiddenContext(stripInvisibleChars(value));
 }
 
 function parseThinkingMarkup(value: string): { content: string; reasoning: string } {
@@ -723,6 +715,9 @@ export default function App() {
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const sessionMessagesRef = useRef<Map<string, ConversationMessage[]>>(new Map());
   const sessionRunsRef = useRef<Record<string, SessionRunState>>({});
+  // 走房间编排路径（数字人协作）的会话运行 id：onRunningChange(false) 收口时只清除这些会话的运行态，
+  // 避免误删同会话直连路径的运行记录
+  const roomRunIdsRef = useRef<Set<string>>(new Set());
   const connectingRef = useRef<Promise<void> | null>(null);
   const activeSessionRef = useRef(activeSessionId);
   const activeProjectPathRef = useRef(activeProjectPath);
@@ -879,6 +874,27 @@ export default function App() {
       setRoom(serverRoomToProjection(refreshed));
     })().catch(() => undefined).finally(() => setRoomRunning(false));
   }, [activeSessionId, port, serverRoom, serverRoomId]);
+
+  // 协作面板的运行态上抛：除驱动输入框禁用（roomRunning）外，同步维护 sessionRuns，
+  // 让侧边栏项目角标能统计房间协作（数字人）会话的「进行中/总数」。
+  // 切会话时只复位 roomRunning 不清 sessionRuns——后台仍在跑的房间协作角标要继续显示；
+  // 用户切回该会话时面板会再次上抛 true，此处登记为幂等（保留原 startedAt）。
+  const handleRoomRunningChange = useCallback((running: boolean) => {
+    setRoomRunning(running);
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) return;
+    setSessionRuns((current) => {
+      if (running) {
+        if (current[sessionId]) return current;
+        return { ...current, [sessionId]: { startedAt: Date.now(), title: "", agentId: sessionId } };
+      }
+      if (!roomRunIdsRef.current.has(sessionId) || !current[sessionId]) return current;
+      roomRunIdsRef.current.delete(sessionId);
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+  }, []);
 
   const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
     try {
@@ -1642,6 +1658,13 @@ export default function App() {
       try {
         setError("");
         setRoomRunning(true);
+        // 房间协作也要登记运行态：侧边栏角标的「进行中/总数」读的是 sessionRuns，
+        // 此前只有直连路径登记，导致带数字人的项目永远只显示总数不显示 1/N
+        roomRunIdsRef.current.add(originSessionId);
+        setSessionRuns((current) => current[originSessionId]
+          ? current
+          : { ...current, [originSessionId]: { startedAt: Date.now(), title: runTitle, agentId: originSessionId } });
+        setLastRunDurations((current) => ({ ...current, [originSessionId]: 0 }));
         setDraft("");
         setDraftMentions([]);
         setDraftResources([]);
@@ -1679,7 +1702,20 @@ export default function App() {
           (snapshot.participants || []).some((participant) => participant.digitalHumanId === human.id)
         ));
         const digitalHumanTokens = await digitalHumanTokensFor(tokenHumans);
-        await postRoomMessage(port, ensured.id, currentOutgoingMessage, mentionIds, activeModel.channelCode, approvalMode, digitalHumanTokens);
+        // 数字人执行任务时也要拿到与直连路径一致的沙箱边界：
+        // 工作目录 = 会话归属项目；可写根 = @ 工程 + 资源文件所在目录。
+        // 缺了这两项，数字人对用户引入的文件/工程目录没有任何授权，资源等于没加。
+        await postRoomMessage(
+          port,
+          ensured.id,
+          currentOutgoingMessage,
+          mentionIds,
+          activeModel.channelCode,
+          approvalMode,
+          digitalHumanTokens,
+          sessionProjectPathForHumans || undefined,
+          [...new Set([...contextProjects.map((project) => project.path), ...resourceRoots])],
+        );
         setServerRoomId(ensured.id);
         // 协作开始：自动展开右侧协作面板
         setActiveDockTab("collab");
@@ -1690,6 +1726,14 @@ export default function App() {
         setRoom(serverRoomToProjection(refreshed));
       } catch (caught) {
         setRoomRunning(false);
+        // 提交失败：同步清掉刚登记的运行态，否则角标会永久显示「进行中」
+        roomRunIdsRef.current.delete(originSessionId);
+        setSessionRuns((current) => {
+          if (!current[originSessionId]) return current;
+          const next = { ...current };
+          delete next[originSessionId];
+          return next;
+        });
         setError(caught instanceof Error ? caught.message : String(caught));
       }
       return;
@@ -2271,6 +2315,7 @@ export default function App() {
       abortControllersRef.current.get(id)?.abort();
       abortControllersRef.current.delete(id);
     }
+    for (const id of ids) roomRunIdsRef.current.delete(id);
     setSessionRuns((current) => {
       const next = { ...current };
       for (const id of ids) delete next[id];
@@ -2873,7 +2918,7 @@ export default function App() {
                   setServerRoom(snapshot);
                   setRoom(serverRoomToProjection(snapshot));
                 }}
-                onRunningChange={setRoomRunning}
+                onRunningChange={handleRoomRunningChange}
                 onOpenArtifact={openArtifactTab}
                 onOpenFile={openFileTab}
                 starting={roomStreamingEffective}

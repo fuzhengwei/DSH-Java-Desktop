@@ -22,6 +22,28 @@ export function sanitizeDisplayName(name: string): string {
   return cleaned || name;
 }
 
+/** 隐藏上下文块的开闭标记：资源/工程注入只给模型看，不进聊天流 */
+const HIDDEN_CONTEXT_OPEN = "<hidden-context>";
+const HIDDEN_CONTEXT_CLOSE = "</hidden-context>";
+
+/**
+ * 展示用户消息前剥掉隐藏上下文注入块。
+ * 房间协作路径下，服务端 MESSAGE_CREATED 事件回显的是完整外发消息
+ * （正文 + <hidden-context> 注入），聊天气泡必须只呈现正文部分。
+ */
+export function stripHiddenContext(value: string): string {
+  let text = value;
+  const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
+  if (openIndex >= 0) {
+    const closeIndex = text.indexOf(HIDDEN_CONTEXT_CLOSE, openIndex);
+    text = closeIndex >= 0
+      ? text.slice(0, openIndex) + text.slice(closeIndex + HIDDEN_CONTEXT_CLOSE.length)
+      : text.slice(0, openIndex);
+  }
+  // 兜底：早期版本未包 hidden-context 标记的「当前选择的工程」尾巴
+  return text.replace(/\n?\[当前选择的工程\][\s\S]*$/, "").trim();
+}
+
 /** 会话标题缩略展示的最大长度，超出部分以省略号截断 */
 export const SESSION_TITLE_MAX_LENGTH = 24;
 

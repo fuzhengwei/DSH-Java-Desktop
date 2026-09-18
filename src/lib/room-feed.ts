@@ -1,5 +1,6 @@
 import type { DigitalHuman } from "../types";
 import type { RoomEvent } from "./digital-human-client";
+import { stripHiddenContext } from "./text";
 
 /**
  * 房间事件流 → 对话条目（中间区域与右侧群聊视图共用同一份提炼逻辑）。
@@ -118,7 +119,8 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
       case "MESSAGE_CREATED": {
         const role = String(event.payload.role || "");
         if (role === "user") {
-          items.push({ kind: "user", id: event.id, content: String(event.payload.content || ""), seq: event.seq, occurredAt: event.occurredAt });
+          // 服务端回显的是完整外发消息（含 <hidden-context> 资源/工程注入），展示前剥掉
+          items.push({ kind: "user", id: event.id, content: stripHiddenContext(String(event.payload.content || "")), seq: event.seq, occurredAt: event.occurredAt });
         } else {
           // 最终答复：与同任务流式消息合并为一条（覆盖内容、标记完成）
           upsertMessage(taskId, humanRefOf(event, humans), String(event.payload.content || ""), event.seq, true, event.occurredAt);
