@@ -491,6 +491,9 @@ function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size
   const name = path.split("/").filter(Boolean).pop() || path;
   const badge = badgeLabelOf(name);
   const sizeLabel = formatFileSize(size);
+  // html/pdf 这类整页内容内嵌展示又窄又挤：有右侧面板时隐藏内嵌入口，主点击直接在右侧打开（与 Excel 一致）
+  const fullPageKind = ["html", "pdf"].includes(badge.kind);
+  const allowInline = !onOpenFile || !fullPageKind;
   // 有右侧面板回调时主点击直接在面板打开（对齐文件产物的查看体验），否则内嵌展开
   const handleMainClick = () => {
     if (onOpenFile) onOpenFile(path);
@@ -510,9 +513,9 @@ function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size
             <span className={`file-kind-badge kind-${badge.kind}`}>{badge.text}</span>
             <span className="inline-file-name">{name}</span>
             {sizeLabel ? <span className="inline-file-size">{sizeLabel}</span> : null}
-            <span className="inline-file-hint">{exists ? (onOpenFile ? "点击查看" : "点击预览") : "文件不存在"}</span>
+            <span className="inline-file-hint">{exists ? (onOpenFile ? "点击在右侧打开" : "点击预览") : "文件不存在"}</span>
           </button>
-          {exists && onOpenFile ? (
+          {exists && allowInline ? (
             <button type="button" className="inline-file-dock" onClick={() => setOpen(true)} title="在对话内展开预览">
               内嵌预览 ⌄
             </button>
