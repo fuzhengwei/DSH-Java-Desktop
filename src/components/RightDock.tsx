@@ -148,20 +148,38 @@ const RightDock = memo(function RightDock({ children }: Props) {
     if (event.button !== 0) return;
     event.preventDefault();
 
+    const handle = event.currentTarget;
+    // 捕获指针：即使拖到 iframe/窗口外，事件也保证路由回边条
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // 忽略：部分环境 pointerId 已释放
+    }
     const startX = event.clientX;
     const startWidth = dockWidth;
 
     document.body.classList.add("right-dock-resizing");
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      setDockWidth(clampDockWidth(startWidth + startX - moveEvent.clientX));
-    };
 
     const stopResize = () => {
       document.body.classList.remove("right-dock-resizing");
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopResize);
       window.removeEventListener("pointercancel", stopResize);
+      try {
+        handle.releasePointerCapture(event.pointerId);
+      } catch {
+        // 忽略：capture 可能已随指针释放
+      }
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      // 兜底：WebView 偶发吞掉 pointerup（如鼠标在 iframe/窗口外松开），
+      // 此时 buttons 已归零但仍会持续触发 move；视为松手，避免边条"跟手不放"
+      if (moveEvent.buttons === 0) {
+        stopResize();
+        return;
+      }
+      setDockWidth(clampDockWidth(startWidth + startX - moveEvent.clientX));
     };
 
     window.addEventListener("pointermove", handlePointerMove);

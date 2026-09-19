@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { FileActionsArea } from "./FileActionsMenu";
+import { DrawioPreview } from "./DrawioPreview";
 
 /**
  * 通用文件预览：按扩展名路由渲染方式。
@@ -11,10 +12,11 @@ import { FileActionsArea } from "./FileActionsMenu";
  *  - xlsx / csv → SheetJS 表格渲染（csv 走文本也可，但表格化更直观）
  *  - png/jpg/gif/webp/svg → 图片
  *  - pdf → <iframe>（系统 webview 自带 PDF 能力）
+ *  - drawio → embed.diagrams.net 渲染/编辑
  *  - 其它 → 提示不支持
  */
 
-export type FileKind = "markdown" | "text" | "code" | "docx" | "xlsx" | "image" | "pdf" | "html" | "unknown";
+export type FileKind = "markdown" | "text" | "code" | "docx" | "xlsx" | "image" | "pdf" | "html" | "drawio" | "unknown";
 
 export function fileKindOf(name: string): FileKind {
   const ext = (name.split(".").pop() || "").toLowerCase();
@@ -27,6 +29,7 @@ export function fileKindOf(name: string): FileKind {
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"].includes(ext)) return "image";
   if (ext === "pdf") return "pdf";
   if (ext === "html" || ext === "htm") return "html";
+  if (ext === "drawio") return "drawio";
   return "unknown";
 }
 
@@ -62,6 +65,7 @@ const KIND_LABEL: Record<FileKind, string> = {
   image: "图片",
   pdf: "PDF",
   html: "网页",
+  drawio: "Draw.io",
   unknown: "文件",
 };
 
@@ -78,7 +82,7 @@ type Props = {
 
 /** 消息正文中可识别为本地文件路径的扩展名（文档 + 代码） */
 const PATH_EXTENSIONS = [
-  "md", "markdown", "txt", "log", "csv", "tsv", "docx", "xlsx", "xls", "json", "pdf",
+  "md", "markdown", "txt", "log", "csv", "tsv", "docx", "xlsx", "xls", "json", "pdf", "drawio",
   "png", "jpe?g", "gif", "webp", "svg", "ico", "bmp", "html?",
   // 代码类：Agent 操作代码时给出的文件也要能渲染成卡片
   "ts", "tsx", "js", "jsx", "mjs", "cjs", "c", "h", "cpp", "hpp", "cc", "java", "kt", "kts",
@@ -161,7 +165,18 @@ function formatFileSize(size: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export const FilePreview = function FilePreview({ path, name, onClose, compact }: Props) {
+export const FilePreview = function FilePreview(props: Props) {
+  const displayName = props.name || props.path.split("/").filter(Boolean).pop() || props.path;
+  const kind = useMemo(() => fileKindOf(displayName), [displayName]);
+
+  // draw.io 有独立的查看/编辑器（含头部），直接整体接管渲染，避免双层头部
+  if (kind === "drawio") {
+    return <DrawioPreview path={props.path} onClose={props.onClose} compact={props.compact} />;
+  }
+  return <FilePreviewBody {...props} />;
+};
+
+function FilePreviewBody({ path, name, onClose, compact }: Props) {
   const displayName = name || path.split("/").filter(Boolean).pop() || path;
   const kind = useMemo(() => fileKindOf(displayName), [displayName]);
   const [text, setText] = useState("");
@@ -257,7 +272,7 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
       </div>
     </div>
   );
-};
+};;
 
 function binaryToText(base64: string): string {
   try {

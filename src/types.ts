@@ -42,7 +42,7 @@ export type WorkspaceEntry = {
   parentPath?: string;
 };
 
-export type ResourcePluginKind = "word" | "excel" | "md" | "echart";
+export type ResourcePluginKind = "word" | "excel" | "md" | "echart" | "drawio";
 
 export type ComposerResource = {
   id: string;

@@ -1,12 +1,14 @@
 import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowDownIcon, ChevronIcon, CopyIcon, FileIcon, FolderIcon, GitBranchIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, ToolIcon, XIcon } from "./icons";
+import { ArrowDownIcon, ChevronIcon, CopyIcon, DrawIoIcon, EChartIcon, ExcelSheetIcon, FileIcon, FolderIcon, GitBranchIcon, MarkdownIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, ToolIcon, WordDocIcon, XIcon } from "./icons";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
 import { AttributionAvatar } from "./AttributionAvatar";
 import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
+import { FileActionsArea } from "./FileActionsMenu";
+import { fileTypeMeta, pathBasename, pathDirname, type LocalPathKind } from "../lib/fileType";
 import { EChartBlock } from "./EChartBlock";
 
 /** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
@@ -84,7 +86,22 @@ const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>
   excel: "Excel",
   md: "MD",
   echart: "EChart",
+  drawio: "Draw.io",
 };
+
+/** 插件专属图标：+ 菜单与资源胶囊共用，替代千篇一律的扳手 */
+const PLUGIN_RESOURCE_ICONS: Record<NonNullable<ComposerResource["pluginKind"]>, ComponentType<{ className?: string }>> = {
+  word: WordDocIcon,
+  excel: ExcelSheetIcon,
+  md: MarkdownIcon,
+  echart: EChartIcon,
+  drawio: DrawIoIcon,
+};
+
+function PluginIcon({ kind, className }: { kind: NonNullable<ComposerResource["pluginKind"]>; className?: string }) {
+  const Icon = PLUGIN_RESOURCE_ICONS[kind] || ToolIcon;
+  return <Icon className={className} />;
+}
 
 function resourceLabel(resource: ComposerResource): string {
   if (resource.kind === "plugin" && resource.pluginKind) return PLUGIN_RESOURCE_LABELS[resource.pluginKind];
@@ -253,6 +270,93 @@ function editedFiles(messages: ConversationMessage[]): string[] {
     })
     .filter(Boolean);
   return [...new Set(files)];
+}
+
+/** 本轮文件产物标签列表：异步判定每个路径的真实类型（文件 / 文件夹 / 失效），按类型决定图标与点击行为。 */
+function RunSummaryFiles({ files, onOpenFile }: { files: string[]; onOpenFile?: (path: string) => void }) {
+  const [kinds, setKinds] = useState<Record<string, LocalPathKind>>({});
+  const signature = files.join("\n");
+
+  useEffect(() => {
+    const list = signature ? signature.split("\n") : [];
+    if (list.length === 0) return;
+    let cancelled = false;
+    invoke<(LocalPathKind | null)[]>("local_path_kinds", { paths: list })
+      .then((result) => {
+        if (cancelled) return;
+        const next: Record<string, LocalPathKind> = {};
+        list.forEach((file, index) => {
+          next[file] = result[index] ?? "missing";
+        });
+        setKinds(next);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [signature]);
+
+  // 目录若同时是其他产物的上级目录，视为过程性路径（如只写了 Desktop），不单独展示
+  const visible = files.filter((file) => {
+    if (kinds[file] !== "dir") return true;
+    const prefix = file.endsWith("/") || file.endsWith("\\") ? file : `${file}/`;
+    return !files.some((other) => other !== file && other.startsWith(prefix));
+  });
+
+  return (
+    <ul className="run-summary-file-list">
+      {visible.map((file) => (
+        <RunFileChip key={file} file={file} kind={kinds[file] ?? "file"} onOpenFile={onOpenFile} />
+      ))}
+    </ul>
+  );
+}
+
+function RunFileChip({ file, kind, onOpenFile }: { file: string; kind: LocalPathKind; onOpenFile?: (path: string) => void }) {
+  const meta = fileTypeMeta(file, kind === "dir" ? "dir" : undefined);
+  const Icon = meta.Icon;
+  const missing = kind === "missing";
+  const base = pathBasename(file);
+  const dir = pathDirname(file);
+
+  const handleClick = () => {
+    if (missing) return;
+    // 文件夹点击直接在文件管理器打开；文件优先走右侧预览
+    if (kind === "dir" || !onOpenFile) {
+      void invoke("open_local_file", { path: file }).catch((error) => {
+        console.error("打开路径失败:", error);
+      });
+      return;
+    }
+    onOpenFile(file);
+  };
+
+  const hint = missing
+    ? "路径不存在或已被移动"
+    : kind === "dir"
+      ? "文件夹 · 点击打开 · 右键更多操作"
+      : `${meta.kindLabel} · 点击预览 · 右键更多操作`;
+  const title = `${file}\n${hint}`;
+
+  return (
+    <li>
+      <FileActionsArea path={file}>
+        <button
+          type="button"
+          className={`run-summary-file-chip kind-${kind}`}
+          title={title}
+          onClick={handleClick}
+        >
+          <span className="run-summary-file-icon" style={{ color: meta.color }}>
+            <Icon className="run-summary-file-svg" />
+          </span>
+          <span className="run-summary-file-name">{base}</span>
+          {missing ? <span className="run-summary-file-state">未找到</span> : null}
+          {dir ? <span className="run-summary-file-dir">{dir}</span> : null}
+        </button>
+      </FileActionsArea>
+    </li>
+  );
 }
 
 /** 找到本轮对话最后一条 AI 回复（不是作为中间思考展示的），用于在尾部挂本轮小结。 */
@@ -903,7 +1007,7 @@ export default function ConversationView({
         <div className="resource-banner" aria-label="已添加资源">
           {resources.map((resource) => (
             <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
-              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <ToolIcon className="icon-12" />}
+              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
               <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
               <span className="resource-chip-name">{resourceLabel(resource)}</span>
               <button
@@ -1110,9 +1214,9 @@ export default function ConversationView({
                     ))}
                     <div className="resource-menu-divider" />
                     <div className="resource-menu-title">插件</div>
-                    {(["word", "excel", "md", "echart"] as const).map((kind) => (
+                    {(["word", "excel", "md", "echart", "drawio"] as const).map((kind) => (
                       <button key={kind} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourcePlugin(kind))}>
-                        <ToolIcon className="icon-14" />
+                        <PluginIcon kind={kind} className="icon-14" />
                         {PLUGIN_RESOURCE_LABELS[kind]}
                       </button>
                     ))}
@@ -1324,21 +1428,52 @@ export default function ConversationView({
         {isHome ? (
           <div className="conversation-scroll home">
             <div className="home-hero">
-              <div className="home-title">
-                <h1>今天要做什么？</h1>
-                <p>{activeProject ? "当前项目已就绪" : "选择项目后开始一个新对话"}</p>
-              </div>
-              <div className="suggestion-grid">
-                <button onClick={() => commitDraft("分析当前项目的代码结构，找出启动入口、核心模块和潜在风险。")}>
-                  分析项目结构
-                </button>
-                <button onClick={() => commitDraft("为当前项目设计一个可执行的测试计划，并优先列出高风险场景。")}>
-                  制定测试计划
-                </button>
-                <button onClick={() => commitDraft("审查当前项目的构建配置，找出可以改进的地方。")}>
-                  审查构建配置
-                </button>
-              </div>
+            <div className="home-title">
+              <h1>今天要做什么？</h1>
+              <p>
+                {activeProject
+                  ? "DSH-Java 智能体已就绪，当前项目已加载"
+                  : "DSH-Java 智能体已就绪，选择项目后开始一个新对话"}
+              </p>
+            </div>
+            <div className="suggestion-grid">
+              <button
+                onClick={() =>
+                  commitDraft(
+                    "分析当前项目的整体结构与核心模块，画一张 draw.io 架构图，并附简要说明。"
+                  )
+                }
+              >
+                <span className="suggestion-title">看懂一个项目</span>
+                <span className="suggestion-desc">
+                  梳理结构与核心链路，自动产出 draw.io 架构图
+                </span>
+              </button>
+              <button
+                onClick={() =>
+                  commitDraft(
+                    "分析当前项目的代码规模与模块分布，生成一份带 ECharts 图表的项目分析报告。"
+                  )
+                }
+              >
+                <span className="suggestion-title">生成分析报告</span>
+                <span className="suggestion-desc">
+                  一键产出带图表的 Word / Markdown 报告
+                </span>
+              </button>
+              <button
+                onClick={() =>
+                  commitDraft(
+                    "审查当前项目的代码质量与潜在风险，列出改进建议并按优先级排序。"
+                  )
+                }
+              >
+                <span className="suggestion-title">审查与改进</span>
+                <span className="suggestion-desc">
+                  找出风险与坏味道，给出可执行的优化建议
+                </span>
+              </button>
+            </div>
             </div>
           </div>
         ) : roomContent ? (
@@ -1521,7 +1656,7 @@ const MessageItem = memo(function MessageItem({
               <div className="message-mentions">
                 {message.resources.map((resource) => (
                   <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
-                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <ToolIcon className="icon-12" />}
+                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
                     <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
                     <span className="resource-chip-name">{resourceLabel(resource)}</span>
                   </span>
@@ -1550,27 +1685,13 @@ const MessageItem = memo(function MessageItem({
                   </span>
                 ) : null}
                 {runSummary.files.length > 0 ? (
-                  <details className="run-summary-files">
-                    <summary>
+                  <div className="run-summary-files">
+                    <span className="run-summary-files-header">
                       <span>修改文件</span>
                       <span className="run-summary-count">{runSummary.files.length}</span>
-                    </summary>
-                    <ul>
-                      {runSummary.files.map((file) => (
-                        <li key={file} title={onOpenFile ? `${file}（点击查看）` : file}>
-                          {onOpenFile ? (
-                            <button
-                              type="button"
-                              className="run-summary-file-link"
-                              onClick={() => onOpenFile(file)}
-                            >
-                              {file}
-                            </button>
-                          ) : file}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
+                    </span>
+                    <RunSummaryFiles files={runSummary.files} onOpenFile={onOpenFile} />
+                  </div>
                 ) : null}
               </div>
             ) : null}

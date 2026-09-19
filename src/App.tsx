@@ -118,10 +118,19 @@ const RESOURCE_PLUGIN_PROMPTS: Record<NonNullable<ComposerResource["pluginKind"]
   excel: "按 Excel 表格交付，优先生成或编辑 .xlsx 内容。",
   md: "按 Markdown 文档交付，优先生成或编辑 .md 内容。",
   echart: "按 ECharts 图表交付，优先生成可渲染的 echarts 代码块或图表配置。",
+  drawio: "按 draw.io 图表交付，优先生成或编辑 .drawio 文件：内容必须是合法的 mxGraphModel XML（mxfile 包裹），用 <mxCell> 节点与 edge 表达节点、连线与布局，写盘后给出绝对路径。",
+};
+
+const RESOURCE_PLUGIN_DISPLAY_NAMES: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
+  word: "Word",
+  excel: "Excel",
+  md: "Markdown",
+  echart: "ECharts",
+  drawio: "draw.io",
 };
 
 function resourceDisplayName(resource: ComposerResource): string {
-  if (resource.kind === "plugin" && resource.pluginKind) return resource.pluginKind.toUpperCase();
+  if (resource.kind === "plugin" && resource.pluginKind) return RESOURCE_PLUGIN_DISPLAY_NAMES[resource.pluginKind];
   return resource.name;
 }
 
@@ -312,6 +321,17 @@ function readSessionOrder(): Record<string, string[]> {
     return next;
   } catch {
     return {};
+  }
+}
+
+function readPinnedSessionIds(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem("dsh-session-pinned") || "[]");
+    return Array.isArray(value)
+      ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : [];
+  } catch {
+    return [];
   }
 }
 
@@ -640,6 +660,8 @@ export default function App() {
   const [localProjects, setLocalProjects] = useState<WorkspaceEntry[]>(readLocalProjects);
   const [projectOrder, setProjectOrder] = useState<string[]>(readProjectOrder);
   const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(readSessionOrder);
+  // 置顶会话（存所有别名 id，侧边栏顶部「置顶」区展示）
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(readPinnedSessionIds);
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
   const [messages, setMessages] = useState<ConversationMessage[]>(() => readSessionMessages(localStorage.getItem("dsh-active-session-id") || ""));
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
@@ -735,23 +757,41 @@ export default function App() {
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    const handle = event.currentTarget;
+    // 捕获指针：即使拖到 iframe（draw.io 等）/窗口外，事件也保证路由回边条
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch {
+      // 忽略：部分环境 pointerId 已释放
+    }
     const startX = event.clientX;
     const startWidth = sidebarWidth;
     setSidebarResizing(true);
 
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      setSidebarWidth(normalizeSidebarWidth(startWidth + moveEvent.clientX - startX));
-    };
-    const handlePointerUp = () => {
+    const stopResize = () => {
       setSidebarResizing(false);
       window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerUp);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      try {
+        handle.releasePointerCapture(event.pointerId);
+      } catch {
+        // 忽略：capture 可能已随指针释放
+      }
+    };
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      // 兜底：WebView 偶发吞掉 pointerup（如鼠标在 iframe/窗口外松开），
+      // 此时 buttons 已归零但仍会持续触发 move；视为松手，避免边条"跟手不放"
+      if (moveEvent.buttons === 0) {
+        stopResize();
+        return;
+      }
+      setSidebarWidth(normalizeSidebarWidth(startWidth + moveEvent.clientX - startX));
     };
 
     window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerUp);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
   }, [sidebarWidth]);
 
   useEffect(() => {
@@ -1210,6 +1250,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("dsh-session-order", JSON.stringify(sessionOrder));
   }, [sessionOrder]);
+
+  useEffect(() => {
+    localStorage.setItem("dsh-session-pinned", JSON.stringify(pinnedSessionIds));
+  }, [pinnedSessionIds]);
 
   useEffect(() => {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
@@ -2362,6 +2406,18 @@ export default function App() {
     )));
   }, []);
 
+  // 置顶/取消置顶：同一会话的所有别名 id 一起处理，保证按任一 id 都能命中
+  const togglePinSession = useCallback((session: SessionSummary) => {
+    const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
+    setPinnedSessionIds((current) => {
+      const isPinned = current.some((id) => ids.includes(id));
+      if (isPinned) return current.filter((id) => !ids.includes(id));
+      // 新置顶的会话排在最前
+      return [...ids.filter((id) => !current.includes(id)), ...current];
+    });
+  }, []);
+
   const deleteSession = useCallback((session: SessionSummary) => {
     const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
     if (ids.length === 0) return;
@@ -2837,6 +2893,8 @@ export default function App() {
         sessionCustomTitles={customSessionTitles}
         onRenameSession={renameSession}
         onDeleteSession={deleteSession}
+        pinnedSessionIds={pinnedSessionIds}
+        onTogglePinSession={togglePinSession}
         onMoveSessionToProject={moveSessionToProject}
         onReorderSessions={reorderSessions}
         onNewConversation={(project) => startConversation(project ?? activeProject)}

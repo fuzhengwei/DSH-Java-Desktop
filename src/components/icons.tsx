@@ -89,6 +89,15 @@ export function XIcon({ className }: IconProps) {
   );
 }
 
+export function PinIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M12 16.5V21" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 export function TrashIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={className}>
@@ -196,6 +205,127 @@ export function ToolIcon({ className }: IconProps) {
   );
 }
 
+/** Word 插件图标：文档 + 文本行 */
+export function WordDocIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M7 3.5h7L18.5 8v11a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M13.5 3.5V8H18.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M8.5 12h7M8.5 15h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Excel 插件图标：表格网格 */
+export function ExcelSheetIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="4" y="4.5" width="16" height="15" rx="1.8" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4 9.5h16M4 14.5h16M9.3 4.5v15M14.6 4.5v15" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+/** Markdown 插件图标：圆角框内 M + 下箭头（官方 MD 标识简化） */
+export function MarkdownIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="2.5" y="6" width="19" height="12" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M6 15V9.5l2.6 3 2.6-3V15" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M16.5 9.5V14M16.5 14l-1.8-1.8M16.5 14l1.8-1.8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** EChart 插件图标：柱状图 */
+export function EChartIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M4 4.5v15h16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8.5 15.5v-4M12.5 15.5V8M16.5 15.5v-6.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** draw.io 插件图标：节点 + 连线（diagrams.net 风格） */
+export function DrawIoIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="3.5" y="3.5" width="6.5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="14" y="15.5" width="6.5" height="5" rx="1.2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M10 6h5.5a2 2 0 0 1 2 2v7.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M15.6 13.6l1.9 1.9 1.9-1.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 视频文件图标：胶片框 + 播放三角 */
+export function VideoFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="3" y="5.5" width="18" height="13" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M7 5.5v13M17 5.5v13" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M3 9.5h4M3 14.5h4M17 9.5h4M17 14.5h4" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M10.6 9.4l4 2.6-4 2.6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 图片文件图标：山与太阳 */
+export function ImageFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="9" cy="9.8" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M5 18.5l4.8-4.8a1.4 1.4 0 0 1 2 0l6.7 6.7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M14.5 15.5l1.9-1.9a1.4 1.4 0 0 1 2 0l2.6 2.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** 音频文件图标：音符 */
+export function AudioFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M9.5 18V6.2a1 1 0 0 1 .8-1l7-1.4a1 1 0 0 1 1.2 1V16" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+      <ellipse cx="7" cy="18" rx="2.5" ry="2.2" stroke="currentColor" strokeWidth="1.6" />
+      <ellipse cx="16" cy="16" rx="2.5" ry="2.2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+/** PDF 文件图标：文档 + PDF 折角 */
+export function PdfFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M7 3.5h7L18.5 8v11a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M13.5 3.5V8H18.5" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M8.5 15.5v-4h1.3a1.2 1.2 0 0 1 0 2.4H8.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.5 11.5v4M12.5 11.5h.8a1.6 1.6 0 0 1 1.6 1.6v.8a1.6 1.6 0 0 1-1.6 1.6h-.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 代码文件图标：尖括号 */
+export function CodeFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M8.5 8.5L4.5 12l4 3.5M15.5 8.5l4 3.5-4 3.5M13.2 5.5l-2.4 13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 压缩包文件图标：拉链纸箱 */
+export function ArchiveFileIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="4" y="4.5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 4.5v3M12 9.5v1.5M12 13v1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M10 19.5v-2a1.2 1.2 0 0 1 1.2-1.2h1.6a1.2 1.2 0 0 1 1.2 1.2v2" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 export function ChatDotsIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -227,6 +357,16 @@ export function UserIcon({ className }: IconProps) {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
       <circle cx="12" cy="8" r="3.6" />
       <path d="M4.5 20v-1.6a5.4 5.4 0 0 1 5.4-5.4h4.2a5.4 5.4 0 0 1 5.4 5.4V20" />
+    </svg>
+  );
+}
+
+/** 侧边栏「项目」分组图标：层叠面板 */
+export function LayersIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M12 3.5 21 8l-9 4.5L3 8z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M4.2 12.2 12 16.1l7.8-3.9M4.2 16.2 12 20.1l7.8-3.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

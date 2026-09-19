@@ -31,6 +31,7 @@ function artifactLabel(kind?: string): string {
   if (["sheet", "excel", "xlsx", "xls", "csv"].includes(normalized)) return "Excel";
   if (["chart", "echart", "echarts"].includes(normalized)) return "ECharts";
   if (["markdown", "md"].includes(normalized)) return "Markdown";
+  if (["drawio", "diagram"].includes(normalized)) return "draw.io";
   return kind || "Markdown";
 }
 
@@ -40,6 +41,7 @@ function kindFromPath(path: string): string | null {
   if (["xls", "xlsx", "csv", "tsv"].includes(ext)) return "excel";
   if (["md", "markdown"].includes(ext)) return "markdown";
   if (["html", "htm"].includes(ext)) return "html";
+  if (["drawio"].includes(ext)) return "drawio";
   return null;
 }
 

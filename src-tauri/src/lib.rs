@@ -867,6 +867,19 @@ fn read_local_text_file(path: String) -> Result<String, String> {
     fs::read_to_string(&file).map_err(|error| format!("读取文件失败：{error}"))
 }
 
+/// 写入本地文本文件（draw.io 编辑保存等），内容上限 8MB；父目录不存在时自动创建。
+#[tauri::command]
+fn write_local_text_file(path: String, contents: String) -> Result<(), String> {
+    if contents.len() > 8 * 1024 * 1024 {
+        return Err("内容过大（超过 8MB），不支持写盘".to_string());
+    }
+    let file = resolve_preview_file(&path);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建目录失败：{error}"))?;
+    }
+    fs::write(&file, contents).map_err(|error| format!("写入文件失败：{error}"))
+}
+
 /// 读取本地二进制文件（docx/xlsx/pdf 等），返回 Base64，大小限制 50MB。
 #[tauri::command]
 fn read_local_file_base64(path: String) -> Result<String, String> {
@@ -902,6 +915,25 @@ fn local_file_metas(paths: Vec<String>) -> Vec<Option<u64>> {
     paths
         .into_iter()
         .map(|path| resolve_preview_file(&path).metadata().ok().map(|meta| meta.len()))
+        .collect()
+}
+
+/// 批量判断路径类型（"file" | "dir"），与入参顺序对齐；不存在或不可访问对应 null。
+/// 用于消息尾部文件产物标签：区分文件 / 文件夹 / 失效路径，决定点击行为与图标。
+#[tauri::command]
+fn local_path_kinds(paths: Vec<String>) -> Vec<Option<String>> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let resolved = resolve_preview_file(&path);
+            if resolved.is_file() {
+                Some("file".to_string())
+            } else if resolved.is_dir() {
+                Some("dir".to_string())
+            } else {
+                None
+            }
+        })
         .collect()
 }
 
@@ -986,11 +1018,11 @@ fn open_external(url: String) -> Result<(), String> {
 
 // ── 生成文件的系统级操作（右键菜单：打开 / 打开文件夹 / 另存为） ──
 
-/// 用系统默认程序打开本地文件（与预览一致的路径解析规则）
+/// 用系统默认程序打开本地文件（与预览一致的路径解析规则）；目录则交给文件管理器打开
 #[tauri::command]
 fn open_local_file(path: String) -> Result<(), String> {
     let file = resolve_preview_file(&path);
-    if !file.is_file() {
+    if !file.exists() {
         return Err(format!("文件不存在或不可访问：{path}"));
     }
 
@@ -1191,7 +1223,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(process_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files, local_file_metas])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

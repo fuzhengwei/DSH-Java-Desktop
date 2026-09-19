@@ -8,6 +8,8 @@ import {
   ChatDotsIcon,
   EditIcon,
   FolderIcon,
+  LayersIcon,
+  PinIcon,
   PlusIcon,
   SettingsIcon,
   UsersIcon,
@@ -46,6 +48,9 @@ type SidebarProps = {
   sessionCustomTitles?: Record<string, string>;
   onRenameSession?: (session: SessionSummary, title: string) => void;
   onDeleteSession?: (session: SessionSummary) => void;
+  /** 已置顶会话的全部别名 id（含后追加的），用于置顶区展示与图钉状态 */
+  pinnedSessionIds?: string[];
+  onTogglePinSession?: (session: SessionSummary) => void;
   onMoveSessionToProject?: (sessionIds: string[], projectPath: string) => void;
   onReorderSessions?: (dragIds: string[], targetIds: string[], projectPath: string, position?: "before" | "after") => void;
   onProjectModalChange: (open: boolean, name?: string, editingProject?: SidebarProps["editingProject"]) => void;
@@ -156,6 +161,8 @@ export default function Sidebar({
   sessionCustomTitles,
   onRenameSession,
   onDeleteSession,
+  pinnedSessionIds = [],
+  onTogglePinSession,
   onMoveSessionToProject,
   onReorderSessions,
   onProjectModalChange,
@@ -277,6 +284,34 @@ export default function Sidebar({
   };
 
   const unassignedSessions = groupedSessions.get("__unassigned__") || [];
+
+  // 置顶会话：按置顶顺序（最新置顶在最前）从全部会话中解析，已删除/隐藏的自动跳过
+  const pinnedIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
+  const isSessionPinned = (session: SessionSummary) => sessionIds(session).some((id) => pinnedIdSet.has(id));
+  const pinnedSessions = useMemo(() => {
+    const seen = new Set<SessionSummary>();
+    const list: SessionSummary[] = [];
+    for (const id of pinnedSessionIds) {
+      const found = sessions.find((session) => !seen.has(session) && sessionIds(session).includes(id));
+      if (found) {
+        seen.add(found);
+        list.push(found);
+      }
+    }
+    return list;
+  }, [pinnedSessionIds, sessions]);
+
+  // 会话归属的项目路径：置顶区的行沿用真实归属，拖拽/选中行为与项目内一致
+  const projectPathOfSessionForPinned = (session: SessionSummary) => {
+    const ids = sessionIds(session);
+    const hasDefaultProject = ids.some((id) => sessionProjectMap[id] === "default");
+    return hasDefaultProject
+      ? ""
+      : ids.map((id) => normalizedSidebarProjectPath(sessionProjectMap[id])).find(Boolean)
+        || normalizedSidebarProjectPath(session.workspaceId)
+        || "";
+  };
+
   const runningIds = useMemo(() => new Set(runningSessionIds), [runningSessionIds]);
   const isSessionRunning = (session: SessionSummary) => (
     sessionIds(session).some((id) => runningIds.has(id))
@@ -481,6 +516,20 @@ export default function Sidebar({
           <span className="session-time">{sessionTime(session)}</span>
         ) : null}
         <span className="session-item-actions">
+          {onTogglePinSession ? (
+            <button
+              type="button"
+              className={`session-action-btn pin${isSessionPinned(session) ? " pinned" : ""}`}
+              title={isSessionPinned(session) ? "取消置顶" : "置顶"}
+              aria-label={`${isSessionPinned(session) ? "取消置顶" : "置顶"} ${title}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onTogglePinSession(session);
+              }}
+            >
+              <PinIcon className="icon-14" />
+            </button>
+          ) : null}
           <button
             type="button"
             className="session-action-btn"
@@ -557,7 +606,23 @@ export default function Sidebar({
       {!collapsed ? (
       <div className="sidebar-scroll">
         <div className="section-heading-row">
-          <div className="section-heading">项目</div>
+          <div className="section-heading section-heading-label">
+            <PinIcon className="icon-14" />
+            <span>置顶</span>
+            <span className="section-count">{pinnedSessions.length}</span>
+          </div>
+        </div>
+        <div className="pinned-list">
+          {pinnedSessions.length === 0 ? (
+            <div className="empty-note subtle">把对话行上的图钉点亮，即可置顶到这里。</div>
+          ) : pinnedSessions.map((session) => renderSessionRow(session, true, projectPathOfSessionForPinned(session)))}
+        </div>
+        <div className="section-heading-row">
+          <div className="section-heading section-heading-label">
+            <LayersIcon className="icon-14" />
+            <span>项目</span>
+            <span className="section-count">{topLevelProjects.length}</span>
+          </div>
           <button className="section-action" onClick={() => onProjectModalChange(true, "", null)} title="新建项目">
             <PlusIcon className="icon-15" />
           </button>

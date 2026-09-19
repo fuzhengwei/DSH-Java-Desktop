@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DSH Java Desktop · 架构总览</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e3e6ea;
+    --text: #1f2329;
+    --muted: #6b7280;
+    --accent: #2563eb;
+    --accent-soft: #eff6ff;
+    --green: #16a34a;
+    --orange: #ea580c;
+    --purple: #7c3aed;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.65; font-size: 14px;
+  }
+  .page { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+  header.hero { margin-bottom: 36px; }
+  header.hero h1 { font-size: 26px; margin-bottom: 10px; }
+  header.hero p { color: var(--muted); max-width: 760px; }
+  .tagline {
+    display: inline-block; margin-top: 14px; padding: 6px 14px;
+    background: var(--accent-soft); color: var(--accent);
+    border: 1px solid #bfdbfe; border-radius: 999px; font-size: 13px;
+  }
+  section { margin-top: 44px; }
+  h2 { font-size: 19px; margin-bottom: 6px; padding-left: 12px; border-left: 4px solid var(--accent); }
+  .sec-desc { color: var(--muted); margin: 8px 0 18px 16px; font-size: 13.5px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 20px 22px; box-shadow: 0 1px 2px rgba(0,0,0,.03); margin-left: 16px;
+  }
+  .diagram { width: 100%; height: auto; display: block; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; }
+  tr:last-child td { border-bottom: none; }
+  code {
+    font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 12.5px;
+    background: #f1f3f5; padding: 1px 6px; border-radius: 5px;
+  }
+  pre {
+    background: #f6f8fa; border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.6;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+  }
+  ol, ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+    margin-right: 6px; vertical-align: -1px;
+  }
+  .lg-shell::before { background: #dbeafe; }
+  .lg-server::before { background: #dcfce7; }
+  .lg-remote::before { background: #fef3c7; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--border); padding-top: 18px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="hero">
+    <h1>DSH Java Desktop · 架构总览</h1>
+    <p>一款开箱即用的「数字人」AI 智能体桌面端：内置 DSH Java Agent Runtime（含 Java 17 环境），零依赖装完即用。单个数字人胜任编码、绘图、文档、图表等多场景工作；多个数字人经 dsh.v1 / A2A 跨端组建协作团队；插件、Skills、MCP、CLI 随需扩展。</p>
+    <span class="tagline">开箱即用 · 单数字人多场景干活 · 多数字人跨端协作 · 插件 / Skills / MCP 可扩展</span>
+  </header>
+
+  <section>
+    <h2>一、整体架构</h2>
+    <p class="sec-desc">桌面端只做壳：React UI 通过 invoke 调用 Tauri 原生能力，通过 127.0.0.1 HTTP/SSE 调用内嵌 JAR；智能体全部能力（ReAct 循环、事件溯源、审批、协作、协议网关）由服务端承载。</p>
+    <div class="card">
+      <svg class="diagram" viewBox="0 0 1030 624" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'PingFang SC', sans-serif">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+          </marker>
+        </defs>
+        <!-- 用户层 -->
+        <rect x="330" y="16" width="370" height="44" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+        <text x="515" y="43" text-anchor="middle" font-size="14" fill="#334155">用户（开发者 / 数字员工管理者）</text>
+        <line x1="515" y1="60" x2="515" y2="86" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+        <!-- 桌面端容器 -->
+        <rect x="24" y="90" width="982" height="300" rx="16" fill="#eff6ff" stroke="#93c5fd"/>
+        <text x="44" y="118" font-size="13" font-weight="600" fill="#1d4ed8">桌面端 · DSH-Java-Desktop（Tauri 2 + React 19 + TypeScript）</text>
+
+        <!-- React UI -->
+        <rect x="48" y="136" width="270" height="216" rx="12" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="183" y="162" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1e293b">React UI</text>
+        <text x="64" y="190" font-size="12" fill="#475569">· 对话流式（SSE + 看门狗 + 对账）</text>
+        <text x="64" y="212" font-size="12" fill="#475569">· 数字人房间 / 群聊 / 任务面板</text>
+        <text x="64" y="234" font-size="12" fill="#475569">· 五类资源插件预览与 draw.io 编辑</text>
+        <text x="64" y="256" font-size="12" fill="#475569">· 文件产物卡片 / 代码查看 / 右键菜单</text>
+        <text x="64" y="278" font-size="12" fill="#475569">· 扩展管理（Skills / MCP / CLI）</text>
+        <text x="64" y="300" font-size="12" fill="#475569">· 运行信息（Git 分支查看/切换）</text>
+        <text x="64" y="322" font-size="12" fill="#475569">· 设置：模型 / 审批 / 服务诊断</text>
+
+        <!-- Tauri Shell -->
+        <rect x="368" y="136" width="290" height="216" rx="12" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="513" y="162" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1e293b">Tauri Rust Shell（22 个命令）</text>
+        <text x="384" y="190" font-size="12" fill="#475569">· JAR 进程托管：选端口 / 日志 / 退出清理</text>
+        <text x="384" y="212" font-size="12" fill="#475569">· 本地文件读写 / 预览 / 打开 / 另存为</text>
+        <text x="384" y="234" font-size="12" fill="#475569">· 凭据安全存储 · 系统通知</text>
+        <text x="384" y="256" font-size="12" fill="#475569">· Git 分支查询 / 切换 / 变更</text>
+        <text x="384" y="278" font-size="12" fill="#475569">· 目录/文件选择器</text>
+        <text x="384" y="300" font-size="12" fill="#475569">· Tauri Updater 自动更新</text>
+
+        <!-- 内嵌运行时 -->
+        <rect x="708" y="136" width="274" height="216" rx="12" fill="#ffffff" stroke="#bfdbfe"/>
+        <text x="845" y="162" text-anchor="middle" font-size="13.5" font-weight="600" fill="#1e293b">内置运行资源</text>
+        <rect x="724" y="178" width="242" height="56" rx="8" fill="#fefce8" stroke="#fde047"/>
+        <text x="845" y="200" text-anchor="middle" font-size="12" fill="#713f12">deepseek-harness-java-app.jar</text>
+        <text x="845" y="220" text-anchor="middle" font-size="11" fill="#a16207">Spring Boot 3.3 · standalone H2</text>
+        <rect x="724" y="246" width="242" height="56" rx="8" fill="#fefce8" stroke="#fde047"/>
+        <text x="845" y="268" text-anchor="middle" font-size="12" fill="#713f12">Java 17 Runtime（Temurin JRE）</text>
+        <text x="845" y="288" text-anchor="middle" font-size="11" fill="#a16207">用户无需安装 JDK</text>
+        <text x="724" y="330" font-size="11.5" fill="#64748b">随安装包分发，Rust 层负责拉起与回收</text>
+
+        <!-- 桌面端内部连线 -->
+        <line x1="318" y1="230" x2="368" y2="230" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+        <text x="343" y="222" text-anchor="middle" font-size="11" fill="#64748b">invoke</text>
+        <line x1="658" y1="230" x2="708" y2="230" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <text x="683" y="222" text-anchor="middle" font-size="11" fill="#64748b">spawn</text>
+
+        <!-- 服务端 -->
+        <line x1="515" y1="352" x2="515" y2="390" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+        <text x="560" y="376" font-size="11.5" fill="#64748b">HTTP / SSE @ 127.0.0.1:&lt;空闲端口&gt;</text>
+
+        <rect x="24" y="394" width="982" height="118" rx="16" fill="#f0fdf4" stroke="#86efac"/>
+        <text x="44" y="422" font-size="13" font-weight="600" fill="#15803d">内嵌服务端 · deepseek-harness-java（DDD 六边形架构）</text>
+        <rect x="48" y="438" width="296" height="56" rx="8" fill="#ffffff" stroke="#bbf7d0"/>
+        <text x="196" y="460" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">协议接入层 trigger</text>
+        <text x="196" y="480" text-anchor="middle" font-size="11" fill="#3f6212">Agent SSE · DSH 网关 · A2A/AgentCard · 协作 API</text>
+        <rect x="368" y="438" width="296" height="56" rx="8" fill="#ffffff" stroke="#bbf7d0"/>
+        <text x="516" y="460" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">核心服务层 domain</text>
+        <text x="516" y="480" text-anchor="middle" font-size="11" fill="#3f6212">ReactLoopAgent · 会话事件 · 任务/审批 · 协作编排</text>
+        <rect x="688" y="438" width="296" height="56" rx="8" fill="#ffffff" stroke="#bbf7d0"/>
+        <text x="836" y="460" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">基础设施 infrastructure</text>
+        <text x="836" y="480" text-anchor="middle" font-size="11" fill="#3f6212">工具注册 · MCP/Skills/CLI · H2/MySQL · 远端网关</text>
+
+        <!-- 远端接入 -->
+        <line x1="150" y1="512" x2="150" y2="546" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+        <rect x="40" y="550" width="240" height="62" rx="12" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="160" y="576" text-anchor="middle" font-size="12" font-weight="600" fill="#92400e">远端 DSH 服务（dsh.v1）</text>
+        <text x="160" y="596" text-anchor="middle" font-size="11" fill="#b45309">Agent Card 发现 · SSE 事件流</text>
+        <line x1="880" y1="512" x2="880" y2="546" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+        <rect x="756" y="550" width="240" height="62" rx="12" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="876" y="576" text-anchor="middle" font-size="12" font-weight="600" fill="#92400e">第三方 A2A Agent（0.3.x）</text>
+        <text x="876" y="596" text-anchor="middle" font-size="11" fill="#b45309">JSON-RPC message/stream · 任务生命周期</text>
+      </svg>
+      <div class="legend">
+        <span class="lg-shell"></span>蓝色容器：桌面端（本仓库）
+        <span class="lg-server"></span>绿色容器：内嵌服务端 JAR
+        <span class="lg-remote"></span>黄色块：随安装包分发的运行资源
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>二、开放协议与远端智能体</h2>
+    <p class="sec-desc">服务端实现 DSH v1 与标准 A2A 0.3.x 双协议；远端 DSH / A2A 服务经 Agent Card 发现后接入为「数字人」，由 Remote Agent Gateway 统一转换为 RoomEvent。</p>
+    <div class="card">
+      <svg class="diagram" viewBox="0 0 1030 380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'PingFang SC', sans-serif">
+        <defs>
+          <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+          </marker>
+        </defs>
+        <!-- 本地房间 -->
+        <rect x="24" y="40" width="300" height="300" rx="14" fill="#f0fdf4" stroke="#86efac"/>
+        <text x="174" y="70" text-anchor="middle" font-size="13.5" font-weight="600" fill="#15803d">协作房间（本地 JAR）</text>
+        <rect x="48" y="88" width="252" height="230" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+        <text x="64" y="114" font-size="12" fill="#166534">· Planner 自动分工 → 任务 DAG</text>
+        <text x="64" y="140" font-size="12" fill="#166534">· 无依赖并行 / 有依赖等待产物</text>
+        <text x="64" y="166" font-size="12" fill="#166534">· ASK 协议：成员定向问答续跑</text>
+        <text x="64" y="192" font-size="12" fill="#166534">· 失败自动改派 / 重试（恢复预算）</text>
+        <text x="64" y="218" font-size="12" fill="#166534">· 取消 + 下游级联终止</text>
+        <text x="64" y="244" font-size="12" fill="#166534">· RoomEvent 统一事件流</text>
+        <text x="64" y="270" font-size="12" fill="#166534">· 产物入库 / 危险操作审批</text>
+        <text x="64" y="296" font-size="12" fill="#166534">· Remote Agent Gateway 归一化</text>
+
+        <!-- 网关 -->
+        <rect x="400" y="130" width="230" height="120" rx="12" fill="#eff6ff" stroke="#93c5fd"/>
+        <text x="515" y="160" text-anchor="middle" font-size="13" font-weight="600" fill="#1d4ed8">协议发现与网关</text>
+        <text x="515" y="186" text-anchor="middle" font-size="11.5" fill="#1e40af">/.well-known/dsh-agent-card (DSH v1)</text>
+        <text x="515" y="206" text-anchor="middle" font-size="11.5" fill="#1e40af">/.well-known/agent-card.json (A2A 0.3.x)</text>
+        <text x="515" y="230" text-anchor="middle" font-size="11.5" fill="#1e40af">JSON-RPC /a2a · message/stream SSE</text>
+
+        <line x1="324" y1="190" x2="400" y2="190" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow2)" marker-start="url(#arrow2)"/>
+
+        <!-- 远端成员 -->
+        <rect x="720" y="52" width="286" height="76" rx="12" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="863" y="82" text-anchor="middle" font-size="12.5" font-weight="600" fill="#92400e">远端 DSH Runtime · 成员甲</text>
+        <text x="863" y="104" text-anchor="middle" font-size="11.5" fill="#b45309">DSH v1 协议 · SSE 事件流</text>
+        <rect x="720" y="156" width="286" height="76" rx="12" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="863" y="186" text-anchor="middle" font-size="12.5" font-weight="600" fill="#92400e">第三方 A2A Agent · 成员乙</text>
+        <text x="863" y="208" text-anchor="middle" font-size="11.5" fill="#b45309">JSON-RPC message/send · message/stream</text>
+        <rect x="720" y="260" width="286" height="76" rx="12" fill="#fffbeb" stroke="#fcd34d"/>
+        <text x="863" y="290" text-anchor="middle" font-size="12.5" font-weight="600" fill="#92400e">本地 DSH · 成员丙</text>
+        <text x="863" y="312" text-anchor="middle" font-size="11.5" fill="#b45309">本地 Runtime 内 Profile / Plugin</text>
+
+        <line x1="630" y1="170" x2="720" y2="95" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow2)" marker-start="url(#arrow2)"/>
+        <line x1="630" y1="192" x2="720" y2="192" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow2)" marker-start="url(#arrow2)"/>
+        <line x1="630" y1="214" x2="720" y2="295" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow2)" marker-start="url(#arrow2)"/>
+
+        <text x="515" y="290" text-anchor="middle" font-size="11.5" fill="#64748b">远端事件统一归一化为 RoomEvent 后回流房间</text>
+        <text x="515" y="312" text-anchor="middle" font-size="11.5" fill="#64748b">（SSE + 运行期 5s REST 对账轮询，不依赖 SSE 存活）</text>
+      </svg>
+    </div>
+  </section>
+
+  <section>
+    <h2>三、流式稳定性防护</h2>
+    <p class="sec-desc">Tauri plugin-http 的流式转发存在已知缺陷（偶发 chunk / 关闭信号不送达 webview），本项目围绕该问题建立了一套多层防护。</p>
+    <div class="card">
+      <table>
+        <thead><tr><th style="width:130px">层</th><th style="width:170px">机制</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>Agent 对话流</td><td>空闲看门狗</td><td>120s 无任何字节强制中断（工具长执行期间 SSE 可能静默，不能设太小）</td></tr>
+          <tr><td>Agent 对话流</td><td>AbortSignal 打断</td><td>停止按钮 / 看门狗可立即打断挂起的 <code>reader.read()</code></td></tr>
+          <tr><td>Agent 对话流</td><td>REST 对账兜底</td><td>中断后按 agentId 拉取服务端会话与消息，比对采纳后静默补齐，不报错</td></tr>
+          <tr><td>房间事件流</td><td>指数退避重连</td><td>1s → 15s 封顶自动重连，<code>afterSeq</code> 按最新 seq 续传（服务端重放 backlog）</td></tr>
+          <tr><td>房间事件流</td><td>空闲看门狗 + 轮询</td><td>10 分钟看门狗兜静默挂死；任务运行期每 5s 补拉事件 + 刷新快照</td></tr>
+          <tr><td>服务端</td><td>取消语义完整</td><td>任务注册表 + FutureTask 取消 + 状态不被覆盖 + 下游级联置 FAILED</td></tr>
+          <tr><td>服务端</td><td>失败自动恢复</td><td>每任务 1 次恢复预算：优先改派（同能力标签优先），无候选则同员重试</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>四、使用指南</h2>
+    <div class="card">
+      <div class="grid-2">
+        <div>
+          <h3 style="font-size:14.5px; margin-bottom:8px">安装与启动</h3>
+          <ol>
+            <li>从 GitHub Releases 下载对应平台安装包；</li>
+            <li>安装后启动即自动拉起内置智能体服务（无需 JDK / 数据库）；</li>
+            <li>设置页「智能体服务连接」确认服务就绪。</li>
+          </ol>
+          <h3 style="font-size:14.5px; margin:14px 0 8px">模型配置</h3>
+          <ol>
+            <li>设置 → 选择渠道模板，填 Base URL 与 API Key；</li>
+            <li>「同步模型」拉取上游列表或手输模型编码；</li>
+            <li>「保存模型」自动激活，顶部选择器切换运行时模型。</li>
+          </ol>
+          <h3 style="font-size:14.5px; margin:14px 0 8px">数字人协作</h3>
+          <ol>
+            <li>设置 → 数字人目录 →「添加数字人」（自动探测 Agent Card）；</li>
+            <li>对话中邀请成员进房间；<code>@成员</code> 定向派发或直接描述目标自动分工；</li>
+            <li>任务面板跟踪 DAG 执行、产物与审批。</li>
+          </ol>
+        </div>
+        <div>
+          <h3 style="font-size:14.5px; margin-bottom:8px">开发运行</h3>
+          <pre>npm install
+npm run tauri dev</pre>
+          <h3 style="font-size:14.5px; margin:14px 0 8px">构建发布</h3>
+          <pre>npm run tauri:build
+# = agent:build + agent:copy + agent:runtime + tauri build</pre>
+          <h3 style="font-size:14.5px; margin:14px 0 8px">服务端改动同步</h3>
+          <ol>
+            <li>在 <code>../deepseek-harness-java</code> 修改并 <code>mvn package</code>；</li>
+            <li>覆盖 <code>resources/agent/deepseek-harness-java-app.jar</code>；</li>
+            <li>如遇 Permission denied，删 <code>src-tauri/target/debug/agent/</code> 缓存再构建。</li>
+          </ol>
+          <h3 style="font-size:14.5px; margin:14px 0 8px">日志与诊断</h3>
+          <pre>~/Library/Application Support/
+  cn.xiaofuge.desktop/logs/agent.log</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    DSH Java Desktop · 配套服务端 deepseek-harness-java（Spring Boot 3.3 · DDD 六边形架构）<br/>
+    详细设计见 README.md 与 docs/architecture/digital-human-agent-architecture.md
+  </footer>
+
+</div>
+</body>
+</html>

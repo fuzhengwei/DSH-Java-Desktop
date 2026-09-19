@@ -904,6 +904,40 @@ select:focus-visible {
   color: #c93c3c;
 }
 
+/* 侧边栏分组标题（置顶/项目）：图标 + 名称 + 数量 */
+.section-heading-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.section-heading-label .icon-14 {
+  width: 12px;
+  height: 12px;
+}
+
+.section-heading-label .section-count {
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.pinned-list {
+  margin: 2px 0 8px;
+}
+
+.pinned-list .empty-note {
+  padding: 2px 7px;
+}
+
+.session-action-btn.pin.pinned {
+  color: var(--sidebar-accent);
+}
+
+.session-action-btn.pin.pinned:hover {
+  color: var(--sidebar-accent);
+  background: rgba(65, 96, 240, .1);
+}
+
 .session-time {
   max-width: 56px;
   overflow: hidden;
@@ -2578,6 +2612,9 @@ select:focus-visible {
 }
 
 .suggestion-grid button {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-height: 40px;
   padding: 10px 13px;
   border: 0;
@@ -2588,6 +2625,19 @@ select:focus-visible {
   font-weight: 570;
   text-align: left;
   transition: border-color .16s ease, background .16s ease;
+}
+
+.suggestion-grid .suggestion-title {
+  font-size: 13px;
+  font-weight: 620;
+  color: var(--text);
+}
+
+.suggestion-grid .suggestion-desc {
+  font-size: 11px;
+  font-weight: 480;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 
 .suggestion-grid button:hover {
@@ -3302,16 +3352,12 @@ select:focus-visible {
   opacity: .75;
 }
 
-.run-summary-files summary {
+.run-summary-files-header {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  width: fit-content;
-  cursor: pointer;
-  list-style: none;
+  user-select: none;
 }
-
-.run-summary-files summary::-webkit-details-marker { display: none; }
 
 .run-summary-count {
   min-width: 16px;
@@ -3326,30 +3372,109 @@ select:focus-visible {
   text-align: center;
 }
 
-.run-summary-files ul {
-  margin: 6px 0 0;
-  padding-left: 16px;
-  color: var(--text-subtle);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 18px;
+/* 最终文件产物标签：按文件类型着色图标；左键预览 / 目录在 Finder 打开，右键菜单更多操作 */
+.run-summary-file-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
-.run-summary-file-link {
-  border: 0;
-  background: transparent;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: var(--sidebar-accent, #4160f0);
+.run-summary-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   max-width: 460px;
+  min-height: 26px;
+  padding: 3px 11px 3px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface-3);
+  box-shadow:
+    inset 0 0 0 1px var(--border),
+    0 1px 1px rgba(31, 31, 36, .03);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--text);
+  text-align: left;
+  transition: background .12s ease, box-shadow .12s ease, transform .12s ease;
+}
+
+.run-summary-file-chip:hover {
+  background: color-mix(in srgb, var(--surface-3) 60%, var(--selection));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--sidebar-accent, #4160f0) 30%, var(--border)),
+    0 1px 2px rgba(31, 31, 36, .05);
+}
+
+.run-summary-file-chip:active {
+  transform: scale(.985);
+}
+
+.run-summary-file-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.run-summary-file-svg {
+  width: 14px;
+  height: 14px;
+}
+
+.run-summary-file-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  vertical-align: bottom;
+  font-weight: 620;
 }
 
-.run-summary-file-link:hover { text-decoration: underline; }
+.run-summary-file-state {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(226, 87, 76, .1);
+  color: #c2453b;
+  font-size: 9px;
+  font-weight: 680;
+  line-height: 14px;
+}
+
+.run-summary-file-chip.kind-missing {
+  cursor: default;
+  opacity: .62;
+  box-shadow: none;
+  outline: 1px dashed var(--border);
+  outline-offset: -1px;
+}
+
+.run-summary-file-chip.kind-missing:hover {
+  background: var(--surface-3);
+  box-shadow: none;
+  outline: 1px dashed var(--border);
+  outline-offset: -1px;
+}
+
+.run-summary-file-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+  color: var(--text-subtle);
+  font-family: var(--mono);
+  font-size: 10px;
+}
 
 .context-ring-wrap {
   position: relative;
@@ -6455,6 +6580,44 @@ select:focus-visible {
 .file-kind-badge.kind-image { background: linear-gradient(135deg, #9a6ff0, #7c4fe0); }
 .file-kind-badge.kind-code { background: linear-gradient(135deg, #5a6b7d, #3e4d5e); }
 .file-kind-badge.kind-markdown { background: linear-gradient(135deg, #4a5568, #2d3748); }
+.file-kind-badge.kind-drawio { background: linear-gradient(135deg, #f0873a, #dd6b20); }
+
+/* ── draw.io 预览/编辑器 ── */
+.drawio-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.drawio-head.compact { padding: 8px 12px; }
+.drawio-mode {
+  border: 1px solid var(--border); background: var(--surface); cursor: pointer;
+  height: 24px; padding: 0 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: var(--text-subtle);
+}
+.drawio-mode:hover { color: var(--text); border-color: var(--text-subtle); }
+.drawio-mode.active {
+  background: var(--accent, #4160f0); border-color: var(--accent, #4160f0); color: #fff;
+}
+.drawio-save {
+  border: 0; background: var(--accent, #4160f0); cursor: pointer;
+  height: 24px; padding: 0 12px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 600; color: #fff;
+}
+.drawio-save:disabled { opacity: .6; cursor: default; }
+.drawio-canvas {
+  flex: 1; min-height: 0;
+  background: #fafafa;
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+.drawio-preview.compact .drawio-canvas { min-height: 360px; }
+.drawio-offline-hint {
+  padding: 8px 14px;
+  font-size: 12px; color: #8a5a00;
+  background: #fff7e0;
+  border-bottom: 1px solid #f2e3b3;
+}
 
 /* ── 文件渲染：预览面板（右侧 Dock / 对话内嵌） ── */
 .file-preview {
