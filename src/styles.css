@@ -8190,3 +8190,12 @@ select:focus-visible {
 /* ═══════════ 房间协作：运行期待决审批卡（实时轮询） ═══════════ */
 .room-approval-session { font-weight: 500; color: inherit; opacity: .75; }
 .room-approval .room-approval-actions button:disabled { opacity: .6; cursor: default; }
+
+/* ═══════════ 代码语法高亮（rehype-highlight / highlight.js github 主题） ═══════════ */
+/* 主题在 main.tsx 引入 highlight.js/styles/github.css（浅色）；这里去掉 hljs 自带的白色底，
+   让高亮代码融入各处代码块原有的底色（markdown-body pre、file-preview、代码查看器等） */
+.hljs { background: transparent; padding: 0; }
+.markdown-body pre code.hljs,
+.artifact-preview-content pre code.hljs,
+.file-preview-markdown pre code.hljs { display: block; }
+.code-view-lines code { color: var(--text, #24292e); }

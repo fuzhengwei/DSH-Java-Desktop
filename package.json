@@ -21,6 +21,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "echarts": "^6.1.0",
+    "highlight.js": "^11.12.0",
     "mammoth": "^1.12.3",
     "mdast-util-gfm-footnote": "^2.1.0",
     "mdast-util-gfm-strikethrough": "^2.0.0",
@@ -34,6 +35,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

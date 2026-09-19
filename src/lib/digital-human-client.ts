@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch as pluginFetch } from "@tauri-apps/plugin-http";
+import { httpFetch } from "./http";
 import type {
   ApiEnvelope,
   DigitalHuman,
@@ -116,7 +117,11 @@ function baseUrl(port: number): string {
 }
 
 async function request<T>(port: number, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl(port)}${path}`, {
+  // 原生 fetch 优先（服务端已开 CORS）；被 CORS 拦下或网络异常时自动回退
+  // plugin-http（外部数字人 Runtime 等未开 CORS 的远端保持历史行为）。
+  // 此前全量走 plugin-http，其 IPC 流转发有已知缺陷，偶发静默挂死，
+  // 是房间协作"生成中"永久卡死（含 SSE、对账轮询同时失效）的直接推手。
+  const response = await httpFetch(`${baseUrl(port)}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
@@ -264,7 +269,9 @@ export async function discoverDigitalHuman(
   const startedAt = Date.now();
   try {
     const cardPath = endpointType === "a2a" ? "/.well-known/agent.json" : "/.well-known/dsh-agent-card";
-    const response = await fetch(`${normalized}${cardPath}`, {
+    // 远端 Agent Card 探测保持 plugin-http：目标端点不受我们控制、未必开 CORS，
+    // 桌面进程直连不被 CORS 限制（见 request() 内注释了解为何本地服务不用这条通道）
+    const response = await pluginFetch(`${normalized}${cardPath}`, {
       method: "GET",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       connectTimeout: 8_000,
@@ -694,10 +701,17 @@ export function subscribeRoomEvents(
       };
       try {
         const startSeq = Math.max(0, getStartSeq());
-        const response = await fetch(
-          `${baseUrl(port)}/api/collaboration/rooms/${encodeURIComponent(roomId)}/events/stream?afterSeq=${startSeq}`,
-          { signal: controller.signal },
-        );
+        // 连接阶段加超时：plugin-http 偶发把 fetch 挂死（永不 resolve），
+        // 不加超时会让重连循环永久停摆，空闲看门狗只在连接建立后才起作用
+        const response = await Promise.race([
+          httpFetch(
+            `${baseUrl(port)}/api/collaboration/rooms/${encodeURIComponent(roomId)}/events/stream?afterSeq=${startSeq}`,
+            { signal: controller.signal },
+          ),
+          new Promise<never>((_, reject) => window.setTimeout(
+            () => reject(new Error("事件流连接超时（15s）")), 15_000,
+          )),
+        ]);
         if (!response.ok || !response.body) {
           throw new Error(`事件流连接失败：HTTP ${response.status}`);
         }

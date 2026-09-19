@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import hljs from "highlight.js/lib/common";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
+import { rehypeHighlight, languageFromExtension } from "../lib/markdown-plugins";
 import { FileActionsArea } from "./FileActionsMenu";
 import { DrawioPreview } from "./DrawioPreview";
 
@@ -274,7 +276,7 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
       <div className="file-preview-body">
         {kind === "markdown" ? (
           <div className="file-preview-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfmCompatible]}>{text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
           </div>
         ) : kind === "text" ? (
           <pre className="file-preview-plain">{text}</pre>
@@ -346,13 +348,33 @@ function HtmlPreview({ base64, name }: { base64: string; name: string }) {
 
 /** 代码视图上限：超出则截断展示，避免超大文件卡死渲染 */
 const CODE_VIEW_MAX_LINES = 20_000;
+/** 自动语言探测的字符上限：超大文件直接按纯文本展示，避免 highlightAuto 卡顿 */
+const AUTO_DETECT_MAX_CHARS = 100_000;
 
 /** 代码文件查看器：行号栏 + 源码，对齐 IDE 的阅读体验 */
-function CodeView({ code }: { code: string }) {
+function CodeView({ code, name }: { code: string; name?: string }) {
   const allLines = code.split("\n");
   const truncated = allLines.length > CODE_VIEW_MAX_LINES;
   const shown = truncated ? allLines.slice(0, CODE_VIEW_MAX_LINES) : allLines;
+  const shownText = shown.join("\n");
   const gutter = Array.from({ length: shown.length }, (_, index) => index + 1).join("\n");
+
+  // 按扩展名做语法高亮；未知扩展名且内容不大时自动探测，失败则回退纯文本
+  const highlightedHtml = useMemo(() => {
+    try {
+      const lang = name ? languageFromExtension(name) : null;
+      if (lang && hljs.getLanguage(lang)) {
+        return hljs.highlight(shownText, { language: lang, ignoreIllegals: true }).value;
+      }
+      if (shownText.length <= AUTO_DETECT_MAX_CHARS) {
+        return hljs.highlightAuto(shownText).value;
+      }
+    } catch {
+      // 高亮失败回退纯文本
+    }
+    return null;
+  }, [shownText, name]);
+
   return (
     <div className="file-preview-codeblock">
       {truncated ? (
@@ -360,7 +382,11 @@ function CodeView({ code }: { code: string }) {
       ) : null}
       <div className="code-view">
         <pre className="code-view-gutter" aria-hidden="true">{gutter}</pre>
-        <pre className="code-view-lines"><code>{shown.join("\n")}</code></pre>
+        <pre className="code-view-lines">
+          {highlightedHtml != null
+            ? <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+            : <code>{shownText}</code>}
+        </pre>
       </div>
     </div>
   );

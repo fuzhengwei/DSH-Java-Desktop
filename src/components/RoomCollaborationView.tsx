@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
+import { rehypeHighlight } from "../lib/markdown-plugins";
 import type { ConversationMessage, DigitalHuman, RuntimeApproval } from "../types";
 import type { RoomEvent, ServerRoomView } from "../lib/digital-human-client";
 import { listRuntimeApprovals, resolveRuntimeApproval } from "../lib/agent-client";
@@ -302,6 +303,9 @@ function ToolGroupBlock({ group, focusSeq, forceOpen, humans }: {
 
 // ── 主视图 ───────────────────────────────────────
 
+/** 活动（未终态）任务状态集合 */
+const ACTIVE_TASK_STATES: string[] = ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"];
+
 const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, starting = false, focusRequest }: Props) {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [room, setRoom] = useState<ServerRoomView | null>(null);
@@ -313,6 +317,13 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   const seenSeqsRef = useRef<Set<number>>(new Set());
   const followOutputRef = useRef(true);
   const [canJumpLatest, setCanJumpLatest] = useState(false);
+  // 事件直推的任务状态：TASK_STATE_CHANGED 落 seq 即记录，不依赖任何 REST 快照刷新。
+  // 快照刷新走 fetch——plugin-http 的 fetch 偶发静默挂起（agent-browser 流式缺陷同源），
+  // 挂起后快照永远停在"运行中"，仅凭快照判定 running 会让任务终态事件收到了也不收口
+  // （2026-09-19 21:33 第三次复现：服务端 COMPLETED、vite 已是修复版，仍卡"生成中"）。
+  const [derivedTaskStates, setDerivedTaskStates] = useState<Record<string, { state: string; at: number }>>({});
+  // 最近一次快照成功刷新的时间：只有比快照新的终态事件才允许覆盖快照的活动态判定
+  const roomFetchedAtRef = useRef(0);
 
   // 初始：补历史 + 房间快照
   useEffect(() => {
@@ -327,11 +338,20 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
           fetchRoomEvents(port, roomId, 0),
         ]);
         if (cancelled) return;
+        roomFetchedAtRef.current = Date.now();
         setRoom(snapshot);
         onRoomChange?.(snapshot);
         setEvents(history);
         for (const event of history) seenSeqsRef.current.add(event.seq);
         lastSeqRef.current = history.reduce((max, e) => Math.max(max, e.seq), 0);
+        // 历史事件直推任务状态种子（at=0：永远不新于快照，仅作快照缺任务时的兜底）
+        const seeded: Record<string, { state: string; at: number }> = {};
+        for (const event of history) {
+          if (event.type !== "TASK_STATE_CHANGED" || !event.taskId) continue;
+          const state = typeof event.payload?.state === "string" ? event.payload.state : "";
+          if (state) seeded[event.taskId] = { state, at: 0 };
+        }
+        setDerivedTaskStates(seeded);
       } catch (caught) {
         if (!cancelled) setLoadError(caught instanceof Error ? caught.message : String(caught));
       }
@@ -347,9 +367,23 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     seenSeqsRef.current.add(event.seq);
     lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
     setEvents((current) => [...current, event]);
+    // 任务状态事件直推记录：不等快照，fetch 挂起也不影响运行态判定
+    if (event.type === "TASK_STATE_CHANGED" && event.taskId) {
+      const state = typeof event.payload?.state === "string" ? event.payload.state : "";
+      if (state) {
+        const taskId = event.taskId;
+        setDerivedTaskStates((current) => ({ ...current, [taskId]: { state, at: Date.now() } }));
+      }
+    } else if (event.type === "MESSAGE_CREATED" && event.taskId) {
+      setDerivedTaskStates((current) => ({
+        ...current,
+        [event.taskId as string]: { state: "COMPLETED", at: Date.now() },
+      }));
+    }
     // 任务/参与者状态变化时刷新房间快照
-    if (["TASK_STATE_CHANGED", "PARTICIPANT_JOINED", "PARTICIPANT_LEFT", "PARTICIPANT_STATUS_CHANGED", "ARTIFACT_CREATED"].includes(event.type)) {
+    if (["TASK_STATE_CHANGED", "MESSAGE_CREATED", "PARTICIPANT_JOINED", "PARTICIPANT_LEFT", "PARTICIPANT_STATUS_CHANGED", "ARTIFACT_CREATED"].includes(event.type)) {
       void fetchServerRoom(port, roomId).then((snapshot) => {
+        roomFetchedAtRef.current = Date.now();
         setRoom(snapshot);
         onRoomChange?.(snapshot);
       }).catch(() => undefined);
@@ -416,11 +450,30 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   };
 
 
+  // 活动任务判定：快照 ∪ 事件直推。快照可能因 fetch 挂起永久陈旧；
+  // 比"快照刷新时刻"更新的终态事件允许覆盖快照里的活动态（事件流 + 断线重连补拉更可靠）。
+  const activeTasks = useMemo(() => {
+    const active = new Set<string>();
+    const snapshotIds = new Set<string>();
+    for (const task of (room?.tasks || [])) {
+      snapshotIds.add(task.taskId);
+      const derived = derivedTaskStates[task.taskId];
+      const newerTerminal = Boolean(derived)
+        && derived.at > roomFetchedAtRef.current
+        && !ACTIVE_TASK_STATES.includes(derived.state);
+      if (ACTIVE_TASK_STATES.includes(task.state) && !newerTerminal) active.add(task.taskId);
+    }
+    for (const [taskId, derived] of Object.entries(derivedTaskStates)) {
+      if (snapshotIds.has(taskId)) continue;
+      if (ACTIVE_TASK_STATES.includes(derived.state)) active.add(taskId);
+    }
+    return Array.from(active);
+  }, [room, derivedTaskStates]);
+
   // 兜底收口：服务端任务已全部结束但仍有消息/工具卡停留在 streaming/running（结束事件丢失）时，
   // 强制标记为完成，避免头像光圈或"正在执行 N 步"永久闪烁。
-  const hasActiveTask = (room?.tasks || []).some((t) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(t.state));
   const settledFeed = useMemo(() => {
-    if (hasActiveTask || !room) return feed;
+    if (activeTasks.length > 0 || !room) return feed;
     let touched = false;
     const next = feed.map((item) => {
       if (item.kind === "human-message" && item.streaming) {
@@ -434,7 +487,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
       return item;
     });
     return touched ? next : feed;
-  }, [feed, hasActiveTask, room]);
+  }, [feed, activeTasks, room]);
 
   const rows = useMemo(() => foldToolRuns(settledFeed), [settledFeed]);
 
@@ -463,11 +516,6 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     if (node && followOutputRef.current) node.scrollTop = node.scrollHeight;
   }, [rows]);
 
-  const activeTasks = useMemo(
-    () => (room?.tasks || []).filter((t) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(t.state)),
-    [room],
-  );
-
   // 运行态上抛：输入框据此禁用，避免协作任务并发提交
   const running = activeTasks.length > 0;
   const latestUserSeq = settledFeed.reduce(
@@ -479,8 +527,20 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     && ["human-message", "tool-group", "plan", "artifact", "approval", "error"].includes(item.kind)
   ));
   const showTypingIndicator = (running || (starting && !room)) && !hasCurrentResponse;
+  // 运行态上抛只在「确曾运行 → 转为结束」的边沿回调 false：
+  // 视图刚挂载时首次快照可能早于任务创建（tasks 为空，running=false），
+  // 若此时直接上报 false，会把 App 发送瞬间登记的 sessionRuns 误删，
+  // 之后任务真正跑起来再上报 true 重建，导致运行计时起点漂移、收口判定紊乱。
+  const reportedRunningRef = useRef(false);
   useEffect(() => {
-    if (room) onRunningChange?.(running);
+    if (!room) return;
+    if (running) {
+      reportedRunningRef.current = true;
+      onRunningChange?.(true);
+    } else if (reportedRunningRef.current) {
+      reportedRunningRef.current = false;
+      onRunningChange?.(false);
+    }
   }, [onRunningChange, room, running]);
 
   // 对账轮询：房间 SSE 断链（plugin-http 静默丢流）时，TASK_STATE_CHANGED 收不到，
@@ -547,7 +607,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   }), [onOpenFile]);
 
   const renderMarkdown = (value: string): ReactNode => (
-    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} components={markdownComponents}>{value}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>{value}</ReactMarkdown>
   );
 
   return (

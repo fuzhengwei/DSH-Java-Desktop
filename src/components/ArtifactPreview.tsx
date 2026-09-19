@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
+import { rehypeHighlight } from "../lib/markdown-plugins";
 import type { ServerRoomView } from "../lib/digital-human-client";
 import { EChartBlock } from "./EChartBlock";
 import { FilePreview, extractFilePaths, localFilePathFromHref } from "./FilePreview";
@@ -159,7 +160,7 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose,
       <div className="artifact-preview-body">
         <div className="artifact-preview-content markdown-body">
           {echartOption ? <EChartBlock code={echartOption} /> : null}
-          <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} components={markdownComponents}>{markdownContent}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>{markdownContent}</ReactMarkdown>
           {filePaths.filter((filePath) => existingFilePaths?.has(filePath)).slice(0, 2).map((filePath) => (
             <FilePreview key={filePath} path={filePath} compact />
           ))}

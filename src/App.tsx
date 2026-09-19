@@ -69,6 +69,10 @@ import type {
   RuntimeApproval,
 } from "./types";
 
+// UI 构建标记：渲染在顶部标题栏，用于确认窗口内 webview 加载的是哪一版前端
+// （排查「修复已提交但窗口仍跑旧代码」的问题；发版前可移除）
+const UI_BUILD_ID = "20260919-2150-rc4";
+
 const emptyModelDraft: ModelDraft = {
   displayName: "",
   providerCode: "custom",
@@ -943,6 +947,11 @@ export default function App() {
     setRoomRunning(running);
     const sessionId = activeSessionRef.current;
     if (!sessionId) return;
+    // 同步登记硬兜底名单：发送路径的登记可能在 POST /messages 失败时被 catch 清掉，
+    // 之后协作视图重新上抛 running=true 走的是这里——不补登记的话，
+    // 10s 硬兜底 interval 只认 roomRunIdsRef，这条运行态会永久游离在外。
+    // 放在 setState 更新器外：更新器应保持纯函数（StrictMode 下会执行两次）。
+    if (running) roomRunIdsRef.current.add(sessionId);
     setSessionRuns((current) => {
       if (running) {
         if (current[sessionId]) return current;
@@ -955,6 +964,98 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // 发送路径独立对账：RoomCollaborationView 可能因 SSE 静默断链 / 快照挂起而收不到终态；
+  // 这里直接轮询“该会话绑定的房间”，只要任务全部终态就复位输入框运行态。
+  const waitForRoomCompletion = useCallback((roomId: string, sessionId: string, startedAt: number) => {
+    if (!port) return;
+    void (async () => {
+      for (;;) {
+        await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+        if (!roomRunIdsRef.current.has(sessionId)) return;
+        try {
+          const snapshot = await Promise.race([
+            fetchServerRoom(port, roomId),
+            new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("房间对账超时")), 8_000)),
+          ]);
+          if (!roomRunIdsRef.current.has(sessionId)) return;
+          if (activeSessionRef.current === sessionId) {
+            setServerRoom(snapshot);
+            setRoom(serverRoomToProjection(snapshot));
+          }
+          const tasks = snapshot.tasks || [];
+          const hasActiveTask = tasks.some((task) => (
+            ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(task.state)
+          ));
+          if (tasks.length === 0 || hasActiveTask) continue;
+          roomRunIdsRef.current.delete(sessionId);
+          setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - startedAt }));
+          if (activeSessionRef.current === sessionId) handleRoomRunningChange(false);
+          setSessionRuns((current) => {
+            if (!current[sessionId]) return current;
+            const next = { ...current };
+            delete next[sessionId];
+            return next;
+          });
+          return;
+        } catch {
+          // 瞬时网络失败：下一轮继续
+        }
+      }
+    })();
+  }, [handleRoomRunningChange, port]);
+
+  // 房间协作运行态的硬兜底：sessionRuns 的清除此前完全依赖 RoomCollaborationView
+  // 挂载并经 onRunningChange(false) 上报。该链路任何一环断掉（本地投影 participants
+  // 为空导致视图不挂载、组件卸载、SSE 与轮询同时失效——plugin-http 已知会静默吞流），
+  // 服务端任务明明已完成，会话却永久"生成中"（2026-09-19 实测卡 39 分钟）。
+  // 这里不依赖组件生命周期：定期对登记超过 20s 的房间协作会话向服务端对账，
+  // 房间任务已全部终态则就地收口（清 sessionRuns + 复位输入框禁用）。
+  // 只处理 roomRunIdsRef 里登记的会话，直连路径有 300s 硬看门狗自行清理，互不干扰。
+  useEffect(() => {
+    if (!port) return;
+    const timer = window.setInterval(() => {
+      const pending = Object.entries(sessionRunsRef.current).filter(([sessionId, run]) => (
+        roomRunIdsRef.current.has(sessionId) && Date.now() - run.startedAt > 20_000
+      ));
+      if (pending.length === 0) return;
+      void (async () => {
+        for (const [sessionId, run] of pending) {
+          if (!roomRunIdsRef.current.has(sessionId)) continue; // 期间已被其他链路收口
+          try {
+            // 优先用「该会话自己绑定的房间」对账：serverRoomId 是当前活跃会话的房间，
+            // 用户切走会话后再对账会拿错房间——把仍在跑的后台会话误判为已完成并就地收口。
+            const roomId = boundRoomId(sessionId)
+              || (activeSessionRef.current === sessionId ? serverRoomId : "");
+            if (!roomId) continue;
+            // fetch 加超时：plugin-http 偶发静默挂起，await 永不返回会把整个对账循环卡死，
+            // 后续会话与后续轮次全部失效；超时按单轮失败处理，下一轮重试
+            const snapshot = await Promise.race([
+              fetchServerRoom(port, roomId),
+              new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("对账请求超时")), 8_000)),
+            ]);
+            const hasActiveTask = (snapshot.tasks || []).some((task) => (
+              ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(task.state)
+            ));
+            if (hasActiveTask) continue; // 任务确实还在跑，等下一轮
+            roomRunIdsRef.current.delete(sessionId);
+            setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - run.startedAt }));
+            setSessionRuns((current) => {
+              if (!current[sessionId]) return current;
+              const next = { ...current };
+              delete next[sessionId];
+              return next;
+            });
+            // 仅当收口的是当前活跃会话时才复位输入框禁用，别误伤其他会话的运行态
+            if (activeSessionRef.current === sessionId) setRoomRunning(false);
+          } catch {
+            // 瞬时失败静默，下一轮重试
+          }
+        }
+      })();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [port, serverRoomId]);
 
   const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
     try {
@@ -1040,6 +1141,13 @@ export default function App() {
       joinedAt: "",
     })),
   });
+
+  // 房间快照统一回写：RoomCollaborationView 的对账轮询 effect 依赖 onRoomChange，
+  // 内联箭头每次渲染都是新引用会反复 teardown/重建 5s interval，削弱对账兜底，必须稳定
+  const handleRoomSnapshotChange = useCallback((snapshot: ServerRoomView) => {
+    setServerRoom(snapshot);
+    setRoom(serverRoomToProjection(snapshot));
+  }, []);
 
   // 打开产物：新增/激活对应标签并展开面板
   const openArtifactTab = useCallback((artifact: { artifactId?: string; title: string; producerName?: string }) => {
@@ -1792,6 +1900,7 @@ export default function App() {
         const refreshed = await fetchServerRoom(port, ensured.id);
         setServerRoom(refreshed);
         setRoom(serverRoomToProjection(refreshed));
+        waitForRoomCompletion(ensured.id, originSessionId, Date.now());
       } catch (caught) {
         setRoomRunning(false);
         // 提交失败：同步清掉刚登记的运行态，否则角标会永久显示「进行中」
@@ -2965,6 +3074,7 @@ export default function App() {
               <p>
                 {activeProject ? `${activeProject.name} · ` : ""}
                 {modelChoices.length > 0 ? `${modelChoices.length} 个模型可用` : "未配置模型"}
+                <span style={{ opacity: 0.45, marginLeft: 8 }}>· UI {UI_BUILD_ID}</span>
               </p>
             </div>
           </header>
@@ -2975,6 +3085,7 @@ export default function App() {
               <p>
                 {activeProject ? `${activeProject.name} · ` : ""}
                 {modelChoices.length > 0 ? `${modelChoices.length} 个模型可用` : "未配置模型"}
+                <span style={{ opacity: 0.45, marginLeft: 8 }}>· UI {UI_BUILD_ID}</span>
               </p>
             </div>
           </header>
@@ -3039,10 +3150,7 @@ export default function App() {
                 humans={digitalHumans}
                 channelCode={activeModel?.channelCode}
                 approvalMode={approvalMode}
-                onRoomChange={(snapshot) => {
-                  setServerRoom(snapshot);
-                  setRoom(serverRoomToProjection(snapshot));
-                }}
+                onRoomChange={handleRoomSnapshotChange}
                 onRunningChange={handleRoomRunningChange}
                 onOpenArtifact={openArtifactTab}
                 onOpenFile={openFileTab}

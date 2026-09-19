@@ -2,6 +2,7 @@ import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessag
 import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
+import { rehypeHighlight } from "../lib/markdown-plugins";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownIcon, ChevronIcon, CopyIcon, DrawIoIcon, EChartIcon, ExcelSheetIcon, FileIcon, FolderIcon, GitBranchIcon, MarkdownIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, ToolIcon, WordDocIcon, XIcon } from "./icons";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
@@ -766,7 +767,7 @@ export default function ConversationView({
   }), [onOpenFile]);
 
   const renderMarkdown = (value: string) => (
-    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} components={markdownComponents}>
+    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
       {value}
     </ReactMarkdown>
   );

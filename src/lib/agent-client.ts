@@ -1,4 +1,4 @@
-import { fetch } from "@tauri-apps/plugin-http";
+import { httpFetch } from "./http";
 import type {
   ApiEnvelope,
   ConversationMessage,
@@ -312,7 +312,7 @@ export async function streamAgentMessage(
   /** 连续无字节的最长等待；模型长推理/工具长执行期间 SSE 也可能静默，别设太小 */
   idleTimeoutMs = 120_000,
 ): Promise<void> {
-  const response = await fetch(`${baseUrl(port)}/api/agent/stream`, {
+  const response = await httpFetch(`${baseUrl(port)}/api/agent/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

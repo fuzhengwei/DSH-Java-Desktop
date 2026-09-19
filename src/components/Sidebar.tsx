@@ -220,8 +220,9 @@ export default function Sidebar({
         const aIndex = orderIndex.get(sessionIds(a)[0] || "") ?? -1;
         const bIndex = orderIndex.get(sessionIds(b)[0] || "") ?? -1;
         if (aIndex >= 0 && bIndex >= 0) return aIndex - bIndex;
-        if (aIndex >= 0) return -1;
-        if (bIndex >= 0) return 1;
+        // 没进过手动排序的会话（如新建对话）视为最新，排在手动排过序的会话前面
+        if (aIndex >= 0) return 1;
+        if (bIndex >= 0) return -1;
         return timeOf(b) - timeOf(a);
       });
     }
