@@ -281,6 +281,18 @@ export class StreamIdleError extends Error {
   }
 }
 
+/**
+ * 取消服务端正在执行的 agent turn。
+ *
+ * 前端"停止"只断开 SSE 连接，服务端的当前轮会继续跑完并占用流式线程。
+ * 调用该接口让服务端在安全点（LLM 分片间隙/工具边界）中断当前轮，及时释放线程。
+ */
+export async function cancelAgentRun(port: number, agentId: string): Promise<void> {
+  await request(port, `/api/agent/${encodeURIComponent(agentId)}/cancel`, {
+    method: "POST",
+  });
+}
+
 export async function streamAgentMessage(
   port: number,
   body: {

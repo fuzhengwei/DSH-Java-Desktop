@@ -625,8 +625,34 @@ export async function reassignRoomTask(
   });
 }
 
+/** 服务端房间事件单页上限（CollaborationService.EVENT_PAGE_SIZE），翻页时用于判断是否取满 */
+const ROOM_EVENT_PAGE_SIZE = 500;
+/** 房间事件最大翻页数：防御性上限（40 页 = 2 万条），避免异常情况下无限循环 */
+const ROOM_EVENT_MAX_PAGES = 40;
+
+/**
+ * 拉取房间事件（自动翻页取满）。
+ *
+ * 服务端按 `seq > afterSeq ORDER BY seq ASC LIMIT 500` 返回单页，
+ * 活跃协作房间很容易超过 500 条——只取一页会把后面成员的消息/交付物
+ * 永远落在窗口外（表现为"多人协作最后只剩一个数字人的消息"）。
+ * 这里循环翻页直到短页（不足一页即到头）。
+ */
 export async function fetchRoomEvents(port: number, roomId: string, afterSeq = 0): Promise<RoomEvent[]> {
-  return collabRequest<RoomEvent[]>(port, `/rooms/${encodeURIComponent(roomId)}/events?afterSeq=${afterSeq}`);
+  const all: RoomEvent[] = [];
+  const seen = new Set<string>();
+  let cursor = afterSeq;
+  for (let page = 0; page < ROOM_EVENT_MAX_PAGES; page += 1) {
+    const batch = await collabRequest<RoomEvent[]>(port, `/rooms/${encodeURIComponent(roomId)}/events?afterSeq=${cursor}`);
+    for (const event of batch) {
+      if (seen.has(event.id)) continue;
+      seen.add(event.id);
+      all.push(event);
+      cursor = Math.max(cursor, event.seq || 0);
+    }
+    if (batch.length < ROOM_EVENT_PAGE_SIZE) break;
+  }
+  return all;
 }
 
 /** 房间事件流空闲超时：房间流空闲是常态（服务端无心跳），只兜底 plugin-http 静默挂死，别设太小 */

@@ -125,6 +125,37 @@ function runFilePath(run: ToolRun): { base: string; dir: string } | null {
   return { base, dir };
 }
 
+/**
+ * callSummary → 人话。
+ * 上游协作网关的 summary 可能是整包事件 JSON（{"toolName":...,"args":"{\"command\":...}"}），
+ * 原样展示会变成一坨转义串；这里提炼命令/路径/摘要，提炼不出再回退原文。
+ */
+function toolCallDisplayText(run: ToolRun): string {
+  const raw = (run.callSummary || "").replace(/\s+/g, " ").trim();
+  if (raw.startsWith("{")) {
+    try {
+      const obj = JSON.parse(raw) as Record<string, unknown>;
+      let args: unknown = obj.args ?? obj.arguments;
+      if (typeof args === "string") {
+        try { args = JSON.parse(args); } catch { /* args 保持字符串 */ }
+      }
+      if (args && typeof args === "object" && !Array.isArray(args)) {
+        const record = args as Record<string, unknown>;
+        const cmd = record.command ?? record.cmd ?? record.script;
+        if (typeof cmd === "string" && cmd.trim()) return cmd.trim();
+      }
+      for (const key of ["summary", "description", "path", "file_path"]) {
+        const value = obj[key];
+        if (typeof value === "string" && value.trim()) return value.replace(/\s+/g, " ").trim();
+      }
+      if (typeof args === "string" && args.trim()) return args.replace(/\s+/g, " ").trim();
+    } catch {
+      // 非法 JSON 原样展示
+    }
+  }
+  return raw;
+}
+
 function ToolStepIcon({ name }: { name: ReturnType<typeof toolIconName> }) {
   const className = "tool-step-icon";
   switch (name) {
@@ -198,8 +229,8 @@ const RoomToolStep = memo(function RoomToolStep({ run, focused, humans }: { run:
             <span className="tool-step-base">{file.base}</span>
           </span>
         ) : run.callSummary ? (
-          <span className="tool-step-file" title={run.callSummary}>
-            <span className="tool-step-base dim">{run.callSummary}</span>
+          <span className="tool-step-file" title={toolCallDisplayText(run)}>
+            <span className="tool-step-base dim">{toolCallDisplayText(run)}</span>
           </span>
         ) : null}
         {failed ? <span className="tool-status failed">失败</span> : null}
@@ -211,7 +242,7 @@ const RoomToolStep = memo(function RoomToolStep({ run, focused, humans }: { run:
           human={lookupHuman(humans, run.human)}
         />
       </summary>
-      <pre>{run.resultSummary || run.callSummary || JSON.stringify(run.callArguments || {}, null, 2)}</pre>
+      <pre>{run.resultSummary || toolCallDisplayText(run) || JSON.stringify(run.callArguments || {}, null, 2)}</pre>
     </details>
   );
 });

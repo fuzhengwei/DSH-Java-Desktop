@@ -1483,6 +1483,8 @@ export default function ConversationView({
           </div>
         ) : (
           <>
+            {/* 消息区 + 回到底部按钮包一层相对定位容器：按钮锚定消息区底缘而非整个 main，避免叠进输入框 */}
+            <div className="conversation-body">
             <div
               className="conversation-scroll"
               ref={messageListRef}
@@ -1526,6 +1528,7 @@ export default function ConversationView({
                 <ArrowDownIcon className="icon-18" />
               </button>
             ) : null}
+            </div>
           </>
         )}
       {/* 成员展示并入输入框 chips（含状态与删除），不再单独显示顶部成员栏，避免重复 */}

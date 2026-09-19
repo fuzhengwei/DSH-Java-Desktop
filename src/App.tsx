@@ -30,6 +30,7 @@ import {
   deleteWorkspace,
   saveModelSetting,
   resolveRuntimeApproval,
+  cancelAgentRun,
   streamAgentMessage,
   StreamIdleError,
   waitForService,
@@ -911,7 +912,13 @@ export default function App() {
   const roomStreamingEffective = roomRunning && Boolean(port);
 
   const stopCurrentRun = useCallback(() => {
+    const run = sessionRunsRef.current[activeSessionId];
     abortControllersRef.current.get(activeSessionId)?.abort();
+    // 停止只断 SSE 的话，服务端当前轮仍会跑完并占用流式线程；
+    // 同步调取消接口让服务端在安全点中断（fire-and-forget，失败不影响本地停止）。
+    if (port && run?.agentId) {
+      void cancelAgentRun(port, run.agentId).catch(() => undefined);
+    }
     if (!port) return;
     const roomId = serverRoomId || boundRoomId(activeSessionId) || "";
     if (!roomId) return;
@@ -1510,9 +1517,11 @@ export default function App() {
       const loadedMessages = (await listMessages(port, canonicalSessionId))
         .map(normalizeConversationMessage)
         .filter((message): message is ConversationMessage => Boolean(message));
-      // 服务端消息没有归属（本地投影），从本地缓存回填后展示
-      const withAttribution = mergeAttributionFromCache(loadedMessages, cachedMessages);
-      const nextMessages = stripDigitalHumanAttribution(withAttribution, currentHumans);
+      // 服务端落库滞后于流式输出（刚结束/进行中的会话尤其明显），返回条数比本地缓存少
+      // 说明还没持久化完：此时保留本地缓存，避免切回来时已展示的内容被清空
+      const nextMessages = loadedMessages.length < cachedMessages.length
+        ? stripDigitalHumanAttribution(cachedMessages, currentHumans)
+        : stripDigitalHumanAttribution(mergeAttributionFromCache(loadedMessages, cachedMessages), currentHumans);
       for (const id of aliases) {
         sessionMessagesRef.current.set(id, nextMessages);
         writeSessionMessages(id, nextMessages);
@@ -2498,7 +2507,7 @@ export default function App() {
         setSessionProjectMap((current) => ({ ...current, [freshId]: storedProjectPath(activeProjectPath) }));
       }
     }
-  }, [activeProjectPath, combinedSessions]);
+  }, [activeProjectPath, combinedSessions, port]);
 
   const pickLocalProject = useCallback(async (parentPath: string) => {
     try {

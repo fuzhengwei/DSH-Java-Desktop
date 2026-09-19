@@ -301,6 +301,7 @@ CI 需在仓库 `Settings → Secrets and variables → Actions` 配置：
 
 ## 相关文档
 
+- [本地启动指南](docs/本地启动指南.md) — 从零开始在本机跑起桌面端的完整步骤
 - [数字人协作架构设计](docs/architecture/digital-human-agent-architecture.md) — 数字人领域模型、协作机制、事件协议、演进路线
 - [数字人实现说明](docs/design/digital-human-implementation.md) / [路线图](docs/design/digital-human-roadmap.md)
 - [架构总览页（可视化）](docs/overview.html) — 架构图 + 使用指南的可视化版本

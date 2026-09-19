@@ -133,6 +133,25 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
       }
       case "TOOL_CALL": {
         const rawArgs = event.payload.arguments ?? event.payload.args;
+        const callId = String(event.payload.callId || event.payload.toolCallId || "");
+        // 同一次调用的重复事件（上游 step_break 双发等）合并进已有卡片，避免"执行命令/已执行命令"成对重复
+        if (callId) {
+          let duplicate: Extract<FeedItem, { kind: "tool" }> | null = null;
+          for (let i = items.length - 1; i >= 0; i -= 1) {
+            const item = items[i];
+            if (item.kind === "tool" && item.callId === callId && (!taskId || !item.taskId || item.taskId === taskId)) {
+              duplicate = item;
+              break;
+            }
+          }
+          if (duplicate) {
+            duplicate.callSummary = duplicate.callSummary || String(event.payload.summary || "");
+            duplicate.callArguments = duplicate.callArguments
+              ?? (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs) ? rawArgs as Record<string, unknown> : undefined);
+            duplicate.seq = Math.max(duplicate.seq, event.seq);
+            break;
+          }
+        }
         items.push({
           kind: "tool",
           id: event.id,
@@ -142,7 +161,7 @@ export function buildRoomFeed(events: RoomEvent[], humans: DigitalHuman[]): Feed
           callArguments: rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)
             ? rawArgs as Record<string, unknown>
             : undefined,
-          callId: String(event.payload.callId || event.payload.toolCallId || event.id),
+          callId: callId || event.id,
           status: "running",
           taskId,
           seq: event.seq,

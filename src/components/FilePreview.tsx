@@ -90,11 +90,33 @@ const PATH_EXTENSIONS = [
   "yaml", "yml", "toml", "sh", "bash", "zsh", "sql", "gradle", "properties", "ini", "cfg", "conf",
 ];
 
+/** 扩展名交替项：按长度降序，避免 ".tsx" 被 ".ts" 抢先截断 */
+const EXT_ALTERNATION = [...PATH_EXTENSIONS].sort((a, b) => b.length - a.length).join("|");
+
 const LOCAL_PATH_RE = new RegExp(
   // 要求路径中至少含一个 "/"：既匹配绝对路径（/Users/x/y.ts），也匹配相对路径（src/lib/x.ts）
-  `[^\\s<>（）()"'"|,；]*\\/[^\\s<>（）()"'"|,；]+\\.(?:${PATH_EXTENSIONS.join("|")})`,
+  `[^\\s<>（）()"'"|,；]*\\/[^\\s<>（）()"'"|,；]+\\.(?:${EXT_ALTERNATION})`,
   "gi",
 );
+
+/** 第二遍提取：允许含空格的绝对路径（如 macOS 的 "/Users/x/Application Support/y.html"）。
+ *  锚定常见绝对路径根目录，避免把 URL 路径段误判为本地文件；
+ *  懒匹配到第一个已知扩展名为止，避免把路径后的正文吞进来。 */
+const ABSOLUTE_PATH_SPACES_RE = new RegExp(
+  `(?:/(?:Users|tmp|var|private|home|Volumes|opt|Applications)/(?:[^\\s]| )*?)\\.(?:${EXT_ALTERNATION})`,
+  "gi",
+);
+
+/** 修剪带空格候选路径的正文尾巴：空格后的末段若不含 "/"，视为路径外的文字，逐段剔除 */
+function trimSpacedPathCandidate(raw: string): string | null {
+  let candidate = raw.trim();
+  while (candidate.includes(" ")) {
+    const lastSegment = candidate.split(" ").pop() || "";
+    if (lastSegment.includes("/")) break;
+    candidate = candidate.slice(0, candidate.lastIndexOf(" ")).trimEnd();
+  }
+  return new RegExp(`\\.(?:${EXT_ALTERNATION})$`, "i").test(candidate) ? candidate : null;
+}
 
 /** 从消息正文中提取本地文件引用（供对话内嵌渲染调用） */
 export function extractFilePaths(text: string): string[] {
@@ -102,6 +124,14 @@ export function extractFilePaths(text: string): string[] {
   for (const match of text.matchAll(LOCAL_PATH_RE)) {
     const cleaned = decodeLocalPath(match[0].replace(/[.,;:!?）)」】'")>]+$/, ""));
     if (!results.includes(cleaned)) results.push(cleaned);
+  }
+  for (const match of text.matchAll(ABSOLUTE_PATH_SPACES_RE)) {
+    const raw = match[0];
+    // 跳过 URL（https:、file: 等冒号后紧跟的路径段）
+    const prevChar = match.index != null && match.index > 0 ? text[match.index - 1] : "";
+    if (prevChar === ":" || raw.startsWith("//")) continue;
+    const cleaned = trimSpacedPathCandidate(decodeLocalPath(raw));
+    if (cleaned && !results.includes(cleaned)) results.push(cleaned);
   }
   return results;
 }
@@ -259,13 +289,7 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
         ) : kind === "pdf" ? (
           <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
         ) : kind === "html" ? (
-          <iframe
-            className="file-preview-frame"
-            title={displayName}
-            srcDoc={binaryToText(binary)}
-            sandbox="allow-scripts"
-            referrerPolicy="no-referrer"
-          />
+          <HtmlPreview base64={binary} name={displayName} />
         ) : (
           <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
         )}
@@ -280,6 +304,44 @@ function binaryToText(base64: string): string {
   } catch {
     return "";
   }
+}
+
+/** 匹配引用 echarts 的 CDN script 标签（如 jsdelivr / unpkg / cdnjs） */
+const ECHARTS_CDN_SCRIPT_RE = /<script[^>]*\bsrc\s*=\s*["'][^"']*echarts[^"']*["'][^>]*>\s*<\/script>/gi;
+const ECHARTS_CDN_SCRIPT_TEST_RE = /<script[^>]*\bsrc\s*=\s*["'][^"']*echarts[^"']*["'][^>]*>\s*<\/script>/i;
+
+/**
+ * HTML 文件预览：若页面通过 CDN 引入 echarts，则替换为应用内置的 echarts 源码内联执行，
+ * 断网或 CDN 不可达（jsdelivr 国内不稳定）时图表也能正常渲染。其余页面原样渲染。
+ */
+function HtmlPreview({ base64, name }: { base64: string; name: string }) {
+  const [html, setHtml] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      let text = binaryToText(base64);
+      if (ECHARTS_CDN_SCRIPT_TEST_RE.test(text)) {
+        try {
+          const mod = await import("../lib/echarts-embed");
+          const source = mod.default.replace(/<\/script>/gi, "<\\/script>");
+          text = text.replace(ECHARTS_CDN_SCRIPT_RE, () => `<script>${source}<\/script>`);
+        } catch {
+          // 内置源码加载失败：保留原 CDN 引用
+        }
+      }
+      if (!cancelled) setHtml(text);
+    })();
+    return () => { cancelled = true; };
+  }, [base64]);
+  return (
+    <iframe
+      className="file-preview-frame"
+      title={name}
+      srcDoc={html}
+      sandbox="allow-scripts"
+      referrerPolicy="no-referrer"
+    />
+  );
 }
 
 /** 代码视图上限：超出则截断展示，避免超大文件卡死渲染 */

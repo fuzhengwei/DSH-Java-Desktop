@@ -232,6 +232,15 @@ function summaryOf(raw: string): string {
   if (!text.startsWith("{")) return truncateText(text, 24);
   try {
     const obj = JSON.parse(text) as Record<string, unknown>;
+    // 上游整包事件 JSON 没有 summary 字段时，退而提炼 args.command（如 shell 命令原文）
+    let args: unknown = obj.args ?? obj.arguments;
+    if (typeof args === "string") {
+      try { args = JSON.parse(args); } catch { /* 保持字符串 */ }
+    }
+    if (args && typeof args === "object" && !Array.isArray(args)) {
+      const cmd = (args as Record<string, unknown>).command ?? (args as Record<string, unknown>).cmd;
+      if (typeof cmd === "string" && cmd.trim()) return truncateText(cmd.replace(/\s+/g, " ").trim(), 24);
+    }
     return truncateText(String(obj.summary || obj.description || "").replace(/\s+/g, " ").trim(), 24);
   } catch {
     return truncateText(((text.match(/"summary"\s*:\s*"([^"]*)"/) || [])[1] || "").replace(/\s+/g, " ").trim(), 24);
