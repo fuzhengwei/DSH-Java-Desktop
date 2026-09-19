@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listMessages } from "../lib/agent-client";
 import { normalizeConversationMessage, sessionTitle } from "../App";
@@ -18,6 +18,11 @@ type InfoRailProps = {
   sessions: SessionSummary[];
   activeProject?: WorkspaceEntry;
   activeBranch?: string;
+  projects?: WorkspaceEntry[];
+  projectBranches?: Record<string, string>;
+  projectBranchOptions?: Record<string, string[]>;
+  switchingBranchPath?: string;
+  onSwitchProjectBranch?: (project: WorkspaceEntry, branch: string) => void;
 };
 
 type RailTab = "runs" | "files";
@@ -38,6 +43,50 @@ type GitChangeSummary = {
 };
 
 type ExistingLocalFilesResult = string[];
+
+// 原生 select 宽度固定为最宽 option，选中短分支时文字会偏左；
+// 用 canvas 按当前字体实测选中分支文本宽度，精确设宽（含右侧箭头区），斜杠/中文等任意字符都适用
+const measureCanvas = typeof document !== "undefined"
+  ? document.createElement("canvas")
+  : null;
+const measureCtx = measureCanvas?.getContext("2d") || null;
+
+type BranchSelectProps = {
+  project: WorkspaceEntry;
+  branch: string;
+  branches: string[];
+  disabled: boolean;
+  onChange: (project: WorkspaceEntry, branch: string) => void;
+};
+
+function BranchSelect({ project, branch, branches, disabled, onChange }: BranchSelectProps) {
+  const selectRef = useRef<HTMLSelectElement>(null);
+
+  useLayoutEffect(() => {
+    const el = selectRef.current;
+    if (!el || !measureCtx) return;
+    const style = window.getComputedStyle(el);
+    measureCtx.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const textWidth = measureCtx.measureText(branch).width;
+    el.style.width = `${Math.ceil(textWidth + 30)}px`;
+  }, [branch, branches]);
+
+  return (
+    <select
+      ref={selectRef}
+      className="branch-chip rail-branch-chip rail-mono"
+      value={branch}
+      aria-label={`${project.name} Git 分支`}
+      title={`${project.name} · 点击切换分支`}
+      disabled={disabled}
+      onChange={(event) => onChange(project, event.target.value)}
+    >
+      {branches.map((item) => (
+        <option key={item} value={item}>{item}</option>
+      ))}
+    </select>
+  );
+}
 
 const FILE_TOOL_PATTERN = /write|edit|create|patch|apply|file|save|touch|mkdir/i;
 const ARG_PATH_KEYS = ["path", "file", "filePath", "target", "filename", "name", "output", "destination", "cwd"];
@@ -186,7 +235,41 @@ export default function InfoRail(props: InfoRailProps) {
     sessions,
     activeProject,
     activeBranch,
+    projects,
+    projectBranches,
+    projectBranchOptions,
+    switchingBranchPath,
+    onSwitchProjectBranch,
   } = props;
+
+  // 当前工作区加入的子工程（通过 @ 引用的本地项目，挂在工作区下）
+  const joinedProjects = useMemo(() => (projects || []).filter((project) => (
+    project.local
+    && project.parentPath
+    && project.parentPath === activeProject?.path
+    && project.path
+  )), [projects, activeProject?.path]);
+
+  // 分支下拉：有分支和候选列表时渲染成可切换的下拉框，否则退化为纯文本
+  const renderBranchValue = (project: WorkspaceEntry) => {
+    const branch = projectBranches?.[project.path] || "";
+    const branches = projectBranchOptions?.[project.path] || [];
+    if (branch && branches.length > 0 && onSwitchProjectBranch) {
+      // 当前分支可能不在候选里（如终端里新切了分支、选项缓存未刷新），
+      // 缺失时 React 受控 select 会显示空白，这里补一个当前分支 option
+      const options = branches.includes(branch) ? branches : [branch, ...branches];
+      return (
+        <BranchSelect
+          project={project}
+          branch={branch}
+          branches={options}
+          disabled={Boolean(switchingBranchPath)}
+          onChange={onSwitchProjectBranch}
+        />
+      );
+    }
+    return <span className="rail-kv-value rail-mono">{branch || "—"}</span>;
+  };
 
   const [tab, setTab] = useState<RailTab>("runs");
   const [fileCards, setFileCards] = useState<FileCard[]>([]);
@@ -335,10 +418,31 @@ export default function InfoRail(props: InfoRailProps) {
                     <span className="rail-kv-value rail-mono" title={activeProject.path}>{activeProject.path}</span>
                   </div>
                 ) : null}
-                <div className="rail-kv-row">
-                  <span className="rail-kv-key"><GitBranchIcon className="rail-inline-icon" />分支</span>
-                  <span className="rail-kv-value rail-mono">{activeBranch || gitChanges?.branch || "—"}</span>
-                </div>
+                {joinedProjects.length > 0 ? (
+                  <>
+                    {(activeBranch || gitChanges?.branch) && activeProject ? (
+                      <div className="rail-kv-row">
+                        <span className="rail-kv-key"><GitBranchIcon className="rail-inline-icon" />分支</span>
+                        {renderBranchValue(activeProject)}
+                      </div>
+                    ) : null}
+                    {joinedProjects.map((project) => (
+                      <div key={project.path} className="rail-kv-row">
+                        <span className="rail-kv-key" title={project.path}>
+                          <GitBranchIcon className="rail-inline-icon" />{project.name}
+                        </span>
+                        {renderBranchValue(project)}
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <div className="rail-kv-row">
+                    <span className="rail-kv-key"><GitBranchIcon className="rail-inline-icon" />分支</span>
+                    {activeProject?.path ? renderBranchValue(activeProject) : (
+                      <span className="rail-kv-value rail-mono">{activeBranch || gitChanges?.branch || "—"}</span>
+                    )}
+                  </div>
+                )}
                 <div className="rail-kv-row">
                   <span className="rail-kv-key">服务</span>
                   <span className={serviceReady ? "rail-badge ok" : "rail-badge warn"}>

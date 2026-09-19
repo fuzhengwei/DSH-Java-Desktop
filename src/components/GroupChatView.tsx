@@ -7,6 +7,7 @@ import { buildChatFeed, toolDetailLine, toolSegmentVoice } from "../lib/room-cha
 import type { ChatItem } from "../lib/room-chat";
 import { HumanAvatar } from "./DigitalHumanCatalog";
 import { ArrowRightIcon, ChevronIcon, UserIcon } from "./icons";
+import { FileActionsArea } from "./FileActionsMenu";
 
 type Props = {
   port: number;
@@ -56,8 +57,9 @@ const GroupChatView = memo(function GroupChatView({ port, roomId, humans, onFocu
 
   useEffect(() => {
     // 订阅挂载时 afterSeq 仍是 0，服务端会先重推全量历史；
-    // 与 fetchRoomEvents 拉到的历史按 seq 去重，避免整屏重复刷一遍
-    const unsubscribe = subscribeRoomEvents(port, roomId, lastSeqRef.current, (event) => {
+    // 与 fetchRoomEvents 拉到的历史按 seq 去重，避免整屏重复刷一遍。
+    // 传 getter：断线重连时按最新 seq 续传，不重放整段历史。
+    const unsubscribe = subscribeRoomEvents(port, roomId, () => lastSeqRef.current, (event) => {
       lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
       setEvents((current) => (
         current.some((existing) => existing.seq === event.seq) ? current : [...current, event]
@@ -157,29 +159,33 @@ const GroupChatView = memo(function GroupChatView({ port, roomId, humans, onFocu
               renderedArtifactKeys.add(artifactKey);
               const readyArtifact = readyArtifacts.get(item.artifactId) || readyArtifacts.get(item.title);
               const canPreview = Boolean(readyArtifact && onOpenArtifact);
+              // 右键菜单目标：产物绑定的本地文件
+              const artifactMenuPath = readyArtifact?.filePath?.trim() || null;
               // 交付 → 一句「整理好了」+ 可点的产物卡，点击右侧滑出预览
               return (
                 <div key={item.id} className="gc-row">
                   <ChatAvatar human={item.human} />
                   <div className="gc-main">
                     <div className="gc-name">{item.human.name}</div>
-                    <button
-                      type="button"
-                      className={`gc-bubble gc-artifact${canPreview ? " gc-clickable" : " gc-artifact-pending"}`}
-                      onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
-                      disabled={!canPreview}
-                      title={canPreview ? "查看交付物" : "产物内容还在生成，稍后可查看"}
-                    >
-                      <span className="gc-artifact-line">{canPreview ? "整理好了，你看看 👇" : "产物记录到了，内容还在生成…"}</span>
-                      <span className="gc-artifact-card">
-                        <span className="gc-artifact-icon">📄</span>
-                        <span className="gc-artifact-text">
-                          <span className="gc-artifact-title">{truncateText(item.title, 20)}</span>
-                          <span className="gc-artifact-meta">{canPreview ? readyArtifact?.kind || item.kindLabel : "暂不可查看"}</span>
+                    <FileActionsArea path={artifactMenuPath}>
+                      <button
+                        type="button"
+                        className={`gc-bubble gc-artifact${canPreview ? " gc-clickable" : " gc-artifact-pending"}`}
+                        onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
+                        disabled={!canPreview}
+                        title={canPreview ? "查看交付物（右键可打开/另存为）" : "产物内容还在生成，稍后可查看"}
+                      >
+                        <span className="gc-artifact-line">{canPreview ? "整理好了，你看看 👇" : "产物记录到了，内容还在生成…"}</span>
+                        <span className="gc-artifact-card">
+                          <span className="gc-artifact-icon">📄</span>
+                          <span className="gc-artifact-text">
+                            <span className="gc-artifact-title">{truncateText(item.title, 20)}</span>
+                            <span className="gc-artifact-meta">{canPreview ? readyArtifact?.kind || item.kindLabel : "暂不可查看"}</span>
+                          </span>
+                          {canPreview ? <ArrowRightIcon className="icon-12" /> : null}
                         </span>
-                        {canPreview ? <ArrowRightIcon className="icon-12" /> : null}
-                      </span>
-                    </button>
+                      </button>
+                    </FileActionsArea>
                   </div>
                 </div>
               );

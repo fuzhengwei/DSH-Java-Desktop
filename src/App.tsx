@@ -14,6 +14,7 @@ import RightDock, { DockTabBar } from "./components/RightDock";
 import { FilePreview } from "./components/FilePreview";
 import { ArrowLeftIcon, PlusIcon, RefreshIcon, UsersIcon } from "./components/icons";
 import { stripHiddenContext, truncateSessionTitle } from "./lib/text";
+import { playCompletionSound, unlockAudio } from "./lib/sound";
 import {
   activateModelSetting,
   deleteModelSetting,
@@ -30,6 +31,7 @@ import {
   saveModelSetting,
   resolveRuntimeApproval,
   streamAgentMessage,
+  StreamIdleError,
   waitForService,
 } from "./lib/agent-client";
 import {
@@ -755,6 +757,17 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("dsh-sidebar-width", String(sidebarWidth));
   }, [sidebarWidth]);
+  // 首次用户手势时解锁音频上下文：webview 自动播放策略要求 AudioContext 在
+  // 用户交互里创建/resume，否则对话完成时播放提示音可能被静默拦截
+  useEffect(() => {
+    const unlock = () => unlockAudio();
+    document.addEventListener("pointerdown", unlock, { once: false, capture: true });
+    document.addEventListener("keydown", unlock, { once: false, capture: true });
+    return () => {
+      document.removeEventListener("pointerdown", unlock, { capture: true });
+      document.removeEventListener("keydown", unlock, { capture: true });
+    };
+  }, []);
   const combinedSessions = useMemo(() => {
     // 同一会话在服务端和 draft 里可能分别用 sessionId / agentId 记录，
     // 去重时要检查任一 ID 是否已存在，避免重复出现
@@ -1415,6 +1428,8 @@ export default function App() {
   }, []);
 
   const notifyRunFinished = useCallback((sessionId: string, run: SessionRunState | undefined, failed: boolean, errorMessage?: string) => {
+    // 提示音始终播放（无论用户是否停留在该会话）；系统通知仍仅在未聚焦该会话时发送
+    playCompletionSound(failed);
     const focused = typeof document !== "undefined" && document.visibilityState === "visible" && document.hasFocus();
     const viewing = focused && activeSessionRef.current === sessionId;
     if (viewing) return;
@@ -1984,11 +1999,54 @@ export default function App() {
       if (isAbort && !timedOutRef.current) {
         // 用户手动停止：静默结束，不报错、不通知
       } else {
-        const finalMessage = isAbort ? "智能体长时间未返回结果，已自动停止" : message;
-        if (activeSessionRef.current === originSessionId || activeSessionRef.current === resolvedSessionId) {
-          setError(finalMessage);
+        // 流式通道异常（空闲看门狗 / plugin-http 卡死，见 agent-client.ts StreamIdleError）：
+        // 服务端任务通常已实际执行完成，只是结果没推回 webview。
+        // 这里按 agentId 对账服务端会话，把已生成的回答拉回来渲染，避免白等一场。
+        let recovered = false;
+        if (caught instanceof StreamIdleError || timedOutRef.current) {
+          try {
+            const sessions = await listSessions(port, 200);
+            const matched = sessions.find((item) => item.agentId === runAgentId && item.sessionId)
+              || sessions.find((item) => item.sessionId === resolvedSessionId && item.sessionId);
+            const recoveredSessionId = matched?.sessionId || "";
+            if (recoveredSessionId) {
+              const serverMessages = messagesFromPayload({
+                messages: await listMessages(port, recoveredSessionId),
+              }) || [];
+              const current = sessionMessagesRef.current.get(originSessionId) || [];
+              const richness = (list: ConversationMessage[]) => list.reduce(
+                (sum, message) => sum
+                  + (message.content?.length || 0)
+                  + (message.reasoning?.length || 0)
+                  + (message.result?.length || 0),
+                0,
+              );
+              if (serverMessages.length > current.length || richness(serverMessages) > richness(current)) {
+                const withAttribution = serverMessages.map((message) => (
+                  message.attribution || !attribution || (message.role !== "assistant" && message.role !== "tool")
+                    ? message
+                    : { ...message, attribution }
+                ));
+                updateMessagesForAliases(aliasesForSession(originSessionId), () => withAttribution);
+                sessionMessagesRef.current.set(recoveredSessionId, withAttribution);
+                writeSessionMessages(recoveredSessionId, withAttribution);
+                if (!resolvedSessionId) resolvedSessionId = recoveredSessionId;
+                recovered = true;
+              }
+            }
+          } catch {
+            // 对账失败：维持原错误路径
+          }
         }
-        notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], true, finalMessage);
+        if (recovered) {
+          notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], false);
+        } else {
+          const finalMessage = isAbort ? "智能体长时间未返回结果，已自动停止" : message;
+          if (activeSessionRef.current === originSessionId || activeSessionRef.current === resolvedSessionId) {
+            setError(finalMessage);
+          }
+          notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], true, finalMessage);
+        }
       }
     } finally {
       window.clearTimeout(watchdog);
@@ -2972,6 +3030,11 @@ export default function App() {
                 sessions={combinedSessions}
                 activeProject={activeProject}
                 activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
+                projects={combinedProjects}
+                projectBranches={projectBranches}
+                projectBranchOptions={projectBranchOptions}
+                switchingBranchPath={switchingBranchPath}
+                onSwitchProjectBranch={switchProjectBranch}
               />
             ) : activeDockTab.startsWith("artifact:") ? (
               <ArtifactPreview

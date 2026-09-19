@@ -350,6 +350,8 @@ export default function ConversationView({
   const [localDraft, setLocalDraft] = useState(draft);
   const [resourceMenuOpen, setResourceMenuOpen] = useState(false);
   const resourceMenuRef = useRef<HTMLDivElement>(null);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const projectMenuRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef(localDraft);
   const lastCommittedDraftRef = useRef(draft);
   draftRef.current = localDraft;
@@ -369,14 +371,21 @@ export default function ConversationView({
   }, [draft]);
 
   useEffect(() => {
-    if (!resourceMenuOpen) return;
+    if (!resourceMenuOpen && !projectMenuOpen) return;
     const onDown = (event: MouseEvent) => {
-      if (resourceMenuRef.current && !resourceMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (resourceMenuRef.current && !resourceMenuRef.current.contains(target)) {
         setResourceMenuOpen(false);
+      }
+      if (projectMenuRef.current && !projectMenuRef.current.contains(target)) {
+        setProjectMenuOpen(false);
       }
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setResourceMenuOpen(false);
+      if (event.key === "Escape") {
+        setResourceMenuOpen(false);
+        setProjectMenuOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
@@ -384,10 +393,15 @@ export default function ConversationView({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
     };
-  }, [resourceMenuOpen]);
+  }, [resourceMenuOpen, projectMenuOpen]);
 
   const runResourceAction = (action: () => void) => {
     setResourceMenuOpen(false);
+    action();
+  };
+
+  const runProjectAction = (action: () => void) => {
+    setProjectMenuOpen(false);
     action();
   };
 
@@ -1106,35 +1120,70 @@ export default function ConversationView({
                 ) : null}
               </div>
               {/* 数字人配置入口已收敛到侧边栏项目行；输入框不再放数字人按钮 */}
-              <div className="project-control" title={activeProject?.path || "选择项目"}>
+              {/* 项目选择：触发器只显示项目名；下拉里展示路径 / 分支 / 子工程等丰富信息 */}
+              <div className="project-control" ref={projectMenuRef}>
                 <FolderIcon className="icon-14" />
-                <select
-                  className="project-chip"
-                  value={activeProject?.path || ""}
+                <button
+                  type="button"
+                  className="project-trigger"
                   aria-label="选择项目"
+                  aria-haspopup="menu"
+                  aria-expanded={projectMenuOpen}
+                  title={activeProject?.path || "选择项目"}
                   disabled={streaming}
-                  onChange={(event) => {
-                    if (!event.target.value) {
-                      onSelectDefaultWorkspace();
-                      return;
-                    }
-                    const project = projects.find((item) => item.path === event.target.value);
-                    if (project) onSelectProject(project);
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setProjectMenuOpen((open) => !open);
                   }}
                 >
-                  <option value="">默认工作区</option>
-                  {projects.map((project) => {
-                    // 隶属于某项目的本地工程不单独列出，跟随其父项目作为对话背景
-                    if (project.local && project.parentPath) return null;
-                    const children = projects.filter((item) => item.local && item.parentPath === project.path);
-                    return (
-                      <option key={project.path} value={project.path}>
-                        {project.name}
-                        {children.length > 0 ? `（${children.map((item) => item.name).join("、")}）` : ""}
-                      </option>
-                    );
-                  })}
-                </select>
+                  <span className="project-trigger-label">{activeProject?.name || "默认工作区"}</span>
+                  <ChevronIcon className="icon-12 chevron" />
+                </button>
+                {projectMenuOpen ? (
+                  <div className="project-picker-menu" role="menu">
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`project-picker-item${activeProject ? "" : " active"}`}
+                      onClick={() => runProjectAction(onSelectDefaultWorkspace)}
+                    >
+                      <span className="project-picker-name">默认工作区</span>
+                      <span className="project-picker-meta">
+                        {(() => {
+                          const globalHumans = digitalHumans.filter((human) => !human.projectPath);
+                          return globalHumans.length > 0
+                            ? `数字人：${globalHumans.map((human) => human.displayName).join("、")}`
+                            : "未绑定项目目录";
+                        })()}
+                      </span>
+                    </button>
+                    {projects.map((project) => {
+                      // 隶属于某项目的本地工程不单独列出，跟随其父项目作为对话背景
+                      if (project.local && project.parentPath) return null;
+                      const children = projects.filter((item) => item.local && item.parentPath === project.path);
+                      const humans = digitalHumans.filter((human) => human.projectPath === project.path);
+                      const branch = projectBranches[project.path] || "";
+                      const metaText = [
+                        branch,
+                        children.length > 0 ? `工程：${children.map((item) => item.name).join("、")}` : "",
+                        humans.length > 0 ? `数字人：${humans.map((human) => human.displayName).join("、")}` : "",
+                      ].filter(Boolean).join(" · ") || "未挂载工程 · 未配置数字人";
+                      return (
+                        <button
+                          key={project.path}
+                          type="button"
+                          role="menuitem"
+                          className={`project-picker-item${activeProject?.path === project.path ? " active" : ""}`}
+                          title={`${project.path}\n${metaText}`}
+                          onClick={() => runProjectAction(() => onSelectProject(project))}
+                        >
+                          <span className="project-picker-name">{project.name}</span>
+                          <span className="project-picker-meta">{metaText}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="branch-controls">
@@ -1323,6 +1372,7 @@ export default function ConversationView({
                       showAttribution={showAttribution}
                       digitalHumans={digitalHumans}
                       onOpenFile={onOpenFile}
+                      basePath={activeProject?.path}
                       runSummary={
                         !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
                           ? {
@@ -1361,6 +1411,7 @@ const MessageItem = memo(function MessageItem({
   runSummary,
   digitalHumans,
   onOpenFile,
+  basePath,
 }: {
   message: ConversationMessage;
   asThought?: boolean;
@@ -1372,6 +1423,8 @@ const MessageItem = memo(function MessageItem({
   digitalHumans: DigitalHuman[];
   /** 在右侧面板打开本地文件 */
   onOpenFile?: (path: string) => void;
+  /** 当前项目根：用于把回复中的相对代码路径解析为可打开的文件 */
+  basePath?: string;
 }) {
   const isTool = message.role === "tool";
   const reasoningText = message.reasoning?.trim() || "";
@@ -1486,8 +1539,8 @@ const MessageItem = memo(function MessageItem({
                 <span>.</span>
               </div>
             ) : null}
-            {/* 产出的本地文件（md/word/excel/pdf 等）：内嵌渲染卡片，点击展开预览 */}
-            {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} /> : null}
+            {/* 产出的本地文件（md/word/excel/代码等）：内嵌渲染卡片，点击查看 */}
+            {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} basePath={basePath} /> : null}
             {runSummary ? (
               <div className="run-summary">
                 {runSummary.duration ? (
@@ -1504,7 +1557,17 @@ const MessageItem = memo(function MessageItem({
                     </summary>
                     <ul>
                       {runSummary.files.map((file) => (
-                        <li key={file} title={file}>{file}</li>
+                        <li key={file} title={onOpenFile ? `${file}（点击查看）` : file}>
+                          {onOpenFile ? (
+                            <button
+                              type="button"
+                              className="run-summary-file-link"
+                              onClick={() => onOpenFile(file)}
+                            >
+                              {file}
+                            </button>
+                          ) : file}
+                        </li>
                       ))}
                     </ul>
                   </details>

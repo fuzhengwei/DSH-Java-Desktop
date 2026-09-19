@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { ArrowLeftIcon, SettingsIcon, ShieldIcon, SlidersIcon } from "./icons";
 import PluginsSettings from "./PluginsSettings";
+import ExtensionsSettings from "./ExtensionsSettings";
 import type {
   AgentServiceState,
   ApprovalMode,
@@ -10,7 +11,7 @@ import type {
   ReasoningEffort,
 } from "../types";
 
-export type SettingsSection = "models" | "service" | "preferences" | "plugins";
+export type SettingsSection = "models" | "service" | "preferences" | "plugins" | "extensions";
 
 type SettingsViewProps = {
   service: AgentServiceState | null;
@@ -74,6 +75,15 @@ function PuzzleIcon({ className }: { className?: string }) {
   );
 }
 
+function ExtensionIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M4.5 6.5A2 2 0 0 1 6.5 4.5h4v3h3v-3h4a2 2 0 0 1 2 2v4h-3v3h3v4a2 2 0 0 1-2 2h-4v-3h-3v3h-4a2 2 0 0 1-2-2v-4h3v-3h-3v-4z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 function runtimeStatusDetail(service: AgentServiceState | null, serviceError: string) {
   if (!service) return serviceError || "正在检测 Java Runtime…";
   if (service.runtimeStatus === "missing") return serviceError || "未检测到 Java 17 Runtime。发布版请重新安装应用。";
@@ -133,6 +143,7 @@ export default function SettingsView({
   const sections: Array<{ id: SettingsSection; title: string; description: string; badge?: string; icon: ReactNode; group: string }> = [
     { id: "models", title: "模型", description: "管理模型渠道、API Key，切换当前使用的模型", badge: String(modelSettings.length), icon: <SlidersIcon className="icon-16" />, group: "AI 能力" },
     { id: "plugins", title: "插件", description: "安装插件包、上传 JAR，配置插件参数", icon: <PuzzleIcon className="icon-16" />, group: "扩展" },
+    { id: "extensions", title: "扩展能力", description: "Skills 技能、MCP 服务与 CLI 子智能体", badge: "S/M/C", icon: <ExtensionIcon className="icon-16" />, group: "扩展" },
     { id: "service", title: "服务", description: "查看本地智能体服务连接状态与 Java Runtime", icon: <SettingsIcon className="icon-16" />, group: "系统" },
     { id: "preferences", title: "偏好", description: "工具执行审批策略、沙箱边界与推理强度", icon: <ShieldIcon className="icon-16" />, group: "系统" },
   ];
@@ -204,6 +215,10 @@ export default function SettingsView({
 
           {activeSection === "plugins" ? (
             <PluginsSettings servicePort={service?.port ?? null} />
+          ) : null}
+
+          {activeSection === "extensions" ? (
+            <ExtensionsSettings servicePort={service?.port ?? null} />
           ) : null}
 
           {activeSection === "service" ? (

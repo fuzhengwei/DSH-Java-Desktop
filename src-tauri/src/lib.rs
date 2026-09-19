@@ -120,25 +120,73 @@ fn shutdown_runtime(state: &AgentRuntimeState) {
     }
 }
 
-fn pid_is_alive(pid: u32) -> bool {
+/// 探测 PID 实际状态：kill -0 会把僵尸进程（已死、等待父进程回收）误判为存活，
+/// 导致清理逻辑对僵尸发 TERM 永远无效而报"无法清理旧智能体进程"。
+/// 因此用 ps 读取进程状态与命令行：不存在/僵尸 → 不算存活；
+/// 命令行与智能体 jar 无关 → 视为 PID 复用被无关进程占用。
+fn probe_pid(pid: u32) -> PidProbe {
     #[cfg(unix)]
     {
-        Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+        let output = Command::new("ps")
+            .args(["-o", "stat=,command=", "-p", &pid.to_string()])
+            .output();
+        match output {
+            Ok(output) if output.status.success() => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let mut parts = text.splitn(2, char::is_whitespace);
+                let stat = parts.next().unwrap_or("").trim().to_string();
+                let command = parts.next().unwrap_or("").trim().to_string();
+                if stat.is_empty() {
+                    return PidProbe::Gone;
+                }
+                if stat.starts_with('Z') {
+                    return PidProbe::Zombie;
+                }
+                let ours = command.contains("deepseek-harness-java-app")
+                    || command.contains("deepseek-harness-java")
+                    || command.ends_with("java");
+                if ours {
+                    PidProbe::Ours
+                } else {
+                    PidProbe::Foreign(command)
+                }
+            }
+            _ => PidProbe::Gone,
+        }
     }
 
     #[cfg(windows)]
     {
-        Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}")])
-            .output()
-            .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
-            .unwrap_or(false)
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output();
+        match output {
+            Ok(output) => {
+                let text = String::from_utf8_lossy(&output.stdout).to_lowercase();
+                if !text.contains(&pid.to_string()) {
+                    return PidProbe::Gone;
+                }
+                let ours = text.contains("java");
+                if ours {
+                    PidProbe::Ours
+                } else {
+                    PidProbe::Foreign(text)
+                }
+            }
+            _ => PidProbe::Gone,
+        }
     }
+}
+
+enum PidProbe {
+    Gone,
+    Zombie,
+    Ours,
+    Foreign(String),
+}
+
+fn pid_is_alive(pid: u32) -> bool {
+    !matches!(probe_pid(pid), PidProbe::Gone | PidProbe::Zombie)
 }
 
 fn terminate_pid(pid: u32) {
@@ -159,6 +207,35 @@ fn terminate_pid(pid: u32) {
     }
 }
 
+fn force_kill_pid(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .status();
+    }
+}
+
+/// 等待进程退出；已返回 true 表示确认退出，false 表示超时仍存活
+fn wait_pid_gone(pid: u32, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        if !pid_is_alive(pid) {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    !pid_is_alive(pid)
+}
+
 fn cleanup_stale_runtime(runtime_path: &PathBuf) -> Result<(), String> {
     let record = match fs::read_to_string(runtime_path) {
         Ok(contents) => serde_json::from_str::<AgentRuntimeRecord>(&contents).ok(),
@@ -166,16 +243,25 @@ fn cleanup_stale_runtime(runtime_path: &PathBuf) -> Result<(), String> {
     };
 
     if let Some(record) = record {
-        if pid_is_alive(record.pid) {
-            terminate_pid(record.pid);
-            for _ in 0..30 {
-                if !pid_is_alive(record.pid) {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(100));
+        match probe_pid(record.pid) {
+            // 进程已退出或为僵尸：僵尸无法被信号终结，直接视为可清理
+            PidProbe::Gone | PidProbe::Zombie => {}
+            PidProbe::Foreign(command) => {
+                // PID 已被无关进程复用：不动它，直接清掉过期记录继续启动
+                eprintln!(
+                    "[agent-runtime] 运行记录 PID {} 已被无关进程占用（{}），跳过清理",
+                    record.pid,
+                    command
+                );
             }
-            if pid_is_alive(record.pid) {
-                return Err(format!("无法清理旧智能体进程（PID {}）", record.pid));
+            PidProbe::Ours => {
+                terminate_pid(record.pid);
+                if !wait_pid_gone(record.pid, 30) {
+                    force_kill_pid(record.pid);
+                    if !wait_pid_gone(record.pid, 30) {
+                        return Err(format!("无法清理旧智能体进程（PID {}）", record.pid));
+                    }
+                }
             }
         }
     }
@@ -810,6 +896,15 @@ fn existing_local_files(paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// 批量读取本地文件大小（字节），与入参顺序对齐；不存在的文件对应 null。
+#[tauri::command]
+fn local_file_metas(paths: Vec<String>) -> Vec<Option<u64>> {
+    paths
+        .into_iter()
+        .map(|path| resolve_preview_file(&path).metadata().ok().map(|meta| meta.len()))
+        .collect()
+}
+
 /// 预览路径兜底：Agent 有时会把用户主目录下的文件写成 `/Desktop/foo.html`。
 /// 不改变对外展示的原路径，只在本机读取时尝试映射到 `$HOME/Desktop/foo.html`。
 fn resolve_preview_file(path: &str) -> PathBuf {
@@ -887,6 +982,84 @@ fn open_external(url: String) -> Result<(), String> {
                 Err(format!("系统浏览器返回错误状态：{status}"))
             }
         })
+}
+
+// ── 生成文件的系统级操作（右键菜单：打开 / 打开文件夹 / 另存为） ──
+
+/// 用系统默认程序打开本地文件（与预览一致的路径解析规则）
+#[tauri::command]
+fn open_local_file(path: String) -> Result<(), String> {
+    let file = resolve_preview_file(&path);
+    if !file.is_file() {
+        return Err(format!("文件不存在或不可访问：{path}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&file).status();
+    #[cfg(target_os = "windows")]
+    let result = Command::new("cmd").args(["/C", "start", "", &file]).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = Command::new("xdg-open").arg(&file).status();
+
+    result
+        .map_err(|error| format!("调用系统程序打开文件失败：{error}"))
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("系统程序返回错误状态：{status}"))
+            }
+        })
+}
+
+/// 在文件管理器中显示文件（macOS Finder 定位到文件本身）
+#[tauri::command]
+fn reveal_local_file(path: String) -> Result<(), String> {
+    let file = resolve_preview_file(&path);
+    if !file.exists() {
+        return Err(format!("文件不存在或不可访问：{path}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg("-R").arg(&file).status();
+    #[cfg(target_os = "windows")]
+    let result = Command::new("explorer").arg(format!("/select,{}", file.display())).status();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = {
+        let parent = file
+            .parent()
+            .map(|parent| parent.to_path_buf())
+            .unwrap_or_else(|| file.clone());
+        Command::new("xdg-open").arg(&parent).status()
+    };
+
+    result
+        .map_err(|error| format!("打开文件所在文件夹失败：{error}"))
+        .and_then(|status| {
+            if status.success() {
+                Ok(())
+            } else {
+                Err(format!("文件管理器返回错误状态：{status}"))
+            }
+        })
+}
+
+/// 弹出系统「另存为」对话框，把生成文件复制到用户选择的位置；取消时返回 None
+#[tauri::command]
+fn save_local_file_as(path: String) -> Result<Option<String>, String> {
+    let source = resolve_preview_file(&path);
+    if !source.is_file() {
+        return Err(format!("文件不存在或不可访问：{path}"));
+    }
+    let mut dialog = rfd::FileDialog::new().set_title("另存为");
+    if let Some(name) = source.file_name() {
+        dialog = dialog.set_file_name(name.to_string_lossy().as_ref());
+    }
+    let Some(target) = dialog.save_file() else {
+        return Ok(None);
+    };
+    fs::copy(&source, &target).map_err(|error| format!("保存文件失败：{error}"))?;
+    Ok(Some(target.to_string_lossy().to_string()))
 }
 
 // ── 数字人凭据安全存储 ─────────────────────────────────────
@@ -1018,7 +1191,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(process_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, read_local_file_base64, existing_local_files, local_file_metas])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

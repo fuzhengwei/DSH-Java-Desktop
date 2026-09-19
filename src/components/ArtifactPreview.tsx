@@ -5,6 +5,7 @@ import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import type { ServerRoomView } from "../lib/digital-human-client";
 import { EChartBlock } from "./EChartBlock";
 import { FilePreview, extractFilePaths, localFilePathFromHref } from "./FilePreview";
+import { FileActionsArea } from "./FileActionsMenu";
 import { XIcon } from "./icons";
 
 type Props = {
@@ -130,9 +131,15 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose,
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // 右键菜单目标：产物关联且真实存在的本地文件（多个时取第一个）
+  const menuFilePath = useMemo(() => (
+    filePaths.find((filePath) => existingFilePaths?.has(filePath)) || null
+  ), [filePaths, existingFilePaths]);
+
   return (
     <aside className="artifact-preview" role="complementary" aria-label="产物预览">
-      <div className="artifact-preview-head">
+      <FileActionsArea path={menuFilePath}>
+        <div className="artifact-preview-head">
         <div className="artifact-preview-title-wrap">
           <span className="artifact-preview-icon">📄</span>
           <div className="artifact-preview-heading">
@@ -145,7 +152,8 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose,
         <button type="button" className="artifact-preview-close" onClick={onClose} aria-label="关闭预览" title="关闭 (Esc)">
           <XIcon className="icon-14" />
         </button>
-      </div>
+        </div>
+      </FileActionsArea>
       <div className="artifact-preview-body">
         <div className="artifact-preview-content markdown-body">
           {echartOption ? <EChartBlock code={echartOption} /> : null}

@@ -1193,6 +1193,31 @@ select:focus-visible {
   color: var(--text-muted);
 }
 
+/* 运行信息里的分支下拉：与 rail-mono 观感一致，可点击切换。
+   用 .info-rail 提升优先级，否则会被后方的 .branch-chip（max-width 等）覆盖 */
+.info-rail .rail-branch-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 65%;
+  min-height: 20px;
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+  cursor: pointer;
+}
+
+.info-rail .rail-branch-chip:hover {
+  color: var(--text);
+}
+
+.info-rail .rail-branch-chip option {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  text-align: left;
+}
+
 .rail-badge {
   display: inline-flex;
   align-items: center;
@@ -2112,10 +2137,10 @@ select:focus-visible {
 .prompt-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-  row-gap: 8px;
-  padding: 8px 10px 10px 14px;
+  row-gap: 6px;
+  padding: 6px 10px 8px 12px;
   border-radius: 0 0 24px 24px;
   overflow: visible;
 }
@@ -2124,7 +2149,7 @@ select:focus-visible {
 .prompt-controls {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 5px;
 }
 
 .prompt-controls {
@@ -2146,8 +2171,8 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 8px;
   color: var(--text-muted);
   transition: background .16s ease, color .16s ease;
@@ -2221,12 +2246,13 @@ select:focus-visible {
 }
 
 .project-control {
+  position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 3px;
   min-width: 0;
-  min-height: 28px;
-  padding: 4px 6px;
+  min-height: 22px;
+  padding: 2px 4px;
   border-radius: 8px;
   color: var(--text-muted);
   font-size: 11px;
@@ -2242,16 +2268,104 @@ select:focus-visible {
   flex-shrink: 0;
 }
 
-.project-chip,
+/* 项目触发器：只显示当前项目名，丰富信息收进下拉 */
+.project-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 150px;
+  min-height: 20px;
+  padding: 1px 2px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.project-trigger:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.project-trigger:disabled {
+  cursor: not-allowed;
+  opacity: .6;
+}
+
+.project-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-trigger .chevron {
+  flex-shrink: 0;
+  opacity: .7;
+}
+
+/* 项目下拉：项目名 + 路径/分支/子工程等丰富信息 */
+.project-picker-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 40;
+  width: 300px;
+  max-height: min(360px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 14px 42px rgba(21, 21, 26, .16), 0 2px 8px rgba(21, 21, 26, .08);
+}
+
+.project-picker-item {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 9px;
+  color: var(--text);
+  text-align: left;
+}
+
+.project-picker-item:hover {
+  background: var(--surface-2);
+}
+
+.project-picker-item.active .project-picker-name {
+  color: var(--accent);
+}
+
+.project-picker-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.project-picker-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-subtle);
+  font-size: 11px;
+}
+
 .branch-chip {
   appearance: none;
   max-width: 140px;
-  min-height: 24px;
-  padding: 2px 18px 2px 0;
+  min-height: 20px;
+  padding: 2px 16px 2px 0;
   border: 0;
   background-color: transparent;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 10px) 11px, calc(100% - 6px) 11px;
+  background-position: calc(100% - 10px) 9px, calc(100% - 6px) 9px;
   background-size: 4px 4px;
   background-repeat: no-repeat;
   color: var(--text-muted);
@@ -2262,13 +2376,11 @@ select:focus-visible {
   cursor: pointer;
 }
 
-.project-chip:focus,
 .branch-chip:focus {
   overflow: hidden;
   outline: none;
 }
 
-.project-chip:disabled,
 .branch-chip:disabled {
   cursor: not-allowed;
   opacity: .6;
@@ -2292,9 +2404,9 @@ select:focus-visible {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 4px;
-  min-height: 28px;
-  padding: 4px 6px;
+  gap: 3px;
+  min-height: 22px;
+  padding: 2px 4px;
   border-radius: 8px;
   color: var(--text-muted);
   font-size: 11px;
@@ -2331,9 +2443,9 @@ select:focus-visible {
 .model-control {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  min-height: 28px;
-  padding: 4px 8px;
+  gap: 4px;
+  min-height: 22px;
+  padding: 2px 6px;
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-muted);
@@ -2345,9 +2457,9 @@ select:focus-visible {
   appearance: none;
   max-width: 72px;
   text-overflow: ellipsis;
-  padding-right: 18px;
+  padding-right: 16px;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 11px) 13px, calc(100% - 7px) 13px;
+  background-position: calc(100% - 10px) 10px, calc(100% - 6px) 10px;
   background-size: 4px 4px;
   background-repeat: no-repeat;
   cursor: pointer;
@@ -2355,8 +2467,8 @@ select:focus-visible {
 
 .reasoning-chip {
   appearance: none;
-  min-height: 28px;
-  padding: 4px 22px 4px 8px;
+  min-height: 22px;
+  padding: 2px 20px 2px 6px;
   border: 1px solid transparent;
   border-radius: 8px;
   color: var(--text-muted);
@@ -2364,7 +2476,7 @@ select:focus-visible {
   white-space: nowrap;
   cursor: pointer;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 11px) 13px, calc(100% - 7px) 13px;
+  background-position: calc(100% - 10px) 10px, calc(100% - 6px) 10px;
   background-size: 4px 4px;
   background-repeat: no-repeat;
 }
@@ -2387,13 +2499,13 @@ select:focus-visible {
 .model-chip {
   appearance: none;
   max-width: 170px;
-  min-height: 28px;
-  padding: 4px 22px 4px 8px;
+  min-height: 22px;
+  padding: 2px 20px 2px 6px;
   border: 1px solid transparent;
   border-radius: 8px;
   background-color: transparent;
   background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
-  background-position: calc(100% - 11px) 13px, calc(100% - 7px) 13px;
+  background-position: calc(100% - 10px) 10px, calc(100% - 6px) 10px;
   background-size: 4px 4px;
   background-repeat: no-repeat;
   color: var(--text-muted);
@@ -3223,6 +3335,22 @@ select:focus-visible {
   line-height: 18px;
 }
 
+.run-summary-file-link {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: var(--sidebar-accent, #4160f0);
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.run-summary-file-link:hover { text-decoration: underline; }
+
 .context-ring-wrap {
   position: relative;
   z-index: 40;
@@ -3329,15 +3457,25 @@ select:focus-visible {
   border-radius: 50%;
   background: var(--accent);
   color: var(--accent-text);
-  transition: background .16s ease, transform .12s ease, opacity .16s ease;
+  box-shadow: 0 1px 3px rgba(23, 23, 23, .18);
+  transition: background .16s ease, transform .12s ease, opacity .16s ease, box-shadow .16s ease;
 }
 
 .composer-action:hover:not(:disabled) {
   background: var(--accent-hover);
+  box-shadow: 0 2px 6px rgba(23, 23, 23, .24);
 }
 
 .composer-action:active:not(:disabled) {
-  transform: scale(.96);
+  transform: scale(.94);
+}
+
+/* 输入为空时的置灰态：更轻、更融入背景，避免突兀的深灰圆块 */
+.composer-action.send:disabled {
+  background: #f0f0ee;
+  color: #c0c0bd;
+  box-shadow: none;
+  cursor: default;
 }
 
 .composer-action.stop {
@@ -5994,6 +6132,44 @@ select:focus-visible {
   background: var(--border);
 }
 
+/* 文件右键操作菜单（生成文件卡片：打开 / 打开文件夹 / 另存为 / 复制路径） */
+.file-actions-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 168px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgba(20, 20, 40, .12), 0 2px 6px rgba(20, 20, 40, .06);
+  display: grid;
+  gap: 1px;
+  animation: file-actions-pop .14s ease-out;
+}
+@keyframes file-actions-pop {
+  from { opacity: 0; transform: scale(.96) translateY(-2px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.file-actions-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--text);
+  text-align: left;
+  white-space: nowrap;
+}
+.file-actions-menu-item:hover {
+  background: var(--surface-2);
+}
+.file-actions-menu-divider {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--border);
+}
+
 /* 输入框项目胶囊：数字人头像叠加 */
 .project-chip-humans {
   display: inline-flex;
@@ -6251,6 +6427,12 @@ select:focus-visible {
 .inline-file-trigger:disabled { cursor: default; opacity: .65; background: var(--surface-2); }
 .inline-file-name { font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inline-file-hint { font-size: 11px; color: var(--text-subtle); }
+.inline-file-size {
+  font-size: 11px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .inline-file-dock {
   border: 0; border-left: 1px solid var(--border);
   padding: 8px 10px; background: transparent; cursor: pointer;
@@ -6323,6 +6505,41 @@ select:focus-visible {
   border: 1px solid var(--border); border-radius: 10px;
   font-size: 12px; line-height: 1.65; overflow: auto;
 }
+
+/* 代码查看器（带行号） */
+.file-preview-codeblock {
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface-raised, #f6f7f9);
+  overflow: hidden;
+}
+.file-preview-truncated {
+  padding: 6px 12px;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+  border-bottom: 1px dashed var(--border);
+}
+.code-view { display: flex; align-items: flex-start; overflow: auto; }
+.code-view-gutter {
+  margin: 0;
+  padding: 12px 10px 12px 14px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px; line-height: 1.65;
+  color: var(--text-subtle);
+  opacity: .7;
+  user-select: none;
+  position: sticky;
+  left: 0;
+  background: var(--surface-raised, #f6f7f9);
+  border-right: 1px solid var(--border);
+}
+.code-view-lines {
+  margin: 0;
+  padding: 12px 16px 12px 12px;
+  font-size: 12px; line-height: 1.65;
+  min-width: 0;
+}
+.code-view pre { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); tab-size: 4; }
 .file-preview-image { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }
 .file-preview-frame { width: 100%; height: 100%; min-height: 420px; border: 0; border-radius: 8px; }
 

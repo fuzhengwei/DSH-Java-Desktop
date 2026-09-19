@@ -353,7 +353,8 @@ export async function readCredential(credentialRef: string): Promise<string | nu
 export async function digitalHumanTokensFor(humans: DigitalHuman[]): Promise<Record<string, string>> {
   const entries = await Promise.all(humans.map(async (human) => {
     const credentialRef = human.endpoint.credentialRef;
-    if (human.endpoint.type !== "remote-dsh" || !credentialRef) return null;
+    // 远端数字人（DSH 与 A2A）均按需携带凭据，供服务端网关转发时鉴权
+    if ((human.endpoint.type !== "remote-dsh" && human.endpoint.type !== "a2a") || !credentialRef) return null;
     const token = await readCredential(credentialRef).catch(() => "");
     return token ? [human.id, token] as const : null;
   }));
@@ -628,63 +629,111 @@ export async function fetchRoomEvents(port: number, roomId: string, afterSeq = 0
   return collabRequest<RoomEvent[]>(port, `/rooms/${encodeURIComponent(roomId)}/events?afterSeq=${afterSeq}`);
 }
 
-/** 订阅房间统一事件流：补历史 + 实时推，返回取消函数 */
+/** 房间事件流空闲超时：房间流空闲是常态（服务端无心跳），只兜底 plugin-http 静默挂死，别设太小 */
+const ROOM_STREAM_IDLE_MS = 600_000;
+
+/**
+ * 订阅房间统一事件流：补历史 + 实时推 + 断线自动重连，返回取消函数。
+ *
+ * 房间事件流是常驻连接，`running` 状态与消息渲染全靠它；此前连接一旦静默断掉
+ * （Tauri plugin-http 已知缺陷，见 agent-client.ts 顶部注释），TASK_STATE_CHANGED
+ * 永远收不到，UI 会永久"生成中"。因此这里做三层防护：
+ * 1. 流正常结束 / 出错 → 指数退避自动重连，按最新 seq 续传（服务端订阅时会重放 backlog）；
+ * 2. 长时间无字节（reader 挂死）→ 空闲看门狗强制断开走重连；
+ * 3. 调用方（RoomCollaborationView）在任务运行期另有 REST 对账轮询兜底。
+ *
+ * @param afterSeq 初始 seq，也可传 getter（每次重连时取最新值，避免整段历史重放）
+ */
 export function subscribeRoomEvents(
   port: number,
   roomId: string,
-  afterSeq: number,
+  afterSeq: number | (() => number),
   onEvent: (event: RoomEvent) => void,
   onError?: (error: Error) => void,
 ): () => void {
   const controller = new AbortController();
+  const getStartSeq = typeof afterSeq === "function" ? afterSeq : () => afterSeq;
+  let disposed = false;
+
   void (async () => {
-    try {
-      const response = await fetch(
-        `${baseUrl(port)}/api/collaboration/rooms/${encodeURIComponent(roomId)}/events/stream?afterSeq=${afterSeq}`,
-        { signal: controller.signal },
-      );
-      if (!response.ok || !response.body) {
-        throw new Error(`事件流连接失败：HTTP ${response.status}`);
-      }
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let dataLines: string[] = [];
-      const dispatch = () => {
-        if (dataLines.length === 0) return;
-        const raw = dataLines.join("\n").trim();
-        dataLines = [];
-        if (!raw) return;
-        try {
-          onEvent(JSON.parse(raw) as RoomEvent);
-        } catch {
-          // 单条事件解析失败不中断流
-        }
+    let attempt = 0;
+    while (!disposed && !controller.signal.aborted) {
+      let idleTimer = 0;
+      let idleReject: ((error: Error) => void) | null = null;
+      const armIdleWatchdog = () => {
+        window.clearTimeout(idleTimer);
+        idleTimer = window.setTimeout(() => {
+          idleReject?.(new Error("房间事件流空闲超时（连接可能已静默断开）"));
+        }, ROOM_STREAM_IDLE_MS);
       };
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          if (dataLines.length > 0) dispatch();
-          break;
+      try {
+        const startSeq = Math.max(0, getStartSeq());
+        const response = await fetch(
+          `${baseUrl(port)}/api/collaboration/rooms/${encodeURIComponent(roomId)}/events/stream?afterSeq=${startSeq}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok || !response.body) {
+          throw new Error(`事件流连接失败：HTTP ${response.status}`);
         }
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || "";
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            // 事件名本实现不区分（统一 room-event），仅消费掉该行
-          } else if (line.startsWith("data:")) {
-            dataLines.push(line.slice(5).replace(/^ /, ""));
-          } else if (line.trim() === "") {
-            dispatch();
+        attempt = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let dataLines: string[] = [];
+        const dispatch = () => {
+          if (dataLines.length === 0) return;
+          const raw = dataLines.join("\n").trim();
+          dataLines = [];
+          if (!raw) return;
+          try {
+            onEvent(JSON.parse(raw) as RoomEvent);
+          } catch {
+            // 单条事件解析失败不中断流
+          }
+        };
+        armIdleWatchdog();
+        for (;;) {
+          const { done, value } = await Promise.race([
+            reader.read(),
+            new Promise<never>((_, reject) => {
+              idleReject = reject;
+            }),
+          ]);
+          if (done) {
+            if (dataLines.length > 0) dispatch();
+            break;
+          }
+          armIdleWatchdog();
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (line.startsWith("event:")) {
+              // 事件名本实现不区分（统一 room-event），仅消费掉该行
+            } else if (line.startsWith("data:")) {
+              dataLines.push(line.slice(5).replace(/^ /, ""));
+            } else if (line.trim() === "") {
+              dispatch();
+            }
           }
         }
+        // 服务端主动关流：视为断链，走重连
+      } catch (caught) {
+        window.clearTimeout(idleTimer);
+        if (controller.signal.aborted || disposed) return;
+        onError?.(caught instanceof Error ? caught : new Error(String(caught)));
+      } finally {
+        window.clearTimeout(idleTimer);
       }
-    } catch (caught) {
-      if (!controller.signal.aborted && onError) {
-        onError(caught instanceof Error ? caught : new Error(String(caught)));
-      }
+      if (disposed || controller.signal.aborted) return;
+      // 指数退避重连：1s、2s、4s… 封顶 15s；连接成功过则重置
+      const delay = Math.min(15_000, 1_000 * 2 ** attempt);
+      attempt += 1;
+      await new Promise((resolve) => window.setTimeout(resolve, delay));
     }
   })();
-  return () => controller.abort();
+  return () => {
+    disposed = true;
+    controller.abort();
+  };
 }

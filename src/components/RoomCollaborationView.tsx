@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
@@ -17,6 +17,7 @@ import { buildRoomFeed, foldToolRuns } from "../lib/room-feed";
 import type { FeedRow, HumanRef, ToolRun } from "../lib/room-feed";
 import { EChartBlock } from "./EChartBlock";
 import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
+import { FileActionsArea } from "./FileActionsMenu";
 import { ArrowDownIcon, ChevronIcon } from "./icons";
 import { AttributionAvatar } from "./AttributionAvatar";
 
@@ -308,22 +309,26 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId]);
 
-  // 实时订阅
+  // 统一事件入库：SSE 实时推与轮询补拉共用；按 seq 去重，任务/参与者状态变化时刷新快照
+  const ingestEvent = useCallback((event: RoomEvent) => {
+    // 历史补拉与 SSE 全量重推会叠加：已见过的 seq 直接丢弃，避免消息/产物重复渲染
+    if (seenSeqsRef.current.has(event.seq)) return;
+    seenSeqsRef.current.add(event.seq);
+    lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
+    setEvents((current) => [...current, event]);
+    // 任务/参与者状态变化时刷新房间快照
+    if (["TASK_STATE_CHANGED", "PARTICIPANT_JOINED", "PARTICIPANT_LEFT", "PARTICIPANT_STATUS_CHANGED", "ARTIFACT_CREATED"].includes(event.type)) {
+      void fetchServerRoom(port, roomId).then((snapshot) => {
+        setRoom(snapshot);
+        onRoomChange?.(snapshot);
+      }).catch(() => undefined);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [port, roomId]);
+
+  // 实时订阅（断线自动重连，按最新 seq 续传）
   useEffect(() => {
-    const unsubscribe = subscribeRoomEvents(port, roomId, lastSeqRef.current, (event) => {
-      // 历史补拉与 SSE 全量重推会叠加：已见过的 seq 直接丢弃，避免消息/产物重复渲染
-      if (seenSeqsRef.current.has(event.seq)) return;
-      seenSeqsRef.current.add(event.seq);
-      lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
-      setEvents((current) => [...current, event]);
-      // 任务/参与者状态变化时刷新房间快照
-      if (["TASK_STATE_CHANGED", "PARTICIPANT_JOINED", "PARTICIPANT_LEFT", "PARTICIPANT_STATUS_CHANGED", "ARTIFACT_CREATED"].includes(event.type)) {
-        void fetchServerRoom(port, roomId).then((snapshot) => {
-          setRoom(snapshot);
-          onRoomChange?.(snapshot);
-        }).catch(() => undefined);
-      }
-    });
+    const unsubscribe = subscribeRoomEvents(port, roomId, () => lastSeqRef.current, ingestEvent);
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId]);
@@ -446,6 +451,26 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   useEffect(() => {
     if (room) onRunningChange?.(running);
   }, [onRunningChange, room, running]);
+
+  // 对账轮询：房间 SSE 断链（plugin-http 静默丢流）时，TASK_STATE_CHANGED 收不到，
+  // room.tasks 快照停在"运行中"，上面的兜底收口与 running 状态都会永久卡死。
+  // 任务运行期间定期向服务端对账：按 seq 补拉丢失事件 + 刷新快照，不依赖 SSE 存活。
+  useEffect(() => {
+    if (!running) return;
+    const reconcile = async () => {
+      try {
+        const missed = await fetchRoomEvents(port, roomId, lastSeqRef.current);
+        for (const event of missed) ingestEvent(event);
+        const snapshot = await fetchServerRoom(port, roomId);
+        setRoom(snapshot);
+        onRoomChange?.(snapshot);
+      } catch {
+        // 服务未就绪/瞬时失败：静默，下一轮重试
+      }
+    };
+    const timer = window.setInterval(() => void reconcile(), 5_000);
+    return () => window.clearInterval(timer);
+  }, [running, port, roomId, ingestEvent, onRoomChange]);
 
   const scrollToBottom = () => {
     followOutputRef.current = true;
@@ -589,26 +614,30 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
             ));
             const availability = roomArtifactAvailability(readyArtifact, existingArtifactFiles);
             const canPreview = roomArtifactHasPreview(readyArtifact) && availability === "ready" && Boolean(onOpenArtifact);
+            // 右键菜单目标：产物绑定且真实存在的本地文件
+            const artifactMenuPath = roomArtifactFilePaths(readyArtifact).find((path) => existingArtifactFiles?.has(path)) || null;
             const disabledTitle = availability === "missing" ? "文件已不存在，无法查看" : "产物内容还在生成，稍后可查看";
             const metaText = canPreview ? readyArtifact?.kind || item.kindLabel : availability === "missing" ? "文件已不存在" : "内容生成中";
             const openText = canPreview ? "查看 →" : availability === "missing" ? "已失效" : "稍后可查看";
             return (
               <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
-                  <button
-                    type="button"
-                    className={`room-artifact${canPreview ? " clickable" : availability === "missing" ? " missing" : " pending"}`}
-                    title={canPreview ? "点击在右侧查看" : disabledTitle}
-                    disabled={!canPreview}
-                    onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
-                  >
-                    <span className="room-artifact-icon">📄</span>
-                    <div className="room-artifact-text">
-                      <div className="room-artifact-title">{item.title}</div>
-                      <div className="room-artifact-meta">{metaText}</div>
-                    </div>
-                    <span className="room-artifact-open">{openText}</span>
-                  </button>
+                  <FileActionsArea path={artifactMenuPath}>
+                    <button
+                      type="button"
+                      className={`room-artifact${canPreview ? " clickable" : availability === "missing" ? " missing" : " pending"}`}
+                      title={canPreview ? "点击在右侧查看" : disabledTitle}
+                      disabled={!canPreview}
+                      onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
+                    >
+                      <span className="room-artifact-icon">📄</span>
+                      <div className="room-artifact-text">
+                        <div className="room-artifact-title">{item.title}</div>
+                        <div className="room-artifact-meta">{metaText}</div>
+                      </div>
+                      <span className="room-artifact-open">{openText}</span>
+                    </button>
+                  </FileActionsArea>
                   <div className="message-meta">
                     <AttributionAvatar
                       name={item.human.name}

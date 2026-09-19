@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
+import { FileActionsArea } from "./FileActionsMenu";
 
 /**
  * 通用文件预览：按扩展名路由渲染方式。
@@ -75,15 +76,63 @@ type Props = {
   compact?: boolean;
 };
 
-/** 从消息正文中提取首个本地文件引用（供对话内嵌渲染调用） */
+/** 消息正文中可识别为本地文件路径的扩展名（文档 + 代码） */
+const PATH_EXTENSIONS = [
+  "md", "markdown", "txt", "log", "csv", "tsv", "docx", "xlsx", "xls", "json", "pdf",
+  "png", "jpe?g", "gif", "webp", "svg", "ico", "bmp", "html?",
+  // 代码类：Agent 操作代码时给出的文件也要能渲染成卡片
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "c", "h", "cpp", "hpp", "cc", "java", "kt", "kts",
+  "rs", "go", "rb", "php", "swift", "vue", "svelte", "css", "scss", "less", "xml",
+  "yaml", "yml", "toml", "sh", "bash", "zsh", "sql", "gradle", "properties", "ini", "cfg", "conf",
+];
+
+const LOCAL_PATH_RE = new RegExp(
+  // 要求路径中至少含一个 "/"：既匹配绝对路径（/Users/x/y.ts），也匹配相对路径（src/lib/x.ts）
+  `[^\\s<>（）()"'"|,；]*\\/[^\\s<>（）()"'"|,；]+\\.(?:${PATH_EXTENSIONS.join("|")})`,
+  "gi",
+);
+
+/** 从消息正文中提取本地文件引用（供对话内嵌渲染调用） */
 export function extractFilePaths(text: string): string[] {
   const results: string[] = [];
-  const re = /(?:\/[^\s<>）)」】"'，。；]+?\.(?:md|markdown|txt|csv|docx|xlsx|xls|json|pdf|png|jpe?g|gif|webp|svg|html?))/gi;
-  for (const match of text.matchAll(re)) {
-    const cleaned = decodeLocalPath(match[0].replace(/[.,;:!?）)」】'"]+$/, ""));
+  for (const match of text.matchAll(LOCAL_PATH_RE)) {
+    const cleaned = decodeLocalPath(match[0].replace(/[.,;:!?）)」】'")>]+$/, ""));
     if (!results.includes(cleaned)) results.push(cleaned);
   }
   return results;
+}
+
+/** 把 a/b/../c、./x 归一化成规整路径 */
+function normalizePath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === ".." && segments.length > 0 && segments[segments.length - 1] !== "..") {
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+  return (path.startsWith("/") ? "/" : "") + segments.join("/");
+}
+
+/**
+ * 为提取到的原始路径生成候选绝对路径：
+ *  - 绝对路径（/、~/ 开头）→ 原样；
+ *  - 相对路径 → 优先按当前项目根解析（Agent 回复里常写 src/App.tsx），原路径兜底。
+ */
+function resolvePathCandidates(raw: string, basePath?: string): string[] {
+  const candidates: string[] = [];
+  const push = (value: string) => {
+    if (value && !candidates.includes(value)) candidates.push(value);
+  };
+  if (raw.startsWith("/") || raw.startsWith("~")) {
+    push(raw);
+  } else {
+    if (basePath) push(normalizePath(`${basePath}/${raw}`));
+    push(raw);
+  }
+  return candidates;
 }
 
 function decodeLocalPath(path: string): string {
@@ -92,6 +141,24 @@ function decodeLocalPath(path: string): string {
   } catch {
     return path;
   }
+}
+
+/** 扩展名徽标文案：代码类显示大写扩展名（TS/TSX/JAVA…），其余按类型显示中文 */
+function badgeLabelOf(name: string): { text: string; kind: FileKind } {
+  const kind = fileKindOf(name);
+  if (kind === "code") {
+    const ext = (name.split(".").pop() || "").toUpperCase();
+    return { text: ext.slice(0, 5) || "代码", kind };
+  }
+  if (kind === "unknown") return { text: "文件", kind };
+  return { text: KIND_LABEL[kind], kind };
+}
+
+function formatFileSize(size: number | null): string {
+  if (size == null || !Number.isFinite(size)) return "";
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export const FilePreview = function FilePreview({ path, name, onClose, compact }: Props) {
@@ -128,13 +195,15 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
   }, [path, kind]);
 
   const header = (
-    <div className={`file-preview-head${compact ? " compact" : ""}`}>
-      <span className={`file-kind-badge kind-${kind}`}>{KIND_LABEL[kind]}</span>
-      <span className="file-preview-name" title={path}>{displayName}</span>
-      {onClose ? (
-        <button type="button" className="file-preview-close" onClick={onClose} aria-label="关闭预览">✕</button>
-      ) : null}
-    </div>
+    <FileActionsArea path={path}>
+      <div className={`file-preview-head${compact ? " compact" : ""}`}>
+        <span className={`file-kind-badge kind-${kind}`}>{KIND_LABEL[kind]}</span>
+        <span className="file-preview-name" title={path}>{displayName}</span>
+        {onClose ? (
+          <button type="button" className="file-preview-close" onClick={onClose} aria-label="关闭预览">✕</button>
+        ) : null}
+      </div>
+    </FileActionsArea>
   );
 
   if (loading) {
@@ -165,7 +234,7 @@ export const FilePreview = function FilePreview({ path, name, onClose, compact }
         ) : kind === "text" ? (
           <pre className="file-preview-plain">{text}</pre>
         ) : kind === "code" ? (
-          <pre className="file-preview-code"><code>{text}</code></pre>
+          <CodeView code={text} />
         ) : kind === "docx" ? (
           <DocxPreview base64={binary} />
         ) : kind === "xlsx" ? (
@@ -196,6 +265,28 @@ function binaryToText(base64: string): string {
   } catch {
     return "";
   }
+}
+
+/** 代码视图上限：超出则截断展示，避免超大文件卡死渲染 */
+const CODE_VIEW_MAX_LINES = 20_000;
+
+/** 代码文件查看器：行号栏 + 源码，对齐 IDE 的阅读体验 */
+function CodeView({ code }: { code: string }) {
+  const allLines = code.split("\n");
+  const truncated = allLines.length > CODE_VIEW_MAX_LINES;
+  const shown = truncated ? allLines.slice(0, CODE_VIEW_MAX_LINES) : allLines;
+  const gutter = Array.from({ length: shown.length }, (_, index) => index + 1).join("\n");
+  return (
+    <div className="file-preview-codeblock">
+      {truncated ? (
+        <div className="file-preview-truncated">文件过长，仅显示前 {CODE_VIEW_MAX_LINES.toLocaleString()} 行</div>
+      ) : null}
+      <div className="code-view">
+        <pre className="code-view-gutter" aria-hidden="true">{gutter}</pre>
+        <pre className="code-view-lines"><code>{shown.join("\n")}</code></pre>
+      </div>
+    </div>
+  );
 }
 
 /** docx 渲染：mammoth 体积较大，动态 import 按需加载 */
@@ -255,54 +346,102 @@ function SheetPreview({ base64, name }: { base64: string; name: string }) {
   );
 }
 
-/** 对话内嵌文件渲染卡片：正文中出现本地文件路径时自动渲染 */
-export function InlineFileCards({ content, onOpenFile }: { content: string; onOpenFile?: (path: string) => void }) {
-  const paths = useMemo(() => extractFilePaths(content), [content]);
-  const [existingPaths, setExistingPaths] = useState<Set<string> | null>(null);
+/** 对话内嵌文件渲染卡片：正文中出现本地文件路径（绝对或相对项目根）时自动渲染 */
+export function InlineFileCards({ content, onOpenFile, basePath }: {
+  content: string;
+  onOpenFile?: (path: string) => void;
+  /** 当前项目根路径：用于把 Agent 回复中的相对路径（src/App.tsx）解析为可读取的绝对路径 */
+  basePath?: string;
+}) {
+  const rawPaths = useMemo(() => extractFilePaths(content), [content]);
+  const [entries, setEntries] = useState<Map<string, { path: string; size: number | null; exists: boolean }> | null>(null);
+
   useEffect(() => {
-    if (paths.length === 0) {
-      setExistingPaths(new Set());
+    if (rawPaths.length === 0) {
+      setEntries(new Map());
       return;
     }
-    setExistingPaths(null);
+    setEntries(null);
     let cancelled = false;
-    void invoke<string[]>("existing_local_files", { paths })
-      .then((existing) => {
-        if (!cancelled) setExistingPaths(new Set(existing));
-      })
-      .catch(() => {
-        if (!cancelled) setExistingPaths(new Set());
+    const candidateLists = rawPaths.map((raw) => resolvePathCandidates(raw, basePath));
+    const allCandidates = candidateLists.flat();
+    void Promise.all([
+      invoke<string[]>("existing_local_files", { paths: allCandidates }).catch(() => [] as string[]),
+      invoke<(number | null)[]>("local_file_metas", { paths: allCandidates }).catch(() => [] as (number | null)[]),
+    ]).then(([existingList, sizeList]) => {
+      if (cancelled) return;
+      const existingSet = new Set(existingList);
+      const sizeByPath = new Map<string, number | null>();
+      allCandidates.forEach((candidate, index) => sizeByPath.set(candidate, sizeList[index] ?? null));
+      const next = new Map<string, { path: string; size: number | null; exists: boolean }>();
+      rawPaths.forEach((raw, index) => {
+        const found = candidateLists[index].find((candidate) => existingSet.has(candidate));
+        next.set(raw, found
+          ? { path: found, size: sizeByPath.get(found) ?? null, exists: true }
+          : { path: candidateLists[index][0], size: null, exists: false });
       });
+      setEntries(next);
+    });
     return () => { cancelled = true; };
-  }, [paths]);
-  if (paths.length === 0) return null;
+  }, [rawPaths, basePath]);
+
+  if (rawPaths.length === 0 || !entries) return null;
+  // 相对路径解析不到真实文件的多半是正文误匹配，直接不渲染；显式绝对路径保留（提示已不存在）
+  const visible = rawPaths.filter((raw) => {
+    const entry = entries.get(raw);
+    return entry && (entry.exists || raw.startsWith("/") || raw.startsWith("~"));
+  });
   return (
     <div className="inline-file-cards">
-      {paths.slice(0, 3).map((filePath) => (
-        <InlineFileCard key={filePath} path={filePath} exists={existingPaths?.has(filePath) ?? null} onOpenFile={onOpenFile} />
-      ))}
+      {visible.slice(0, 6).map((raw) => {
+        const entry = entries.get(raw)!;
+        return (
+          <InlineFileCard
+            key={raw}
+            path={entry.path}
+            size={entry.size}
+            exists={entry.exists}
+            onOpenFile={onOpenFile}
+          />
+        );
+      })}
     </div>
   );
 }
 
-function InlineFileCard({ path, exists, onOpenFile }: { path: string; exists: boolean | null; onOpenFile?: (path: string) => void }) {
+function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size: number | null; exists: boolean; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const name = path.split("/").filter(Boolean).pop() || path;
-  const disabled = exists === false;
+  const badge = badgeLabelOf(name);
+  const sizeLabel = formatFileSize(size);
+  // 有右侧面板回调时主点击直接在面板打开（对齐文件产物的查看体验），否则内嵌展开
+  const handleMainClick = () => {
+    if (onOpenFile) onOpenFile(path);
+    else setOpen(true);
+  };
   if (!open) {
     return (
-      <span className="inline-file-trigger-wrap">
-        <button type="button" className="inline-file-trigger" onClick={() => setOpen(true)} title={disabled ? "文件已不存在" : path} disabled={disabled}>
-          <span className="file-kind-badge">{fileKindOf(name) === "unknown" ? "文件" : KIND_LABEL[fileKindOf(name)]}</span>
-          <span className="inline-file-name">{name}</span>
-          <span className="inline-file-hint">{disabled ? "文件不存在" : "点击渲染预览"}</span>
-        </button>
-        {onOpenFile && !disabled ? (
-          <button type="button" className="inline-file-dock" onClick={() => onOpenFile(path)} title="在右侧面板打开">
-            在右侧打开 ↗
+      <FileActionsArea path={exists ? path : null}>
+        <span className="inline-file-trigger-wrap">
+          <button
+            type="button"
+            className="inline-file-trigger"
+            onClick={handleMainClick}
+            title={exists ? `${path}（右键可打开/另存为）` : `${path}（文件已不存在）`}
+            disabled={!exists}
+          >
+            <span className={`file-kind-badge kind-${badge.kind}`}>{badge.text}</span>
+            <span className="inline-file-name">{name}</span>
+            {sizeLabel ? <span className="inline-file-size">{sizeLabel}</span> : null}
+            <span className="inline-file-hint">{exists ? (onOpenFile ? "点击查看" : "点击预览") : "文件不存在"}</span>
           </button>
-        ) : null}
-      </span>
+          {exists && onOpenFile ? (
+            <button type="button" className="inline-file-dock" onClick={() => setOpen(true)} title="在对话内展开预览">
+              内嵌预览 ⌄
+            </button>
+          ) : null}
+        </span>
+      </FileActionsArea>
     );
   }
   return <FilePreview path={path} compact onClose={() => setOpen(false)} />;

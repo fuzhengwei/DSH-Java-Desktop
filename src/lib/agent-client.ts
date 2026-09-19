@@ -267,6 +267,20 @@ export type StreamEvent =
   | { type: "step_break"; payload: unknown }
   | { type: "error"; payload: unknown };
 
+/**
+ * 流式通道空闲超时错误。
+ *
+ * Tauri plugin-http 经 IPC Channel 转发响应体（见 plugins-workspace#2129/#2415），
+ * 偶发 chunk / 关闭信号不送达 webview，reader.read() 会永久挂起，
+ * UI 表现为"生成中"转圈不动。用空闲看门狗主动断开，让调用方走服务端对账兜底。
+ */
+export class StreamIdleError extends Error {
+  constructor() {
+    super("流式连接空闲超时（可能被 Tauri http 插件吞掉）");
+    this.name = "StreamIdleError";
+  }
+}
+
 export async function streamAgentMessage(
   port: number,
   body: {
@@ -283,6 +297,8 @@ export async function streamAgentMessage(
   },
   onEvent: (event: StreamEvent) => void,
   signal?: AbortSignal,
+  /** 连续无字节的最长等待；模型长推理/工具长执行期间 SSE 也可能静默，别设太小 */
+  idleTimeoutMs = 120_000,
 ): Promise<void> {
   const response = await fetch(`${baseUrl(port)}/api/agent/stream`, {
     method: "POST",
@@ -321,30 +337,192 @@ export async function streamAgentMessage(
     }
   };
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      // 流结束时如果还有未 dispatch 的 data，补一次
-      if (dataLines.length > 0) dispatchEvent();
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-
-    for (const line of lines) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        // 去掉 "data:" 前缀，保留空格（标准允许 data: xxx 或 data:xxx）
-        const value = line.slice(5).replace(/^ /, "");
-        dataLines.push(value);
-      } else if (line.trim() === "") {
-        // 空行表示一条 SSE 消息结束
-        dispatchEvent();
-      }
-      // 其他行（如 :comment、id:、retry:）忽略
-    }
+  // 空闲看门狗 + 主动取消：
+  // plugin-http 的 abort/cancel 对挂起的 reader.read() 不保证兑现（plugins-workspace#2129/#2415），
+  // 停止按钮/看门狗触发后读循环可能永远卡在 await 上。
+  // 因此把「空闲超时」和「调用方 signal abort」都接进 Promise.race，强制中断读取。
+  let idleTimedOut = false;
+  let idleTimer = 0;
+  let idleReject: ((error: Error) => void) | null = null;
+  let abortReject: ((error: Error) => void) | null = null;
+  const armIdleWatchdog = () => {
+    window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => {
+      idleTimedOut = true;
+      idleReject?.(new StreamIdleError());
+      void reader.cancel().catch(() => {});
+    }, idleTimeoutMs);
+  };
+  const onAbortSignal = () => {
+    abortReject?.(new DOMException("Aborted", "AbortError"));
+    void reader.cancel().catch(() => {});
+  };
+  if (signal) {
+    if (signal.aborted) onAbortSignal();
+    else signal.addEventListener("abort", onAbortSignal);
   }
+
+  try {
+    armIdleWatchdog();
+    while (true) {
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          idleReject = reject;
+        }),
+        new Promise<never>((_, reject) => {
+          abortReject = reject;
+        }),
+      ]);
+      idleReject = null;
+      abortReject = null;
+      const { done, value } = result;
+      if (idleTimedOut) {
+        throw new StreamIdleError();
+      }
+      if (done) {
+        // 流结束时如果还有未 dispatch 的 data，补一次
+        if (dataLines.length > 0) dispatchEvent();
+        break;
+      }
+      armIdleWatchdog();
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventName = line.slice(6).trim();
+        } else if (line.startsWith("data:")) {
+          // 去掉 "data:" 前缀，保留空格（标准允许 data: xxx 或 data:xxx）
+          const value = line.slice(5).replace(/^ /, "");
+          dataLines.push(value);
+        } else if (line.trim() === "") {
+          // 空行表示一条 SSE 消息结束
+          dispatchEvent();
+        }
+        // 其他行（如 :comment、id:、retry:）忽略
+      }
+    }
+  } finally {
+    window.clearTimeout(idleTimer);
+    signal?.removeEventListener("abort", onAbortSignal);
+  }
+}
+
+// ── 扩展管理（Skills / MCP / CLI） ─────────────────────────
+
+export type ExtensionSkillSummary = {
+  name: string;
+  description: string;
+  source: string;
+  path: string;
+  enabled: boolean;
+  removable: boolean;
+};
+
+export type ExtensionMcpServer = {
+  name: string;
+  transport: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  url?: string;
+  headers?: Record<string, string>;
+  presetSource: string;
+};
+
+export type ExtensionMcpApplyResult = {
+  success: boolean;
+  name: string;
+  toolCount: number;
+  tools: string[];
+  message: string;
+};
+
+export type ExtensionCliConfig = {
+  acpCommand: string;
+  acpSubagentCommand: string;
+  codexCommand: string;
+  claudeCommand: string;
+  effectiveNotice: string;
+};
+
+export async function listExtensionSkills(port: number): Promise<ExtensionSkillSummary[]> {
+  return request<ExtensionSkillSummary[]>(port, "/api/harness/extensions/skills");
+}
+
+export type ExtensionSkillInstallResult = {
+  success: boolean;
+  name?: string;
+  path?: string;
+  message: string;
+};
+
+export async function installExtensionSkill(
+  port: number,
+  gitUrl: string,
+  subdir?: string,
+  name?: string,
+): Promise<ExtensionSkillInstallResult> {
+  return request<ExtensionSkillInstallResult>(port, "/api/harness/extensions/skills/install", {
+    method: "POST",
+    body: JSON.stringify({ gitUrl, subdir: subdir || undefined, name: name || undefined }),
+  });
+}
+
+export async function setExtensionSkillEnabled(port: number, name: string, enabled: boolean): Promise<boolean> {
+  return request<boolean>(port, `/api/harness/extensions/skills/${encodeURIComponent(name)}/enabled`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function removeExtensionSkill(port: number, name: string): Promise<boolean> {
+  return request<boolean>(port, `/api/harness/extensions/skills/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function listMcpServers(port: number): Promise<ExtensionMcpServer[]> {
+  return request<ExtensionMcpServer[]>(port, "/api/harness/extensions/mcp/servers");
+}
+
+export async function upsertMcpServer(
+  port: number,
+  server: Partial<ExtensionMcpServer>,
+): Promise<ExtensionMcpApplyResult> {
+  return request<ExtensionMcpApplyResult>(port, "/api/harness/extensions/mcp/servers", {
+    method: "PUT",
+    body: JSON.stringify(server),
+  });
+}
+
+export async function testMcpServer(
+  port: number,
+  server: Partial<ExtensionMcpServer>,
+): Promise<ExtensionMcpApplyResult> {
+  return request<ExtensionMcpApplyResult>(port, "/api/harness/extensions/mcp/servers/test", {
+    method: "POST",
+    body: JSON.stringify(server),
+  });
+}
+
+export async function removeMcpServer(port: number, name: string): Promise<boolean> {
+  return request<boolean>(port, `/api/harness/extensions/mcp/servers/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function getExtensionCliConfig(port: number): Promise<ExtensionCliConfig> {
+  return request<ExtensionCliConfig>(port, "/api/harness/extensions/cli");
+}
+
+export async function setExtensionCliConfig(port: number, config: ExtensionCliConfig): Promise<ExtensionCliConfig> {
+  return request<ExtensionCliConfig>(port, "/api/harness/extensions/cli", {
+    method: "PUT",
+    body: JSON.stringify(config),
+  });
 }
