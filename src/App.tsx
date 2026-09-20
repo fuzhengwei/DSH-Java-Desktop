@@ -2383,11 +2383,14 @@ export default function App() {
         }
         return changed ? next : current;
       });
-      setDigitalHumans((current) => current.map((human) => {
-        if (human.projectPath !== project.path) return human;
-        assignDigitalHumanToProject(human.id, nextParentPath);
-        return { ...human, projectPath: nextParentPath };
-      }));
+      const affectedHumans = digitalHumansRef.current.filter((human) => human.projectPath === project.path);
+      for (const human of affectedHumans) {
+        // 服务端 project_path 是事实源；本地投影仅兜底。副作用放在 updater 外，避免 StrictMode 双触发
+        void assignDigitalHumanToProject(port, human.id, nextParentPath);
+      }
+      setDigitalHumans((current) => current.map((human) => (
+        affectedHumans.some((item) => item.id === human.id) ? { ...human, projectPath: nextParentPath } : human
+      )));
       setLocalProjects((current) => current.map((item) => (
         item.parentPath === project.path ? { ...item, parentPath: nextParentPath } : item
       )));
@@ -3142,7 +3145,7 @@ export default function App() {
         onRemoveLocalProject={removeLocalProject}
         digitalHumans={digitalHumans}
         onAssignDigitalHuman={(humanId, projectPath, checked) => {
-          void assignDigitalHumanToProject(humanId, checked ? projectPath : "");
+          void assignDigitalHumanToProject(port, humanId, checked ? projectPath : "");
           void refreshDigitalHumans(port);
         }}
         onCreateDigitalHuman={(project) => {

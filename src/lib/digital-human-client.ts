@@ -24,7 +24,11 @@ import type {
 
 const STORE_KEY = "dsh-digital-humans";
 const ROOM_STORE_KEY = "dsh-rooms";
-/** 数字人 → 项目 归属映射（本地投影）：{ digitalHumanId: projectPath }，空串表示全局 */
+/**
+ * 数字人 → 项目 归属映射（本地降级缓存）：{ digitalHumanId: projectPath }。
+ * 服务端 digital_human.project_path 是事实源；本地映射仅在 Runtime 不可用时兜底，
+ * 服务端可用时会自动把仅存本地的归属迁移回服务端。
+ */
 const PROJECT_BIND_KEY = "dsh-digital-human-projects";
 
 // ── 本地持久化（降级通道） ─────────────────────
@@ -86,17 +90,18 @@ function writeProjectBindings(bindings: Record<string, string>) {
   }
 }
 
-/** 把本地归属映射叠加到数字人列表上（服务端列表与本地降级列表都适用） */
+/** 把本地归属映射叠加到数字人列表上：服务端值优先，本地仅补齐服务端未设置的记录 */
 function applyProjectBindings(humans: DigitalHuman[]): DigitalHuman[] {
   const bindings = readProjectBindings();
   return humans.map((human) => ({
     ...human,
-    projectPath: bindings[human.id] || undefined,
+    projectPath: human.projectPath || bindings[human.id] || undefined,
   }));
 }
 
 /** 设置数字人的项目归属；传空串表示改回全局 */
-export function assignDigitalHumanToProject(id: string, projectPath: string): void {
+export async function assignDigitalHumanToProject(port: number | null, id: string, projectPath: string): Promise<void> {
+  // 本地投影立即生效：UI 即时反馈 + Runtime 不可用时的兜底
   const bindings = readProjectBindings();
   if (projectPath) bindings[id] = projectPath;
   else delete bindings[id];
@@ -108,6 +113,29 @@ export function assignDigitalHumanToProject(id: string, projectPath: string): vo
       human.id === id ? { ...human, projectPath: projectPath || undefined } : human
     )));
   }
+  if (port) {
+    try {
+      await request(port, `/api/digital-humans/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        body: JSON.stringify({ projectPath }),
+      });
+    } catch (error) {
+      if (!isRuntimeUnavailable(error)) throw error;
+    }
+  }
+}
+
+/** 把仅存在于本地投影的归属写回服务端（幂等；失败静默，下次列表加载时重试） */
+async function migrateProjectBindingsToServer(port: number, humans: DigitalHuman[]): Promise<void> {
+  const bindings = readProjectBindings();
+  const pending = humans.filter((human) => !human.projectPath && bindings[human.id]);
+  if (pending.length === 0) return;
+  await Promise.all(pending.map((human) =>
+    request(port, `/api/digital-humans/${encodeURIComponent(human.id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ projectPath: bindings[human.id] }),
+    }).catch(() => undefined),
+  ));
 }
 
 // ── Runtime 通道探测 ──────────────────────────
@@ -168,6 +196,8 @@ export async function listDigitalHumans(port: number | null): Promise<DigitalHum
   if (port) {
     try {
       const remote = await request<DigitalHuman[]>(port, "/api/digital-humans");
+      // 服务端缺归属而本地缓存有时，迁移到服务端（幂等）
+      await migrateProjectBindingsToServer(port, remote).catch(() => undefined);
       return applyProjectBindings(remote);
     } catch (error) {
       if (!isRuntimeUnavailable(error)) throw error;
@@ -185,6 +215,7 @@ export type DigitalHumanDraft = {
   approvalPolicy: DigitalHuman["approvalPolicy"];
   concurrencyLimit: number;
   endpoint: DigitalHumanEndpoint;
+  projectPath?: string;
 };
 
 export async function createDigitalHuman(port: number | null, draft: DigitalHumanDraft): Promise<DigitalHuman> {

@@ -179,7 +179,7 @@ npm install          # 换机器/拉新代码后如报 Failed to resolve import�
 npm run tauri dev
 ```
 
-开发时若 `resources/agent/` 下没有 JAR，Rust 层会回退查找 `../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app-0.1.6.jar`。
+开发时若 `resources/agent/` 下没有 JAR，Rust 层会回退查找 `../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app.jar`（Maven finalName，无版本号）。
 
 构建发布包（自动完成：构建服务端 JAR → 复制 → 下载当前平台 JRE 17）：
 

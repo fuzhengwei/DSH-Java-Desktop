@@ -161,12 +161,12 @@ export default function DigitalHumanCatalog({
     }
   }, [onChanged, port, selected]);
 
-  // 归属项目切换：本地写映射并触发外层刷新（只影响展示归属，不动服务端记录）
+  // 归属项目切换：服务端 project_path 为主、本地投影兜底，触发外层刷新
   const changeProject = useCallback((projectPath: string) => {
     if (!selected) return;
-    assignDigitalHumanToProject(selected.id, projectPath);
+    void assignDigitalHumanToProject(port, selected.id, projectPath);
     onChanged();
-  }, [onChanged, selected]);
+  }, [onChanged, port, selected]);
 
   const startEdit = useCallback(() => {
     if (!selected) return;

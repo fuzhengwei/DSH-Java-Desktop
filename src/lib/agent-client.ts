@@ -19,7 +19,11 @@ function baseUrl(port: number): string {
 
 export async function readHealth(port: number): Promise<boolean> {
   try {
-    const response = await fetch(`${baseUrl(port)}/api/harness/config/effective`);
+    const response = await withTimeout(
+      fetch(`${baseUrl(port)}/api/harness/config/effective`),
+      5_000,
+      "健康检查超时",
+    );
     if (response.ok) {
       return true;
     }
@@ -53,20 +57,56 @@ export async function waitForService(
   throw new Error(`智能体服务健康检查超时（已等待 ${Math.round(timeoutMs / 1000)} 秒）`);
 }
 
-async function request<T>(port: number, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseUrl(port)}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...init?.headers,
-    },
-  });
+/**
+ * REST 请求统一超时（覆盖 fetch 连接阶段与 response.json() body 读取阶段）+ GET 超时自动重试一次。
+ *
+ * 背景（同 digital-human-client.ts 的 request()）：WKWebView 的 window.fetch 偶发挂断——
+ * 请求到达服务端但响应体流永不送达 JS 层，promise 既不 resolve 也不 reject。
+ * 典型症状：进入会话拉取历史消息时挂起，消息区一直空白；切走再切回触发新请求才恢复
+ * （2026-09-20 "对话内容初次进入不可见"根因）。GET 超时自动重试一次，与"切走再切回"
+ * 等效但无需用户干预；写操作不自动重试，避免服务端已处理导致重复执行。
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
 
-  const payload = (await response.json().catch(() => null)) as ApiEnvelope<T> | null;
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label = "请求超时"): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error(label)), timeoutMs)),
+  ]);
+}
+
+async function requestOnce<T>(port: number, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const response = await withTimeout(
+    fetch(`${baseUrl(port)}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...init?.headers,
+      },
+    }),
+    timeoutMs,
+  );
+  const payload = await withTimeout(
+    response.json().catch(() => null) as Promise<ApiEnvelope<T> | null>,
+    timeoutMs,
+  );
   if (!response.ok || payload?.code !== "00000") {
     throw new Error(payload?.info || `请求失败：HTTP ${response.status}`);
   }
   return payload.data as T;
+}
+
+async function request<T>(port: number, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  try {
+    return await requestOnce<T>(port, path, init, timeoutMs);
+  } catch (error) {
+    const timedOut = error instanceof Error && error.message === "请求超时";
+    const safeToRetry = !init?.method || init.method === "GET";
+    if (timedOut && safeToRetry) {
+      return requestOnce<T>(port, path, init, timeoutMs);
+    }
+    throw error;
+  }
 }
 
 export async function listSessions(
@@ -195,7 +235,7 @@ export async function analyzePluginMaven(port: number, pomXml: string): Promise<
   const result = await request<PluginCandidate[]>(port, `${PLUGIN_API}/analyze-maven`, {
     method: "POST",
     body: JSON.stringify({ pomXml }),
-  });
+  }, 120_000);
   return Array.isArray(result) ? result : [];
 }
 

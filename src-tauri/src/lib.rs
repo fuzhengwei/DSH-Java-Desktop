@@ -6,7 +6,11 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tauri::{Manager, RunEvent, State};
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    Manager, RunEvent, State, WindowEvent,
+};
 use tauri_plugin_process::init as process_plugin;
 
 #[derive(Clone, Serialize)]
@@ -271,7 +275,7 @@ fn cleanup_stale_runtime(runtime_path: &PathBuf) -> Result<(), String> {
         .map_err(|error| format!("清理智能体运行记录失败：{error}"))
 }
 
-fn persist_runtime(runtime_path: &PathBuf, child: &Child, port: u16, jar_path: &PathBuf) -> Result<(), String> {
+fn persist_runtime(runtime_path: &Path, child: &Child, port: u16, jar_path: &Path) -> Result<(), String> {
     let record = AgentRuntimeRecord {
         pid: child.id(),
         port,
@@ -345,7 +349,7 @@ fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 
     let development_jar = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app-0.1.6.jar");
+        .join("../../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app.jar");
     if development_jar.exists() {
         return Ok(development_jar);
     }
@@ -1216,6 +1220,58 @@ fn mime_type_for_path(path: &Path) -> String {
     .to_string()
 }
 
+/// 显示并聚焦主窗口（托盘菜单 / Dock 点击 / 左键单击托盘共用）
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// 创建系统托盘：左键单击切换显示/隐藏，菜单提供「打开」与「退出」。
+/// 关闭窗口不会退出应用（见 on_window_event），真正退出只会走托盘「退出」
+/// 或系统退出，ExitRequested 时统一回收智能体 Java 进程。
+fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItem::with_id(app, "show", "打开 DSH Java Desktop", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("main-tray")
+        .icon(app.default_window_icon().expect("应用图标未配置").clone())
+        .tooltip("DSH Java Desktop")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => show_main_window(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let app = tray.app_handle();
+                let visible = app
+                    .get_webview_window("main")
+                    .and_then(|window| window.is_visible().ok())
+                    .unwrap_or(false);
+                if visible {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                } else {
+                    show_main_window(app);
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -1223,14 +1279,27 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(process_plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(setup_tray)
+        .on_window_event(|window, event| {
+            // 点击红色叉号：不退出，仅隐藏窗口到托盘（后端 Java 服务保持运行）
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
     let handle = app.handle().clone();
-    app.run(move |_app, event| {
-        if matches!(event, RunEvent::ExitRequested { .. }) {
-            shutdown_runtime(handle.state::<AgentRuntimeState>().inner());
+    app.run(move |app, event| {
+        match event {
+            RunEvent::ExitRequested { .. } => {
+                shutdown_runtime(handle.state::<AgentRuntimeState>().inner());
+            }
+            // macOS：窗口隐藏后点击 Dock 图标重新显示
+            RunEvent::Reopen { .. } => show_main_window(app),
+            _ => {}
         }
     });
 }

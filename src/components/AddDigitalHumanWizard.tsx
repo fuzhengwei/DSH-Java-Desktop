@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DigitalHuman, DigitalHumanEndpointType, DiscoverResult } from "../types";
 import {
-  assignDigitalHumanToProject,
   createDigitalHuman,
   discoverDigitalHuman,
   saveCredential,
@@ -218,13 +217,10 @@ export default function AddDigitalHumanWizard({ open, port, onClose, onCreated, 
           lastCheckedAt: new Date().toISOString(),
           latencyMs: discovery?.latencyMs,
         },
+        // 项目语境下创建：归属随创建直接落到服务端 digital_human.project_path
+        projectPath: projectPath || undefined,
       };
       const human = await createDigitalHuman(port, draft);
-      // 项目语境下创建：立即写入项目归属，侧边栏项目行即可展示头像与数量
-      if (projectPath) {
-        assignDigitalHumanToProject(human.id, projectPath);
-        human.projectPath = projectPath;
-      }
       onCreated(human);
       onClose();
     } catch (caught) {

@@ -10,7 +10,7 @@
     "tauri": "tauri",
     "tauri:build": "npm run agent:prepare && tauri build",
     "agent:build": "cd ../deepseek-harness-java && mvn -DskipTests package",
-    "agent:copy": "cp ../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app-0.1.6.jar resources/agent/deepseek-harness-java-app.jar",
+    "agent:copy": "cp ../deepseek-harness-java/deepseek-harness-java-app/target/deepseek-harness-java-app.jar resources/agent/deepseek-harness-java-app.jar",
     "agent:runtime": "node scripts/prepare-runtime.mjs",
     "agent:prepare": "npm run agent:build && npm run agent:copy && npm run agent:runtime",
     "agent:verify": "test -f resources/agent/deepseek-harness-java-app.jar"
