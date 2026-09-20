@@ -1,5 +1,5 @@
 import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
-import { memo, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SyntheticEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { rehypeHighlight } from "../lib/markdown-plugins";
@@ -38,6 +38,10 @@ type ConversationViewProps = {
   switchingBranchPath?: string;
   streamStartedAt?: number | null;
   runDurationMs?: number | null;
+  /** 服务端 done 下发的权威文件产物清单（绝对路径） */
+  runArtifacts?: string[];
+  /** 会话归属项目根：文件产物按它解析相对路径（Agent 实际写入的 cwd），比 activeProject 更准 */
+  sessionProjectPath?: string;
   onSelectProject: (project: WorkspaceEntry) => void;
   onSelectDefaultWorkspace: () => void;
   onSwitchProjectBranch: (project: WorkspaceEntry, branch: string) => void;
@@ -79,6 +83,10 @@ type ConversationViewProps = {
   onResourcesChange: (resources: ComposerResource[]) => void;
   onPickResourceFolder: () => void;
   onPickResourceFile: () => void;
+  /** 粘贴文件（图片/文本类文件）：由 App 读取内容并转为输入框资源 */
+  onPasteFiles?: (files: File[]) => void;
+  /** 粘贴超长文本：折叠为资源标签注入，而不是灌进输入框 */
+  onPasteLongText?: (text: string) => void;
   onAddResourceProject: (project: WorkspaceEntry) => void;
   onAddResourcePlugin: (kind: ComposerResource["pluginKind"]) => void;
 };
@@ -90,6 +98,10 @@ const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>
   echart: "EChart",
   drawio: "Draw.io",
 };
+
+/** 粘贴文本折叠为资源标签的阈值：超过字符数或行数即不再直接插入输入框 */
+const PASTE_TEXT_CHIP_CHARS = 1000;
+const PASTE_TEXT_CHIP_LINES = 30;
 
 /** 插件专属图标：+ 菜单与资源胶囊共用，替代千篇一律的扳手 */
 const PLUGIN_RESOURCE_ICONS: Record<NonNullable<ComposerResource["pluginKind"]>, ComponentType<{ className?: string }>> = {
@@ -112,9 +124,23 @@ function resourceLabel(resource: ComposerResource): string {
 
 function resourceKindLabel(resource: ComposerResource): string {
   if (resource.kind === "folder") return "文件夹";
-  if (resource.kind === "file") return resource.mimeType?.startsWith("image/") ? "图片" : "文件";
+  if (resource.kind === "file") {
+    if (resource.mimeType?.startsWith("image/")) return "图片";
+    // 无本地路径的纯文本资源 = 粘贴的文本内容，折叠展示
+    if (!resource.path && resource.textContent) return "文本";
+    return "文件";
+  }
   if (resource.kind === "project") return "项目";
   return "插件";
+}
+
+/** 资源标签悬浮提示：粘贴的文本展示字数与前几行预览，其余展示本地路径 */
+function resourceTooltip(resource: ComposerResource): string {
+  if (resource.kind === "file" && !resource.path && resource.textContent) {
+    const preview = resource.textContent.slice(0, 300);
+    return `粘贴的文本 · ${resource.textContent.length} 字符\n\n${preview}${resource.textContent.length > 300 ? "\n…" : ""}`;
+  }
+  return resource.path || resourceLabel(resource);
 }
 
 type TimelineItem =
@@ -275,28 +301,57 @@ function editedFiles(messages: ConversationMessage[]): string[] {
 }
 
 /** 本轮文件产物标签列表：异步判定每个路径的真实类型（文件 / 文件夹 / 失效），按类型决定图标与点击行为。 */
-function RunSummaryFiles({ files, onOpenFile }: { files: string[]; onOpenFile?: (path: string) => void }) {
+function RunSummaryFiles({ files, onOpenFile, basePath }: { files: string[]; onOpenFile?: (path: string) => void; basePath?: string }) {
   const [kinds, setKinds] = useState<Record<string, LocalPathKind>>({});
+  const [resolved, setResolved] = useState<Record<string, string>>({});
+  const [attempt, setAttempt] = useState(0);
   const signature = files.join("\n");
+
+  useEffect(() => {
+    setAttempt(0);
+  }, [signature]);
 
   useEffect(() => {
     const list = signature ? signature.split("\n") : [];
     if (list.length === 0) return;
+    // 相对路径按会话项目根解析出候选绝对路径（与 Agent 实际写入 cwd 对齐），原路径兜底
+    const candidateLists = list.map((file) => (
+      file.startsWith("/") || file.startsWith("~")
+        ? [file]
+        : [`${(basePath || "").replace(/\/$/, "")}/${file}`, file].filter(Boolean)
+    ));
+    const allCandidates = [...new Set(candidateLists.flat())];
     let cancelled = false;
-    invoke<(LocalPathKind | null)[]>("local_path_kinds", { paths: list })
+    let retryTimer: number | undefined;
+    invoke<(LocalPathKind | null)[]>("local_path_kinds", { paths: allCandidates })
       .then((result) => {
         if (cancelled) return;
-        const next: Record<string, LocalPathKind> = {};
-        list.forEach((file, index) => {
-          next[file] = result[index] ?? "missing";
+        const kindByPath: Record<string, LocalPathKind> = {};
+        const resolvedByPath: Record<string, string> = {};
+        allCandidates.forEach((candidate, index) => {
+          kindByPath[candidate] = result[index] ?? "missing";
         });
-        setKinds(next);
+        const nextKinds: Record<string, LocalPathKind> = {};
+        list.forEach((file, index) => {
+          const hit = candidateLists[index].find((candidate) => kindByPath[candidate] && kindByPath[candidate] !== "missing");
+          const pick = hit || candidateLists[index][0];
+          nextKinds[file] = kindByPath[pick] ?? "missing";
+          resolvedByPath[file] = pick;
+        });
+        setKinds(nextKinds);
+        setResolved(resolvedByPath);
+        // Agent 收尾 flush 可能晚于 done：全部缺失时延迟复检两次，避免把晚到文件误标"不存在"
+        const allMissing = list.every((file) => nextKinds[file] === "missing");
+        if (allMissing && attempt < 2) {
+          retryTimer = window.setTimeout(() => setAttempt((value) => value + 1), 1500 * (attempt + 1));
+        }
       })
       .catch(() => {});
     return () => {
       cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
     };
-  }, [signature]);
+  }, [signature, basePath, attempt]);
 
   // 目录若同时是其他产物的上级目录，视为过程性路径（如只写了 Desktop），不单独展示
   const visible = files.filter((file) => {
@@ -308,7 +363,7 @@ function RunSummaryFiles({ files, onOpenFile }: { files: string[]; onOpenFile?: 
   return (
     <ul className="run-summary-file-list">
       {visible.map((file) => (
-        <RunFileChip key={file} file={file} kind={kinds[file] ?? "file"} onOpenFile={onOpenFile} />
+        <RunFileChip key={file} file={resolved[file] || file} kind={kinds[file] ?? "file"} onOpenFile={onOpenFile} />
       ))}
     </ul>
   );
@@ -397,6 +452,8 @@ export default function ConversationView({
   switchingBranchPath,
   streamStartedAt,
   runDurationMs,
+  runArtifacts,
+  sessionProjectPath,
   onSelectProject,
   onSelectDefaultWorkspace,
   onSwitchProjectBranch,
@@ -430,6 +487,8 @@ export default function ConversationView({
   onResourcesChange,
   onPickResourceFolder,
   onPickResourceFile,
+  onPasteFiles,
+  onPasteLongText,
   onAddResourceProject,
   onAddResourcePlugin,
 }: ConversationViewProps) {
@@ -767,14 +826,19 @@ export default function ConversationView({
     },
   }), [onOpenFile]);
 
-  const renderMarkdown = (value: string) => (
+  // 引用必须稳定：renderMarkdown 每次渲染都是新函数时，memo(MessageItem) 浅比较
+  // 永远失败，流式期间每个 chunk 都会让全部历史消息连同 ReactMarkdown 重渲染 → 闪烁
+  const renderMarkdown = useCallback((value: string) => (
     <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
       {value}
     </ReactMarkdown>
-  );
+  ), [markdownComponents]);
 
   const lastMessage = messages[messages.length - 1];
   const sendFromComposer = () => {
+    // 生成期间允许预输入，但 Enter 不触发发送（发送按钮此时是"停止"），
+    // 避免对同一 Agent 并发发起流式请求被服务端拒绝
+    if (streaming || roomStreaming) return;
     // 去掉草稿中的零宽空格（@ 标签的内嵌边界字符），再入库/发送
     const text = draftRef.current.replace(/​/g, "").trim();
     exitHistoryBrowsing();
@@ -983,7 +1047,7 @@ export default function ConversationView({
       {resources.length > 0 ? (
         <div className="resource-banner" aria-label="已添加资源">
           {resources.map((resource) => (
-            <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
+            <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resourceTooltip(resource)}>
               {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
               <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
               <span className="resource-chip-name">{resourceLabel(resource)}</span>
@@ -1005,7 +1069,6 @@ export default function ConversationView({
           onMouseDown={(event) => {
             // 兜底：点到输入区但目标不是 textarea 本身（覆盖层/内边距/边角）时，
             // 把焦点交还给 textarea，且把光标移到文本末尾，不打断正常输入
-            if (streaming) return;
             const textarea = textareaRef.current;
             if (!textarea || event.target === textarea) return;
             event.preventDefault();
@@ -1023,9 +1086,10 @@ export default function ConversationView({
               : mentionCandidates.length > 0
                 ? "描述任务，输入 @ 可选择数字人或引用当前项目下的工程（↑ 键调出历史消息）"
                 : roomStreaming
-                  ? "数字人协作中… 请等待当前任务完成"
-                  : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
-            disabled={streaming || roomStreaming}
+                  ? "数字人协作中… 可先整理思路，任务完成后回车发送"
+                  : streaming
+                    ? "生成中… 可先输入下一条消息，完成后回车发送"
+                    : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
             onChange={(event) => {
               exitHistoryBrowsing();
               const value = event.target.value;
@@ -1048,6 +1112,22 @@ export default function ConversationView({
             }}
             onCompositionEnd={() => {
               composingRef.current = false;
+            }}
+            onPaste={(event) => {
+              const clipboard = event.clipboardData;
+              // 1) 剪贴板里有文件：图片转多模态资源、文本类文件提取文本，不落进输入框
+              const files = Array.from(clipboard?.files || []);
+              if (files.length > 0 && onPasteFiles) {
+                event.preventDefault();
+                onPasteFiles(files);
+                return;
+              }
+              // 2) 超长文本：折叠为资源标签（全文随隐藏上下文注入），避免输入框刷屏
+              const text = clipboard?.getData("text/plain") || "";
+              if (text && (text.length > PASTE_TEXT_CHIP_CHARS || text.split("\n").length > PASTE_TEXT_CHIP_LINES) && onPasteLongText) {
+                event.preventDefault();
+                onPasteLongText(text);
+              }
             }}
             onKeyDown={(event) => {
               const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
@@ -1396,8 +1476,21 @@ export default function ConversationView({
     </>
   );
 
-  const runFiles = useMemo(() => editedFiles(messages), [messages]);
+  const runFiles = useMemo(() => {
+    // 服务端权威产物清单（绝对路径）优先，再并入从工具参数提取的路径，去重
+    const merged = [...(runArtifacts || []), ...editedFiles(messages)];
+    return [...new Set(merged)];
+  }, [messages, runArtifacts]);
   const lastAssistantIndex = useMemo(() => findLastAssistantIndex(messages), [messages]);
+  // runSummary 对象引用必须稳定：内联字面量每次渲染都是新对象，会让 memo(MessageItem) 对最后一条消息失效
+  const runSummaryForLast = useMemo(() => (
+    !streaming
+      ? {
+          duration: typeof runDurationMs === "number" && runDurationMs > 0 ? formatDuration(runDurationMs) : null,
+          files: runFiles,
+        }
+      : undefined
+  ), [streaming, runDurationMs, runFiles]);
 
   return (
     <div className="conversation-layout">
@@ -1483,16 +1576,14 @@ export default function ConversationView({
                       asThought={item.asThought}
                       renderMarkdown={renderMarkdown}
                       streaming={streaming || roomStreaming}
+                      live={(streaming || roomStreaming) && item.message === messages[messages.length - 1]}
                       showAttribution={showAttribution}
                       digitalHumans={digitalHumans}
                       onOpenFile={onOpenFile}
-                      basePath={activeProject?.path}
+                      basePath={sessionProjectPath || activeProject?.path}
                       runSummary={
                         !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
-                          ? {
-                              duration: typeof runDurationMs === "number" && runDurationMs > 0 ? formatDuration(runDurationMs) : null,
-                              files: runFiles,
-                            }
+                          ? runSummaryForLast
                           : undefined
                       }
                     />
@@ -1517,11 +1608,56 @@ export default function ConversationView({
   );
 }
 
+/** 折叠块自动开合：active 时自动展开（工具执行中 / 思考中），active 翻转后自动收起；用户手动切换则尊重用户，直到 active 再次变化。 */
+function useAutoExpand(active: boolean): [boolean, (event: SyntheticEvent<HTMLDetailsElement>) => void] {
+  const [open, setOpen] = useState(active);
+  const userTouchedRef = useRef(false);
+  const prevActiveRef = useRef(active);
+  useEffect(() => {
+    if (prevActiveRef.current === active) return;
+    prevActiveRef.current = active;
+    userTouchedRef.current = false;
+    setOpen(active);
+  }, [active]);
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
+    if (event.currentTarget.open !== open) {
+      userTouchedRef.current = true;
+      setOpen(event.currentTarget.open);
+    }
+  };
+  return [open, onToggle];
+}
+
+/** 思考过程折叠块：流式思考期间自动展开（标签显示"思考中"），开始产出正文后自动收起。 */
+const ReasoningBlock = memo(function ReasoningBlock({
+  text,
+  active = false,
+  attributionAvatar,
+}: {
+  text: string;
+  active?: boolean;
+  attributionAvatar?: ReactNode;
+}) {
+  const [open, onToggle] = useAutoExpand(active);
+  return (
+    <details className="reasoning-block" open={open} onToggle={onToggle}>
+      <summary aria-label="AI 思考过程">
+        <span className="reasoning-dot" />
+        <span className="reasoning-label">{active ? "思考中" : "思考过程"}</span>
+        {attributionAvatar}
+        <ChevronIcon className="icon-12 chevron" />
+      </summary>
+      <pre>{text}</pre>
+    </details>
+  );
+});
+
 const MessageItem = memo(function MessageItem({
   message,
   asThought,
   renderMarkdown,
   streaming,
+  live = false,
   showAttribution = true,
   runSummary,
   digitalHumans,
@@ -1532,6 +1668,8 @@ const MessageItem = memo(function MessageItem({
   asThought?: boolean;
   renderMarkdown: (value: string) => ReactNode;
   streaming: boolean;
+  /** 该消息是否是当前正在流式输出的最后一条：驱动思考过程/工具步骤的自动展开与收起 */
+  live?: boolean;
   showAttribution?: boolean;
   runSummary?: { duration: string | null; files: string[] };
   /** 数字人目录：归属头像点击时取完整档案 */
@@ -1565,15 +1703,11 @@ const MessageItem = memo(function MessageItem({
     return (
       <article className={`message ${message.role} thought`} aria-live={streaming ? "polite" : undefined}>
         <div className="message-body">
-          <details className="reasoning-block">
-            <summary aria-label="AI 思考过程">
-              <span className="reasoning-dot" />
-              <span className="reasoning-label">思考过程</span>
-              {attributionAvatar}
-              <ChevronIcon className="icon-12 chevron" />
-            </summary>
-            <pre>{reasoningText}</pre>
-          </details>
+          <ReasoningBlock
+            text={reasoningText}
+            active={live && Boolean(reasoningText)}
+            attributionAvatar={attributionAvatar}
+          />
         </div>
       </article>
     );
@@ -1612,15 +1746,11 @@ const MessageItem = memo(function MessageItem({
         ) : (
           <>
             {reasoningText ? (
-              <details className="reasoning-block">
-                <summary aria-label="AI 思考过程">
-                  <span className="reasoning-dot" />
-                  <span className="reasoning-label">思考过程</span>
-                  {attributionAvatar}
-                  <ChevronIcon className="icon-12 chevron" />
-                </summary>
-                <pre>{reasoningText}</pre>
-              </details>
+              <ReasoningBlock
+                text={reasoningText}
+                active={live && !contentText.trim()}
+                attributionAvatar={attributionAvatar}
+              />
             ) : null}
             {message.role === "user" && message.mentions && message.mentions.length > 0 ? (
               <div className="message-mentions">
@@ -1635,7 +1765,7 @@ const MessageItem = memo(function MessageItem({
             {message.role === "user" && message.resources && message.resources.length > 0 ? (
               <div className="message-mentions">
                 {message.resources.map((resource) => (
-                  <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resource.path || resourceLabel(resource)}>
+                  <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resourceTooltip(resource)}>
                     {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
                     <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
                     <span className="resource-chip-name">{resourceLabel(resource)}</span>
@@ -1670,7 +1800,7 @@ const MessageItem = memo(function MessageItem({
                       <span>修改文件</span>
                       <span className="run-summary-count">{runSummary.files.length}</span>
                     </span>
-                    <RunSummaryFiles files={runSummary.files} onOpenFile={onOpenFile} />
+                    <RunSummaryFiles files={runSummary.files} onOpenFile={onOpenFile} basePath={basePath} />
                   </div>
                 ) : null}
               </div>
@@ -1748,10 +1878,12 @@ const ActivityItem = memo(function ActivityItem({
   }
 
   const title = running ? activityLabel(messages) : activitySummary(messages);
+  // 聚合头：执行中自动展开跟随进度，执行完自动收起；用户手动开合后尊重用户
+  const [open, onToggle] = useAutoExpand(running);
   return (
     <article className="message activity">
       <div className="message-body">
-        <details className="activity-detail" open={running}>
+        <details className="activity-detail" open={open} onToggle={onToggle}>
           <summary>
             <span className={`activity-state activity-state-${state}`} />
             <span className="activity-title">{title}</span>
@@ -1849,12 +1981,15 @@ const ToolStep = memo(function ToolStep({
   const file = toolFilePath(message);
   const diff = isEditTool(message.toolName) ? toolDiffStats(message) : null;
   const failed = message.status === "error" || message.status === "failed";
+  const running = message.status === "running";
   const detail = !file ? toolDetail(message) : "";
-  const statusClass = failed ? " failed" : message.status === "running" ? " running" : "";
+  const statusClass = failed ? " failed" : running ? " running" : "";
   const attribution = showAttribution ? message.attribution : undefined;
+  // 执行中自动展开实时输出，完成/失败后自动收成一行；用户手动切换后尊重用户选择
+  const [open, onToggle] = useAutoExpand(running);
 
   return (
-    <details className={`tool-step${statusClass}`}>
+    <details className={`tool-step${statusClass}`} open={open} onToggle={onToggle}>
       <summary>
         <ToolStepIcon name={toolIconName(message)} />
         <span className="tool-step-action">{toolActionLabel(message)}</span>
@@ -1885,7 +2020,11 @@ const ToolStep = memo(function ToolStep({
           />
         ) : null}
       </summary>
-      <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
+      <pre>{message.result
+        || (typeof message.arguments?.command === "string" && message.arguments.command.trim()
+          ? `$ ${message.arguments.command.trim()}`
+          : JSON.stringify(message.arguments || {}, null, 2))}
+      </pre>
     </details>
   );
 });

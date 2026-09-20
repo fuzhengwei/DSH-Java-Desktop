@@ -544,8 +544,9 @@ export default function Sidebar({
         >
           <span className="session-title">{title}</span>
         </button>
+        {/* 进行中：行尾呼吸灯（用户要求把呼吸灯放在会话行，项目角标只保留静态高亮）；未读红点是"跑完没看"的另一种信号 */}
         {running ? (
-          <span className="session-running-dot" title="对话进行中" aria-label="对话进行中" />
+          <span className="session-running-dot" title="进行中" aria-label="会话进行中" />
         ) : unread ? (
           <span
             className={`session-unread-dot${unreadStatus === "error" ? " error" : ""}`}

@@ -654,23 +654,26 @@ select:focus-visible {
   text-align: center;
 }
 
-/* 项目内有进行中的对话：角标显示「进行中/总数」并高亮 + 呼吸点 */
+/* 项目内有进行中的对话：角标显示「进行中/总数」并高亮（不放呼吸灯，呼吸灯在会话行上） */
 .nav-count.has-running {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
   background: rgba(65, 96, 240, .1);
   color: var(--sidebar-accent);
 }
 
-.nav-count.has-running::before {
-  content: "";
-  width: 5px;
-  height: 5px;
+/* 会话行进行中：行尾呼吸灯 */
+.session-running-dot {
+  width: 6px;
+  height: 6px;
+  margin-right: 2px;
   border-radius: 999px;
   background: var(--sidebar-accent);
-  animation: version-breath 1.8s ease-in-out infinite;
+  flex: none;
+  animation: session-breath 1.6s ease-in-out infinite;
+}
+
+@keyframes session-breath {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .35; transform: scale(.8); }
 }
 
 /* 项目内有未读对话：角标染上未读提示色（无呼吸点，与进行中区分） */
@@ -953,17 +956,7 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.session-running-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  margin-right: 2px;
-  border-radius: 999px;
-  background: var(--sidebar-accent);
-  animation: session-breath 1.6s ease-in-out infinite;
-}
-
-/* 未读会话标记：后台跑完还没看的会话，行尾静态红点（区别于进行中的呼吸点），点开即清除 */
+/* 未读会话标记：后台跑完还没看的会话，行尾静态红点（进行中不放灯，对话区已有状态），点开即清除 */
 .session-unread-dot {
   flex-shrink: 0;
   width: 8px;
@@ -981,19 +974,6 @@ select:focus-visible {
 .session-item.unread .session-title {
   color: var(--text);
   font-weight: 600;
-}
-
-@keyframes session-breath {
-  0%, 100% {
-    opacity: .35;
-    transform: scale(.75);
-    box-shadow: 0 0 0 0 rgba(65, 96, 240, .35);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1);
-    box-shadow: 0 0 0 4px rgba(65, 96, 240, .12);
-  }
 }
 
 .empty-note {
@@ -1728,7 +1708,7 @@ select:focus-visible {
 /* 思考/工具等弱展示项之间以及它们与相邻内容之间收紧间距 */
 .conversation-column > .message.thought,
 .conversation-column > .message.activity {
-  margin-top: -8px;
+  margin-top: -11px;
   margin-bottom: -8px;
 }
 
@@ -3325,6 +3305,25 @@ select:focus-visible {
   font-size: 11px;
   line-height: 17px;
   white-space: pre-wrap;
+}
+
+/* 回合收尾内容渐显：done 后 runSummary/文件卡片"突然蹦出"改为柔和浮现 */
+@keyframes content-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .run-summary,
+  .inline-file-cards {
+    animation: content-reveal 0.22s ease-out;
+  }
 }
 
 .run-summary {

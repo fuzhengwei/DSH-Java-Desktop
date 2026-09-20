@@ -246,6 +246,26 @@ function resourcesHiddenContext(resources: ComposerResource[]): string {
   return `[用户添加的资源]\n${lines.join("\n")}\n\n[重要] 文件夹/文件/项目资源均已由用户授权使用。若资源是图片，请使用多模态能力识别图片内容；若资源是插件，请按插件类型明确产出目标文件内容。`;
 }
 
+/** 可作为文本读取的文件类型（粘贴的文件按内容注入上下文） */
+const TEXT_FILE_EXTENSIONS = /\.(txt|md|markdown|json|csv|tsv|xml|yml|yaml|html?|css|jsx?|tsx?|py|java|kt|go|rs|c|h|cpp|sh|sql|toml|ini|log|env)$/i;
+
+function isTextLikeFile(file: File): boolean {
+  const type = file.type || "";
+  return type.startsWith("text/")
+    || type.includes("json") || type.includes("xml") || type.includes("yaml")
+    || type.includes("javascript") || type.includes("typescript")
+    || TEXT_FILE_EXTENSIONS.test(file.name);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("读取文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function dedupeResources(resources: ComposerResource[]): ComposerResource[] {
   const seen = new Set<string>();
   return resources.filter((resource) => {
@@ -759,6 +779,8 @@ export default function App() {
   };
   const [sessionRuns, setSessionRuns] = useState<Record<string, SessionRunState>>({});
   const [lastRunDurations, setLastRunDurations] = useState<Record<string, number>>({});
+  // 服务端 done 事件下发的权威文件产物清单（绝对路径）：按会话记录，收尾展示文件卡片用
+  const [lastRunArtifacts, setLastRunArtifacts] = useState<Record<string, string[]>>({});
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>(readApprovalMode);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(readReasoningEffort);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
@@ -1768,6 +1790,42 @@ export default function App() {
     return [...aliasSet];
   }, []);
 
+  // ── localStorage 持久化节流 ──
+  // 流式期间每个 chunk 都全量序列化写 localStorage，长对话会阻塞主线程并加剧闪烁；
+  // 改为按会话合并：最多 800ms 落盘一次，done/换会话/页面隐藏时强制 flush
+  const persistTimersRef = useRef<Map<string, number>>(new Map());
+  const persistSessionMessages = useCallback((sessionId: string) => {
+    if (persistTimersRef.current.has(sessionId)) return;
+    const timer = window.setTimeout(() => {
+      persistTimersRef.current.delete(sessionId);
+      const pending = sessionMessagesRef.current.get(sessionId);
+      if (pending) writeSessionMessages(sessionId, pending);
+    }, 800);
+    persistTimersRef.current.set(sessionId, timer);
+  }, []);
+  const flushSessionMessages = useCallback((sessionId: string) => {
+    const timer = persistTimersRef.current.get(sessionId);
+    if (timer) {
+      window.clearTimeout(timer);
+      persistTimersRef.current.delete(sessionId);
+    }
+    const pending = sessionMessagesRef.current.get(sessionId);
+    if (pending) writeSessionMessages(sessionId, pending);
+  }, []);
+  useEffect(() => {
+    const flushAll = () => {
+      for (const sessionId of new Set([...persistTimersRef.current.keys(), ...sessionMessagesRef.current.keys()])) {
+        flushSessionMessages(sessionId);
+      }
+    };
+    window.addEventListener("beforeunload", flushAll);
+    document.addEventListener("visibilitychange", flushAll);
+    return () => {
+      window.removeEventListener("beforeunload", flushAll);
+      document.removeEventListener("visibilitychange", flushAll);
+    };
+  }, [flushSessionMessages]);
+
   const updateMessagesForAliases = useCallback((
     aliases: string[],
     updater: (current: ConversationMessage[]) => ConversationMessage[],
@@ -1776,12 +1834,12 @@ export default function App() {
       const currentMessages = sessionMessagesRef.current.get(alias) || [];
       const next = updater(currentMessages);
       sessionMessagesRef.current.set(alias, next);
-      writeSessionMessages(alias, next);
+      persistSessionMessages(alias);
       if (alias === activeSessionRef.current) {
         setMessages(next);
       }
     }
-  }, []);
+  }, [persistSessionMessages]);
 
   // ── 未读会话标记 ──（判定口径见 markSessionUnread）
   const notifyRunFinished = useCallback((sessionId: string, run: SessionRunState | undefined, failed: boolean, errorMessage?: string) => {
@@ -1988,6 +2046,67 @@ export default function App() {
       kind: "project",
       name: project.name || project.path.split("/").filter(Boolean).pop() || project.path,
       path: project.path,
+    });
+  }, [addDraftResource]);
+
+  /** 粘贴文件 → 输入框资源：图片转 dataUrl 走多模态；文本类文件提取文本注入上下文 */
+  const addPastedFiles = useCallback(async (files: File[]) => {
+    let unsupportedCount = 0;
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      const stamp = `${Date.now()}-${index}`;
+      if (file.type.startsWith("image/")) {
+        try {
+          let dataUrl = await readFileAsDataUrl(file);
+          let textContent: string | undefined;
+          if (file.type.includes("svg")) {
+            // SVG 不是视觉模型支持的位图格式，先栅格化为 PNG；失败则降级为文本上下文
+            try {
+              dataUrl = await svgDataUrlToPngDataUrl(dataUrl);
+            } catch {
+              dataUrl = "";
+              textContent = await file.text();
+            }
+          }
+          addDraftResource({
+            id: `paste-image:${stamp}`,
+            kind: "file",
+            name: file.name || `粘贴的图片-${index + 1}.png`,
+            mimeType: file.type.includes("svg") && !dataUrl ? "text/plain" : file.type,
+            dataUrl: dataUrl || undefined,
+            textContent,
+          });
+        } catch (caught) {
+          console.warn("读取粘贴图片失败", caught);
+          unsupportedCount += 1;
+        }
+      } else if (isTextLikeFile(file)) {
+        const text = (await file.text()).trim();
+        if (!text) continue;
+        addDraftResource({
+          id: `paste-file:${stamp}`,
+          kind: "file",
+          name: file.name || `粘贴的文本-${index + 1}.txt`,
+          mimeType: file.type || "text/plain",
+          textContent: text,
+        });
+      } else {
+        unsupportedCount += 1;
+      }
+    }
+    if (unsupportedCount > 0) {
+      setError(`暂不支持粘贴 ${unsupportedCount} 个二进制文件，请通过 + 菜单选择本地文件`);
+    }
+  }, [addDraftResource]);
+
+  /** 粘贴超长文本 → 折叠为资源标签（文本全文随隐藏上下文注入），避免输入框被大段内容刷屏 */
+  const addPastedText = useCallback((text: string) => {
+    addDraftResource({
+      id: `paste-text:${Date.now()}`,
+      kind: "file",
+      name: "粘贴的文本.txt",
+      mimeType: "text/plain",
+      textContent: text,
     });
   }, [addDraftResource]);
 
@@ -2292,16 +2411,46 @@ export default function App() {
           } else if (event.type === "step_break") {
             const payload = payloadRecord(event.payload);
             const toolName = typeof payload.toolName === "string" ? payload.toolName : "工具";
-            const callId = typeof payload.callId === "string" ? payload.callId : `${toolName}-${Date.now()}`;
+            const callId = typeof payload.callId === "string" && payload.callId ? payload.callId : "";
+            const status = typeof payload.status === "string" ? payload.status : "running";
+            const args = payloadArguments(payload);
             updateMessagesForAliases(aliases, (current) => {
               const next = [...current];
+              // 上游对同一次调用可能双发 step_break（审批预信号 + 真实 call），
+              // 按 callId 去重：已存在同 callId 行则原地更新，避免"执行命令/已执行命令"成对重复
+              if (callId) {
+                let index = next.findIndex((message) => message.role === "tool" && message.callId === callId);
+                if (index < 0) {
+                  // 兼容预信号先建了合成 callId 的行：认领最后一个同名的合成行
+                  for (let i = next.length - 1; i >= 0; i -= 1) {
+                    const message = next[i];
+                    if (message.role === "tool" && message.toolName === toolName && message.callId?.startsWith(`${toolName}-`)) {
+                      index = i;
+                      break;
+                    }
+                  }
+                }
+                if (index >= 0) {
+                  next[index] = { ...next[index], status, arguments: args };
+                  return next;
+                }
+              } else {
+                // 无 callId 的事件（审批等待预信号等）：合并进最后一个同名 running 行
+                for (let i = next.length - 1; i >= 0; i -= 1) {
+                  const message = next[i];
+                  if (message.role === "tool" && message.toolName === toolName && message.status === "running") {
+                    next[i] = { ...message, status, arguments: Object.keys(args).length > 0 ? args : message.arguments };
+                    return next;
+                  }
+                }
+              }
               const toolMessage: ConversationMessage = {
                 role: "tool",
                 content: "",
                 toolName,
-                callId,
-                arguments: payloadArguments(payload),
-                status: typeof payload.status === "string" ? payload.status : "running",
+                callId: callId || `${toolName}-${Date.now()}`,
+                arguments: args,
+                status,
                 attribution,
               };
               const last = next[next.length - 1];
@@ -2357,6 +2506,26 @@ export default function App() {
                     ? { ...message, status: "success" }
                     : message
                 ));
+              });
+            }
+            // 回合收尾：把节流期间未落盘的消息立即持久化
+            for (const alias of aliases) flushSessionMessages(alias);
+            // 权威文件产物清单：done 载荷携带本回合写文件类工具产出的绝对路径
+            const runArtifacts = Array.isArray(payload.artifacts)
+              ? (payload.artifacts as unknown[]).filter((item): item is string => typeof item === "string" && Boolean(item.trim()))
+              : [];
+            if (runArtifacts.length > 0) {
+              setLastRunArtifacts((current) => {
+                const next = { ...current };
+                for (const alias of aliases) next[alias] = runArtifacts;
+                return next;
+              });
+            } else {
+              setLastRunArtifacts((current) => {
+                if (!aliases.some((alias) => (current[alias] || []).length > 0)) return current;
+                const next = { ...current };
+                for (const alias of aliases) delete next[alias];
+                return next;
               });
             }
           } else if (event.type === "error") {
@@ -3406,12 +3575,14 @@ export default function App() {
             activeModel={activeModel}
             modelChoices={modelChoices}
             activeProject={activeProject}
+            sessionProjectPath={projectPathFromMap(sessionProjectMap, activeSessionId, activeProjectPath) || undefined}
             projects={combinedProjects}
             projectBranches={projectBranches}
             projectBranchOptions={projectBranchOptions}
             switchingBranchPath={switchingBranchPath}
             streamStartedAt={sessionRuns[activeSessionId]?.startedAt ?? null}
             runDurationMs={lastRunDurations[activeSessionId]}
+            runArtifacts={lastRunArtifacts[activeSessionId]}
             onSelectProject={selectProject}
             onSelectDefaultWorkspace={selectDefaultWorkspace}
             onSwitchProjectBranch={(project, branch) => void switchProjectBranch(project, branch)}
@@ -3462,6 +3633,8 @@ export default function App() {
 	            onResourcesChange={(resources) => setDraftResources(dedupeResources(resources))}
 	            onPickResourceFolder={() => void pickResourceFolder()}
 	            onPickResourceFile={() => void pickResourceFile()}
+            onPasteFiles={(files) => void addPastedFiles(files)}
+            onPasteLongText={addPastedText}
 	            onAddResourceProject={addResourceProject}
 	            onAddResourcePlugin={addResourcePlugin}
 	          />

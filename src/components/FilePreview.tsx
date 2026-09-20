@@ -543,14 +543,18 @@ export function InlineFileCards({ content, onOpenFile, basePath }: {
 }) {
   const rawPaths = useMemo(() => extractFilePaths(content), [content]);
   const [entries, setEntries] = useState<Map<string, { path: string; size: number | null; exists: boolean }> | null>(null);
+  // 全部缺失时延迟复检（Agent 收尾 flush 可能晚于 done 事件），最多两次
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (rawPaths.length === 0) {
       setEntries(new Map());
+      setAttempt(0);
       return;
     }
     setEntries(null);
     let cancelled = false;
+    let retryTimer: number | undefined;
     const candidateLists = rawPaths.map((raw) => resolvePathCandidates(raw, basePath));
     const allCandidates = candidateLists.flat();
     void Promise.all([
@@ -569,9 +573,16 @@ export function InlineFileCards({ content, onOpenFile, basePath }: {
           : { path: candidateLists[index][0], size: null, exists: false });
       });
       setEntries(next);
+      const hasMissing = [...next.values()].some((entry) => !entry.exists);
+      if (hasMissing && attempt < 2) {
+        retryTimer = window.setTimeout(() => setAttempt((value) => value + 1), 1500 * (attempt + 1));
+      }
     });
-    return () => { cancelled = true; };
-  }, [rawPaths, basePath]);
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, [rawPaths, basePath, attempt]);
 
   if (rawPaths.length === 0 || !entries) return null;
   // 相对路径解析不到真实文件的多半是正文误匹配，直接不渲染；显式绝对路径保留（提示已不存在）
