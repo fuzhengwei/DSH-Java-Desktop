@@ -49,6 +49,10 @@ jobs:
             libsoup-3.0-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
+            libasound2t64 \
+            libxtst6 \
+            libxrender1 \
+            libxi6 \
             patchelf
 
       - name: Install dependencies
@@ -79,6 +83,14 @@ jobs:
         env:
           DSH_JRE_TARGET: ${{ inputs.runtime-target }}
         run: npm run agent:runtime
+
+      # linuxdeploy 扫描 AppDir 内 JRE 的 .so 依赖时无法通过 $ORIGIN RPATH
+      # 定位 libjvm.so（位于 JRE 的 lib/server/），导致 AppImage 打包失败。
+      # 把 JRE 自带库目录加入 LD_LIBRARY_PATH 供 linuxdeploy 解析。
+      - name: Export JRE library path for linuxdeploy
+        if: inputs.platform == 'linux'
+        run: |
+          echo "LD_LIBRARY_PATH=$GITHUB_WORKSPACE/resources/agent/runtime/lib/server:$GITHUB_WORKSPACE/resources/agent/runtime/lib/jli:$GITHUB_WORKSPACE/resources/agent/runtime/lib" >> "$GITHUB_ENV"
 
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
