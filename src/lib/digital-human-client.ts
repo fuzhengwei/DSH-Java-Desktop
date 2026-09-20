@@ -116,11 +116,31 @@ function baseUrl(port: number): string {
   return `http://127.0.0.1:${port}`;
 }
 
+/**
+ * REST 请求统一超时：覆盖 httpFetch 连接阶段 + response.json() body 读取阶段。
+ *
+ * WKWebView 的 window.fetch 偶发挂断——请求到达服务端（房间/任务均创建），
+ * 但响应体流永不送达 JS 层，fetch promise 既不 resolve 也不 reject。
+ * 不加超时时，ensureServerRoom / postRoomMessage 等会永久挂起，
+ * 后续的 bindRoom / setServerRoomId / waitForRoomCompletion 全部跳过，
+ * 导致 roomRunning=true 永远不被清除（2026-09-20 根因定位）。
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+
 async function request<T>(port: number, path: string, init?: RequestInit): Promise<T> {
   // 原生 fetch 优先（服务端已开 CORS）；被 CORS 拦下或网络异常时自动回退
   // plugin-http（外部数字人 Runtime 等未开 CORS 的远端保持历史行为）。
   // 此前全量走 plugin-http，其 IPC 流转发有已知缺陷，偶发静默挂死，
   // 是房间协作"生成中"永久卡死（含 SSE、对账轮询同时失效）的直接推手。
+  return Promise.race([
+    doRequest<T>(port, path, init),
+    new Promise<never>((_, reject) => window.setTimeout(
+      () => reject(new Error("请求超时")), REQUEST_TIMEOUT_MS,
+    )),
+  ]);
+}
+
+async function doRequest<T>(port: number, path: string, init?: RequestInit): Promise<T> {
   const response = await httpFetch(`${baseUrl(port)}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },

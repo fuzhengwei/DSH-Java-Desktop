@@ -312,12 +312,19 @@ export async function streamAgentMessage(
   /** 连续无字节的最长等待；模型长推理/工具长执行期间 SSE 也可能静默，别设太小 */
   idleTimeoutMs = 120_000,
 ): Promise<void> {
-  const response = await httpFetch(`${baseUrl(port)}/api/agent/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal,
-  });
+  // 连接阶段加超时：WKWebView 的 window.fetch 偶发挂断（请求到服务端但响应不返回），
+  // 不加超时会让整个流式调用永久挂起
+  const response = await Promise.race([
+    httpFetch(`${baseUrl(port)}/api/agent/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    }),
+    new Promise<never>((_, reject) => window.setTimeout(
+      () => reject(new Error("流式连接超时（15s）")), 15_000,
+    )),
+  ]);
 
   if (!response.ok || !response.body) {
     throw new Error(`连接智能体流失败：HTTP ${response.status}`);

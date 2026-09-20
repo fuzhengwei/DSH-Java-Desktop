@@ -325,35 +325,46 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   // 最近一次快照成功刷新的时间：只有比快照新的终态事件才允许覆盖快照的活动态判定
   const roomFetchedAtRef = useRef(0);
 
-  // 初始：补历史 + 房间快照
+  // 初始：补历史 + 房间快照。必须重试到成功为止——room 为 null 会同时瘫痪
+  // 运行态上报（下方 effect 的 if (!room) return）与对账轮询（if (!running) return），
+  // 首次快照 fetch 挂断（WebKit 静默挂死，request 已带 15s 超时会抛错）曾导致
+  // SSE 事件明明在渲染 feed，运行态却永久卡死（2026-09-20 08:21 复现）。
   useEffect(() => {
     let cancelled = false;
     setEvents([]);
     lastSeqRef.current = 0;
     seenSeqsRef.current = new Set();
     void (async () => {
-      try {
-        const [snapshot, history] = await Promise.all([
-          fetchServerRoom(port, roomId),
-          fetchRoomEvents(port, roomId, 0),
-        ]);
-        if (cancelled) return;
-        roomFetchedAtRef.current = Date.now();
-        setRoom(snapshot);
-        onRoomChange?.(snapshot);
-        setEvents(history);
-        for (const event of history) seenSeqsRef.current.add(event.seq);
-        lastSeqRef.current = history.reduce((max, e) => Math.max(max, e.seq), 0);
-        // 历史事件直推任务状态种子（at=0：永远不新于快照，仅作快照缺任务时的兜底）
-        const seeded: Record<string, { state: string; at: number }> = {};
-        for (const event of history) {
-          if (event.type !== "TASK_STATE_CHANGED" || !event.taskId) continue;
-          const state = typeof event.payload?.state === "string" ? event.payload.state : "";
-          if (state) seeded[event.taskId] = { state, at: 0 };
+      for (;;) {
+        try {
+          const [snapshot, history] = await Promise.all([
+            fetchServerRoom(port, roomId),
+            fetchRoomEvents(port, roomId, 0),
+          ]);
+          if (cancelled) return;
+          roomFetchedAtRef.current = Date.now();
+          setRoom(snapshot);
+          onRoomChange?.(snapshot);
+          setLoadError("");
+          setEvents(history);
+          for (const event of history) seenSeqsRef.current.add(event.seq);
+          lastSeqRef.current = history.reduce((max, e) => Math.max(max, e.seq), 0);
+          // 历史事件直推任务状态种子（at=0：永远不新于快照，仅作快照缺任务时的兜底）
+          const seeded: Record<string, { state: string; at: number }> = {};
+          for (const event of history) {
+            if (event.type !== "TASK_STATE_CHANGED" || !event.taskId) continue;
+            const state = typeof event.payload?.state === "string" ? event.payload.state : "";
+            if (state) seeded[event.taskId] = { state, at: 0 };
+          }
+          setDerivedTaskStates(seeded);
+          return;
+        } catch (caught) {
+          if (cancelled) return;
+          // 展示错误但继续重试：一旦成功即恢复正常渲染与运行态管理
+          setLoadError(caught instanceof Error ? caught.message : String(caught));
+          await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+          if (cancelled) return;
         }
-        setDerivedTaskStates(seeded);
-      } catch (caught) {
-        if (!cancelled) setLoadError(caught instanceof Error ? caught.message : String(caught));
       }
     })();
     return () => { cancelled = true; };

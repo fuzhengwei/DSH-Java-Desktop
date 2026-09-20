@@ -970,6 +970,10 @@ export default function App() {
   const waitForRoomCompletion = useCallback((roomId: string, sessionId: string, startedAt: number) => {
     if (!port) return;
     void (async () => {
+      // 传输层整体死亡时（WebKit fetch 静默挂断），这里会每轮 8s 超时无限重试，
+      // 任务明明早已完成 UI 却永久"生成中"。连续失败达到阈值就升级收口：
+      // 传输恢复后协作视图自会重新上抛真实运行态，宁可短暂误收口也不永久卡死。
+      let consecutiveFailures = 0;
       for (;;) {
         await new Promise((resolve) => window.setTimeout(resolve, 2_000));
         if (!roomRunIdsRef.current.has(sessionId)) return;
@@ -978,6 +982,7 @@ export default function App() {
             fetchServerRoom(port, roomId),
             new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("房间对账超时")), 8_000)),
           ]);
+          consecutiveFailures = 0;
           if (!roomRunIdsRef.current.has(sessionId)) return;
           if (activeSessionRef.current === sessionId) {
             setServerRoom(snapshot);
@@ -999,7 +1004,20 @@ export default function App() {
           });
           return;
         } catch {
-          // 瞬时网络失败：下一轮继续
+          consecutiveFailures += 1;
+          // 10 连败 ≈ 100s+（每轮 2s 等待 + 8s 超时）：判定传输层已死，就地收口
+          if (consecutiveFailures >= 10) {
+            roomRunIdsRef.current.delete(sessionId);
+            setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - startedAt }));
+            if (activeSessionRef.current === sessionId) handleRoomRunningChange(false);
+            setSessionRuns((current) => {
+              if (!current[sessionId]) return current;
+              const next = { ...current };
+              delete next[sessionId];
+              return next;
+            });
+            return;
+          }
         }
       }
     })();
@@ -1014,6 +1032,21 @@ export default function App() {
   // 只处理 roomRunIdsRef 里登记的会话，直连路径有 300s 硬看门狗自行清理，互不干扰。
   useEffect(() => {
     if (!port) return;
+    // 对账连续失败计数：传输层死亡（WebKit fetch 静默挂断）时每轮 8s 超时无限重试，
+    // 服务端任务早已完成但 UI 永久"生成中"。连续 5 次失败就升级收口——
+    // 收口后若传输恢复且任务确实还在跑，协作视图会重新上抛 running=true，宁可误收口不永久卡死。
+    const reconcileFailures = new Map<string, number>();
+    const forceSettle = (sessionId: string, startedAt: number) => {
+      roomRunIdsRef.current.delete(sessionId);
+      setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - startedAt }));
+      setSessionRuns((current) => {
+        if (!current[sessionId]) return current;
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+      if (activeSessionRef.current === sessionId) setRoomRunning(false);
+    };
     const timer = window.setInterval(() => {
       const pending = Object.entries(sessionRunsRef.current).filter(([sessionId, run]) => (
         roomRunIdsRef.current.has(sessionId) && Date.now() - run.startedAt > 20_000
@@ -1027,29 +1060,34 @@ export default function App() {
             // 用户切走会话后再对账会拿错房间——把仍在跑的后台会话误判为已完成并就地收口。
             const roomId = boundRoomId(sessionId)
               || (activeSessionRef.current === sessionId ? serverRoomId : "");
-            if (!roomId) continue;
+            if (!roomId) {
+              // 安全阀：roomId 为空意味着 ensureServerRoom 的 fetch 挂断了——
+              // bindRoom 没调到（绑定缺失）、setServerRoomId 没调到（serverRoomId 为 null）。
+              // 此时无法对账房间快照，但服务端任务大概率早已完成。
+              // 超过 60s 仍找不到房间，直接收口，避免 UI 永久"生成中"。
+              if (Date.now() - run.startedAt > 60_000) forceSettle(sessionId, run.startedAt);
+              continue;
+            }
             // fetch 加超时：plugin-http 偶发静默挂起，await 永不返回会把整个对账循环卡死，
             // 后续会话与后续轮次全部失效；超时按单轮失败处理，下一轮重试
             const snapshot = await Promise.race([
               fetchServerRoom(port, roomId),
               new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("对账请求超时")), 8_000)),
             ]);
+            reconcileFailures.delete(sessionId);
             const hasActiveTask = (snapshot.tasks || []).some((task) => (
               ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(task.state)
             ));
             if (hasActiveTask) continue; // 任务确实还在跑，等下一轮
-            roomRunIdsRef.current.delete(sessionId);
-            setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - run.startedAt }));
-            setSessionRuns((current) => {
-              if (!current[sessionId]) return current;
-              const next = { ...current };
-              delete next[sessionId];
-              return next;
-            });
-            // 仅当收口的是当前活跃会话时才复位输入框禁用，别误伤其他会话的运行态
-            if (activeSessionRef.current === sessionId) setRoomRunning(false);
+            forceSettle(sessionId, run.startedAt);
           } catch {
-            // 瞬时失败静默，下一轮重试
+            const failures = (reconcileFailures.get(sessionId) || 0) + 1;
+            reconcileFailures.set(sessionId, failures);
+            // 5 连败 ≈ 50s+（每轮 10s tick + 8s 超时）：传输层判定已死，就地收口
+            if (failures >= 5) {
+              reconcileFailures.delete(sessionId);
+              forceSettle(sessionId, run.startedAt);
+            }
           }
         }
       })();
