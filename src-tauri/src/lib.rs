@@ -1103,7 +1103,7 @@ fn open_local_file(path: String) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     let result = Command::new("open").arg(&file).status();
     #[cfg(target_os = "windows")]
-    let result = Command::new("cmd").args(["/C", "start", "", &file]).status();
+    let result = Command::new("cmd").args(["/C", "start", ""]).arg(&file).status();
     #[cfg(all(unix, not(target_os = "macos")))]
     let result = Command::new("xdg-open").arg(&file).status();
 
@@ -1367,7 +1367,8 @@ pub fn run() {
             RunEvent::ExitRequested { .. } => {
                 shutdown_runtime(handle.state::<AgentRuntimeState>().inner());
             }
-            // macOS：窗口隐藏后点击 Dock 图标重新显示
+            // macOS：窗口隐藏后点击 Dock 图标重新显示（RunEvent::Reopen 仅在 tauri 2.1+ / macOS 存在）
+            #[cfg(target_os = "macos")]
             RunEvent::Reopen { .. } => show_main_window(app),
             _ => {}
         }

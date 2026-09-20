@@ -830,6 +830,12 @@ export default function App() {
     setActiveDockTab(tab);
     setDockOpen((open) => !(open && activeDockTab === tab));
   }, [activeDockTab]);
+
+  /** 选中产物/文件 Tab：Dock 收起时直接展开（否则只切 activeTab、面板不出现，表现为"点了没反应"） */
+  const selectDockTab = useCallback((tab: string) => {
+    setActiveDockTab(tab);
+    if (tab.startsWith("artifact:") || tab.startsWith("file:")) setDockOpen(true);
+  }, []);
   const [artifactTabs, setArtifactTabs] = useState<Array<{ id: string; label: string; kind?: "artifact" | "file"; fromTree?: boolean }>>([]);
   // 分屏时目录树面板宽度（localStorage 持久化，拖拽中间分隔条调整）
   const [treeSplitWidth, setTreeSplitWidth] = useState(() => {
@@ -3565,7 +3571,7 @@ export default function App() {
               artifactTabs={artifactTabs}
               hasCollab={hasCollab}
               dockOpen={dockOpen}
-              onSelectTab={setActiveDockTab}
+              onSelectTab={selectDockTab}
               onToggle={toggleDockTab}
               onCloseArtifact={closeArtifactTab}
               onClose={() => setDockOpen(false)}

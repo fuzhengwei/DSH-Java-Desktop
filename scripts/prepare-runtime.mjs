@@ -72,7 +72,10 @@ try {
   const javaHome = await findJava(unpacked);
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(dirname(outputRoot), { recursive: true });
-  await cp(javaHome, outputRoot, { recursive: true });
+  // dereference: 把 JRE 包内的相对符号链接（legal/*/LICENSE 等）落成真实文件。
+  // 否则 fs.cp 会将其拷成指向临时解压目录的绝对符号链接，临时目录删除后即悬空，
+  // 导致 tauri 资源打包时报 "resource path ... doesn't exist"（仅 Linux JRE 包含符号链接）。
+  await cp(javaHome, outputRoot, { recursive: true, dereference: true });
   await rm(javaHome, { recursive: true, force: true });
   if (platform.image !== "windows") {
     await chmod(join(outputRoot, "bin", "java"), 0o755);
