@@ -36,10 +36,14 @@ export default function UpdateStatusBadge() {
   }, []);
 
   const title = useMemo(() => {
-    if (status.kind === "checking") return "正在检查更新";
-    if (status.kind === "latest") return "当前已是最新版本";
-    if (status.kind === "available") return `发现新版本 v${status.version}`;
-    return "版本检查失败";
+    const base = (() => {
+      if (status.kind === "checking") return "正在检查更新";
+      if (status.kind === "latest") return "当前已是最新版本";
+      if (status.kind === "available") return `发现新版本 v${status.version}`;
+      return "版本检查失败";
+    })();
+    // 前端产物构建时间：hover 可见，用于核对运行中的 App 是否包含最新修复
+    return `${base}｜前端构建于 ${__BUILD_STAMP__}`;
   }, [status]);
 
   return (
