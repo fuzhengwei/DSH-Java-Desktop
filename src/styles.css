@@ -100,8 +100,8 @@ select:focus-visible {
   z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
+  gap: 12px;
   min-height: 38px;
   padding: 4px 12px 4px 84px; /* 左侧让出 macOS 红绿灯区域 */
   border-bottom: 1px solid var(--border);
@@ -109,10 +109,25 @@ select:focus-visible {
   backdrop-filter: blur(12px);
 }
 
+/* 左右弹性区：夹住标题实现居中；空间不足时先于标题收缩为 0 */
+.app-toolbar-spacer,
+.app-toolbar-actions-zone {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.app-toolbar-actions-zone {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
 .app-toolbar-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
   color: var(--text-subtle);
   font-size: 12px;
   font-weight: 600;
@@ -125,7 +140,6 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 9px;
-  margin-left: auto;
   min-width: 0; /* 允许随窗口收缩：产物条带先缩（内部滚动），不盖居中标题 */
 }
 
@@ -5994,6 +6008,50 @@ select:focus-visible {
 .app-toolbar .right-dock-tab-strip .right-dock-tab { scroll-margin: 0 12px; }
 
 .app-toolbar .right-dock-tab-label { min-width: 0; max-width: 108px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Tab 折叠下拉：超过阈值后展示「总数 ▸」，点开完整文件列表 */
+.dock-tab-more { position: relative; flex-shrink: 0; }
+.app-toolbar .right-dock-tab.more { padding: 0 9px; gap: 4px; }
+.app-toolbar .right-dock-tab.more.open { background: #1a1a1e; color: #fff; }
+.dock-tab-more-count { font-variant-numeric: tabular-nums; }
+.dock-tab-more-chevron { transition: transform .15s; }
+.app-toolbar .right-dock-tab.more.open .dock-tab-more-chevron { transform: rotate(90deg); }
+.dock-tab-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 250px;
+  max-width: 360px;
+  max-height: 340px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(23, 23, 25, .16);
+  padding: 4px;
+  z-index: 80;
+}
+.dock-tab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text);
+  transition: background .12s;
+}
+.dock-tab-menu-item:hover { background: var(--surface-2); }
+.dock-tab-menu-item.active {
+  background: rgba(65, 96, 240, .1);
+  color: var(--sidebar-accent);
+  font-weight: 600;
+}
+.dock-tab-menu-item .icon-14 { flex-shrink: 0; }
+.dock-tab-menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-tab-menu-item .right-dock-tab-close { flex-shrink: 0; }
+.dock-tab-menu-item .right-dock-tab-close:hover { opacity: 1; background: var(--border); }
 .app-toolbar .right-dock-tab-close {
   display: grid; place-items: center;
   width: 15px; height: 15px; border-radius: 50%;

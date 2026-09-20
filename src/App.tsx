@@ -3552,20 +3552,25 @@ export default function App() {
 
   return (
     <div className={`app-shell${sidebarResizing ? " sidebar-resizing" : ""}`} style={appShellStyle}>
-      {/* 顶部全局操作栏：跨侧栏与主区，右侧承载 协作/信息/产物 Tab */}
+      {/* 顶部全局操作栏：跨侧栏与主区，右侧承载 协作/信息/产物 Tab。
+          三段式布局：左右弹性区夹住标题——空间足时标题保持居中，
+          Tab 多时标题先省略号截断、Tab 条带内部滚动，不再盖住标题 */}
       <header className="app-toolbar" data-tauri-drag-region>
+        <div className="app-toolbar-spacer" data-tauri-drag-region />
         <div className="app-toolbar-title" data-tauri-drag-region>DSH Java Desktop</div>
-        <div className="app-toolbar-actions">
-          <DockTabBar
-            activeTab={activeDockTab}
-            artifactTabs={artifactTabs}
-            hasCollab={hasCollab}
-            dockOpen={dockOpen}
-            onSelectTab={setActiveDockTab}
-            onToggle={toggleDockTab}
-            onCloseArtifact={closeArtifactTab}
-            onClose={() => setDockOpen(false)}
-          />
+        <div className="app-toolbar-actions-zone" data-tauri-drag-region>
+          <div className="app-toolbar-actions">
+            <DockTabBar
+              activeTab={activeDockTab}
+              artifactTabs={artifactTabs}
+              hasCollab={hasCollab}
+              dockOpen={dockOpen}
+              onSelectTab={setActiveDockTab}
+              onToggle={toggleDockTab}
+              onCloseArtifact={closeArtifactTab}
+              onClose={() => setDockOpen(false)}
+            />
+          </div>
         </div>
       </header>
 

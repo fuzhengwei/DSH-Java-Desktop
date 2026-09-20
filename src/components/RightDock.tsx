@@ -1,6 +1,9 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { FileIcon, SlidersIcon, UsersIcon, XIcon } from "./icons";
+import { ChevronIcon, FileIcon, SlidersIcon, UsersIcon, XIcon } from "./icons";
+
+/** 顶部文件/产物 Tab 超过该数量后折叠为「下拉 + 总数」，激活 Tab 始终保排在可见区 */
+const MAX_VISIBLE_TABS = 4;
 
 const DOCK_WIDTH_STORAGE_KEY = "dsh:right-dock-width";
 const DEFAULT_DOCK_WIDTH = 470;
@@ -66,6 +69,71 @@ export function DockTabBar({
       }
     }
   }, [activeTab, dockOpen]);
+
+  // Tab 折叠下拉：超过 MAX_VISIBLE_TABS 时展示，点击项切换、× 关闭
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDown = (event: PointerEvent) => {
+      if (moreRef.current && !moreRef.current.contains(event.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMoreOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen]);
+  // 关掉下拉外的 Tab 后若总数回到阈值内，自动收起下拉
+  useEffect(() => {
+    if (moreOpen && artifactTabs.length <= MAX_VISIBLE_TABS) setMoreOpen(false);
+  }, [artifactTabs.length, moreOpen]);
+
+  // 激活 Tab 落在溢出区时把它换入可见区（挤掉末位），保证当前文件始终可见
+  const overflow = artifactTabs.length > MAX_VISIBLE_TABS;
+  let visibleTabs = artifactTabs;
+  if (overflow) {
+    const activeId = activeTab.includes(":") ? activeTab.slice(activeTab.indexOf(":") + 1) : "";
+    const activeIndex = artifactTabs.findIndex((tab) => tab.id === activeId);
+    visibleTabs = activeIndex >= MAX_VISIBLE_TABS
+      ? [...artifactTabs.slice(0, MAX_VISIBLE_TABS - 1), artifactTabs[activeIndex]]
+      : artifactTabs.slice(0, MAX_VISIBLE_TABS);
+  }
+
+  const renderTabButton = (tab: { id: string; label: string; kind?: "artifact" | "file" }) => {
+    const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
+    const active = dockOpen && activeTab === tabId;
+    return (
+      <button
+        key={tabId}
+        type="button"
+        role="tab"
+        aria-selected={active}
+        className={`right-dock-tab artifact${active ? " active" : ""}`}
+        title={tab.label}
+        onClick={() => onSelectTab(tabId)}
+      >
+        <FileIcon className="icon-14" />
+        <span className="right-dock-tab-label">{tab.label}</span>
+        <span
+          className="right-dock-tab-close"
+          role="button"
+          aria-label={`关闭 ${tab.label}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onCloseArtifact(tabId);
+          }}
+        >
+          <XIcon className="icon-10" />
+        </span>
+      </button>
+    );
+  };
+
   return (
     <>
       {hasCollab ? (
@@ -93,35 +161,64 @@ export function DockTabBar({
       {artifactTabs.length > 0 ? (
         // 产物/文件 Tab 条带：限宽 + 横向滚动，多 Tab 时不再挤压/盖住顶栏标题
         <div className="right-dock-tab-strip" role="list" ref={stripRef}>
-          {artifactTabs.map((tab) => {
-            const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
-            const active = dockOpen && activeTab === tabId;
-            return (
-              <button
-                key={tabId}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                className={`right-dock-tab artifact${active ? " active" : ""}`}
-                title={tab.label}
-                onClick={() => onSelectTab(tabId)}
-              >
-                <FileIcon className="icon-14" />
-                <span className="right-dock-tab-label">{tab.label}</span>
-                <span
-                  className="right-dock-tab-close"
-                  role="button"
-                  aria-label={`关闭 ${tab.label}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onCloseArtifact(`${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`);
-                  }}
-                >
-                  <XIcon className="icon-10" />
-                </span>
-              </button>
-            );
-          })}
+          {visibleTabs.map(renderTabButton)}
+        </div>
+      ) : null}
+      {overflow ? (
+        <div className="dock-tab-more" ref={moreRef}>
+          <button
+            type="button"
+            className={`right-dock-tab more${moreOpen ? " open" : ""}`}
+            title="全部文件列表"
+            aria-expanded={moreOpen}
+            onClick={() => setMoreOpen((value) => !value)}
+          >
+            <span className="dock-tab-more-count">{artifactTabs.length}</span>
+            <ChevronIcon className="icon-10 dock-tab-more-chevron" />
+          </button>
+          {moreOpen ? (
+            <div className="dock-tab-menu" role="listbox" aria-label="全部文件">
+              {artifactTabs.map((tab) => {
+                const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
+                const active = dockOpen && activeTab === tabId;
+                return (
+                  <div
+                    key={tabId}
+                    role="option"
+                    aria-selected={active}
+                    tabIndex={0}
+                    className={`dock-tab-menu-item${active ? " active" : ""}`}
+                    title={tab.label}
+                    onClick={() => {
+                      onSelectTab(tabId);
+                      setMoreOpen(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onSelectTab(tabId);
+                        setMoreOpen(false);
+                      }
+                    }}
+                  >
+                    <FileIcon className="icon-14" />
+                    <span className="dock-tab-menu-label">{tab.label}</span>
+                    <span
+                      className="right-dock-tab-close"
+                      role="button"
+                      aria-label={`关闭 ${tab.label}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onCloseArtifact(tabId);
+                      }}
+                    >
+                      <XIcon className="icon-10" />
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       ) : null}
       {dockOpen ? (
