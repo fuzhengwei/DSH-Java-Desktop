@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { FileIcon, SlidersIcon, UsersIcon, XIcon } from "./icons";
 
@@ -52,6 +52,20 @@ export function DockTabBar({
   onCloseArtifact,
   onClose,
 }: TabBarProps) {
+  // 激活的产物 Tab 变化时，让它在条带内滚入视野（条带溢出滚动场景）
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const active = strip.querySelector(".right-dock-tab.active");
+    if (active) {
+      const stripRect = strip.getBoundingClientRect();
+      const rect = active.getBoundingClientRect();
+      if (rect.left < stripRect.left || rect.right > stripRect.right) {
+        strip.scrollTo({ left: active instanceof HTMLElement ? active.offsetLeft - 12 : 0, behavior: "smooth" });
+      }
+    }
+  }, [activeTab, dockOpen]);
   return (
     <>
       {hasCollab ? (
@@ -76,36 +90,40 @@ export function DockTabBar({
         <SlidersIcon className="icon-14" />
         <span>信息</span>
       </button>
-      {artifactTabs.length > 0 ? <span className="right-dock-tab-divider" aria-hidden="true" /> : null}
-      {artifactTabs.map((tab) => {
-        const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
-        const active = dockOpen && activeTab === tabId;
-        return (
-          <button
-            key={tabId}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            className={`right-dock-tab artifact${active ? " active" : ""}`}
-            title={tab.label}
-            onClick={() => onSelectTab(tabId)}
-          >
-            <FileIcon className="icon-14" />
-            <span className="right-dock-tab-label">{tab.label}</span>
-            <span
-              className="right-dock-tab-close"
-              role="button"
-              aria-label={`关闭 ${tab.label}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                onCloseArtifact(`${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`);
-              }}
-            >
-              <XIcon className="icon-10" />
-            </span>
-          </button>
-        );
-      })}
+      {artifactTabs.length > 0 ? (
+        // 产物/文件 Tab 条带：限宽 + 横向滚动，多 Tab 时不再挤压/盖住顶栏标题
+        <div className="right-dock-tab-strip" role="list" ref={stripRef}>
+          {artifactTabs.map((tab) => {
+            const tabId = `${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`;
+            const active = dockOpen && activeTab === tabId;
+            return (
+              <button
+                key={tabId}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={`right-dock-tab artifact${active ? " active" : ""}`}
+                title={tab.label}
+                onClick={() => onSelectTab(tabId)}
+              >
+                <FileIcon className="icon-14" />
+                <span className="right-dock-tab-label">{tab.label}</span>
+                <span
+                  className="right-dock-tab-close"
+                  role="button"
+                  aria-label={`关闭 ${tab.label}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCloseArtifact(`${tab.kind === "file" ? "file" : "artifact"}:${tab.id}`);
+                  }}
+                >
+                  <XIcon className="icon-10" />
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
       {dockOpen ? (
         <button
           type="button"

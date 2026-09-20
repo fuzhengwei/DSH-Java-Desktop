@@ -941,6 +941,76 @@ fn local_path_kinds(paths: Vec<String>) -> Vec<Option<String>> {
         .collect()
 }
 
+/// 列出目录的单层内容（信息面板工程目录树用）。
+/// 设计取向是"快"：只读一层、目录优先排序、默认跳过隐藏文件（.git/node_modules 之外的
+/// 隐藏项也一并跳过）、条目超上限截断并标记——避免大目录（如 node_modules）一次拉爆 webview。
+#[derive(serde::Serialize)]
+struct DirEntryItem {
+    name: String,
+    path: String,
+    is_dir: bool,
+    size: u64,
+}
+
+#[derive(serde::Serialize)]
+struct DirListing {
+    entries: Vec<DirEntryItem>,
+    /// 实际条目数超出上限被截断
+    truncated: bool,
+    total: usize,
+}
+
+#[tauri::command]
+fn list_directory(path: String, show_hidden: bool) -> Result<DirListing, String> {
+    const MAX_ENTRIES: usize = 500;
+
+    let mut dirs: Vec<DirEntryItem> = Vec::new();
+    let mut files: Vec<DirEntryItem> = Vec::new();
+    let mut total = 0usize;
+
+    let read_dir = std::fs::read_dir(&path).map_err(|error| format!("读取目录失败：{error}"))?;
+    for entry in read_dir.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !show_hidden && name.starts_with('.') {
+            continue;
+        }
+        total += 1;
+        if dirs.len() + files.len() >= MAX_ENTRIES {
+            continue; // 继续计数 total，方便前端提示"还有 N 项未显示"
+        }
+        let Ok(file_type) = entry.file_type() else { continue };
+        let is_dir = file_type.is_dir();
+        let size = if is_dir {
+            0
+        } else {
+            entry.metadata().map(|meta| meta.len()).unwrap_or(0)
+        };
+        let item = DirEntryItem {
+            name: name.clone(),
+            path: entry.path().to_string_lossy().to_string(),
+            is_dir,
+            size,
+        };
+        if is_dir {
+            dirs.push(item);
+        } else {
+            files.push(item);
+        }
+    }
+
+    let collate = |a: &DirEntryItem, b: &DirEntryItem| a.name.to_lowercase().cmp(&b.name.to_lowercase());
+    dirs.sort_by(collate);
+    files.sort_by(collate);
+    dirs.extend(files);
+
+    let truncated = total > dirs.len();
+    Ok(DirListing {
+        truncated,
+        total,
+        entries: dirs,
+    })
+}
+
 /// 预览路径兜底：Agent 有时会把用户主目录下的文件写成 `/Desktop/foo.html`。
 /// 不改变对外展示的原路径，只在本机读取时尝试映射到 `$HOME/Desktop/foo.html`。
 fn resolve_preview_file(path: &str) -> PathBuf {
@@ -1287,7 +1357,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds, list_directory])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

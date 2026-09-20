@@ -126,6 +126,7 @@ select:focus-visible {
   align-items: center;
   gap: 9px;
   margin-left: auto;
+  min-width: 0; /* 允许随窗口收缩：产物条带先缩（内部滚动），不盖居中标题 */
 }
 
 /* 侧栏 + 主区 横排容器 */
@@ -1249,6 +1250,252 @@ select:focus-visible {
 
 .info-rail .rail-branch-chip:hover {
   color: var(--text);
+}
+
+/* ===== 工程目录树（信息面板 · 点击工程行展开） ===== */
+
+/* 可点击的工程行 */
+.rail-kv-row.clickable {
+  cursor: pointer;
+  transition: background .12s ease;
+  user-select: none;
+}
+
+.rail-kv-row.clickable:hover {
+  background: var(--surface-2);
+}
+
+.rail-kv-row.clickable:focus-visible {
+  outline: 2px solid var(--sidebar-accent, #4160f0);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* 行首展开箭头：收起朝右，展开旋转 90° 朝下 */
+.rail-tree-chevron {
+  color: var(--text-subtle);
+  transition: transform .16s ease;
+}
+
+.rail-kv-row.clickable.open .rail-tree-chevron,
+.rail-project-block > .rail-kv-row.clickable.open .rail-tree-chevron {
+  transform: rotate(90deg);
+}
+
+/* 子工程块（行 + 展开的树）之间恢复分隔线观感 */
+.rail-project-block + .rail-kv-row,
+.rail-project-block + .rail-project-block {
+  border-top: 1px solid var(--border);
+}
+
+.rail-project-block > .rail-kv-row + .rail-dir-tree-wrap,
+.rail-project-block > .rail-kv-row.clickable {
+  border-top: 0;
+}
+
+/* 展开的目录树容器：嵌在 rail-kv 内，占满行宽 */
+.rail-dir-tree-wrap {
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dir-tree {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.dir-tree-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 10px 2px;
+}
+
+.dir-tree-hidden-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--text-subtle);
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background .12s ease, color .12s ease;
+}
+
+.dir-tree-hidden-toggle:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.dir-tree-hidden-toggle.on {
+  color: var(--sidebar-accent, #4160f0);
+}
+
+.dir-tree-refresh {
+  border: 0;
+  background: transparent;
+  color: var(--text-subtle);
+  padding: 2px 4px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+}
+
+.dir-tree-refresh:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+.dir-tree-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  padding: 2px 0 6px;
+}
+
+.dir-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding-right: 10px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .1s ease;
+}
+
+.dir-tree-row:hover {
+  background: var(--surface-3);
+}
+
+/* 拖拽中的行 */
+.dir-tree-row:active {
+  opacity: .55;
+}
+
+/* hover 显示"在 Finder 中显示"按钮 */
+.dir-tree-reveal {
+  display: none;
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-subtle);
+  padding: 1px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.dir-tree-row:hover .dir-tree-reveal {
+  display: inline-flex;
+  align-items: center;
+}
+
+.dir-tree-reveal:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.dir-tree-reveal-icon {
+  width: 9px;
+  height: 9px;
+  transform: rotate(135deg); /* chevron 朝外，示意"跳出去" */
+}
+
+/* 压缩路径名用 mono 字体，暗示是路径片段 */
+.dir-tree-row.dir .dir-tree-name {
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* 输入框拖入高亮 */
+.composer-input.tree-drag-over {
+  outline: 1.5px dashed var(--sidebar-accent, #4160f0);
+  outline-offset: -2px;
+  background: rgba(65, 96, 240, .05);
+}
+
+.dir-tree-row.revealed {
+  background: rgba(65, 96, 240, .12);
+}
+
+.dir-tree-chevron {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  color: var(--text-subtle);
+  transition: transform .16s ease;
+}
+
+.dir-tree-row.dir.open > .dir-tree-chevron {
+  transform: rotate(90deg);
+}
+
+.dir-tree-chevron-spacer {
+  flex-shrink: 0;
+  width: 10px;
+}
+
+.dir-tree-icon {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  color: var(--text-subtle);
+}
+
+.dir-tree-row.dir > .dir-tree-icon {
+  color: #5a8ed6;
+}
+
+.dir-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.dir-tree-size {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-subtle);
+  font-family: var(--mono);
+}
+
+.dir-tree-hint {
+  font-size: 11px;
+  color: var(--text-subtle);
+  padding: 3px 10px;
+}
+
+.dir-tree-hint.error {
+  color: #c2493f;
+}
+
+.dir-tree-footer {
+  padding: 4px 10px 6px;
+  font-size: 10px;
+  color: var(--text-subtle);
+  border-top: 1px solid var(--border);
+}
+
+.rail-refresh-icon.spinning,
+.icon-12.spinning,
+.icon-10.spinning {
+  animation: railSpin .8s linear infinite;
+}
+
+@keyframes railSpin {
+  to { transform: rotate(360deg); }
 }
 
 .info-rail .rail-branch-chip option {
@@ -5726,7 +5973,26 @@ select:focus-visible {
   background: var(--border);
   flex-shrink: 0;
 }
-.app-toolbar .right-dock-tab-label { max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+
+/* 产物/文件 Tab 条带：限宽防积压，超出的横向滚动（滚轮/触控板均可），边缘淡出提示 */
+.app-toolbar .right-dock-tab-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: min(44vw, 560px);
+  padding: 0 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 12px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 10px, #000 calc(100% - 12px), transparent 100%);
+}
+.app-toolbar .right-dock-tab-strip::-webkit-scrollbar { display: none; }
+/* 激活 Tab 滚动条带时保持可见（切换 Tab 时也自动滚入视野） */
+.app-toolbar .right-dock-tab-strip .right-dock-tab { scroll-margin: 0 12px; }
+
+.app-toolbar .right-dock-tab-label { min-width: 0; max-width: 108px; overflow: hidden; text-overflow: ellipsis; }
 .app-toolbar .right-dock-tab-close {
   display: grid; place-items: center;
   width: 15px; height: 15px; border-radius: 50%;

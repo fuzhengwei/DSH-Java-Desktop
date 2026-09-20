@@ -266,6 +266,16 @@ function readFileAsDataUrl(file: File): Promise<string> {
   });
 }
 
+/** 按扩展名推断 MIME（拖拽目录树的文件进输入框时，没有现成 File.type 可用） */
+function mimeFromName(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif"].includes(ext)) return `image/${ext === "jpg" ? "jpeg" : ext}`;
+  if (ext === "svg") return "image/svg+xml";
+  if (ext === "pdf") return "application/pdf";
+  if (TEXT_FILE_EXTENSIONS.test(name)) return "text/plain";
+  return "application/octet-stream";
+}
+
 function dedupeResources(resources: ComposerResource[]): ComposerResource[] {
   const seen = new Set<string>();
   return resources.filter((resource) => {
@@ -808,6 +818,13 @@ export default function App() {
   // 右侧标签栏面板：activeDockTab = "collab" | "info" | "artifact:<id>"
   const [dockOpen, setDockOpen] = useState(false);
   const [activeDockTab, setActiveDockTab] = useState<string>("collab");
+  // 最近一次的面板级 Tab（collab/info）：关闭产物/文件 Tab 后回退到这里，而不是把 Dock 收光
+  const lastPanelTabRef = useRef<string>("collab");
+  useEffect(() => {
+    if (activeDockTab === "collab" || activeDockTab === "info") {
+      lastPanelTabRef.current = activeDockTab;
+    }
+  }, [activeDockTab]);
   /** 顶部快捷按钮：激活同一 Tab 时收起，否则切到对应 Tab 并展开 */
   const toggleDockTab = useCallback((tab: "collab" | "info") => {
     setActiveDockTab(tab);
@@ -1392,7 +1409,7 @@ export default function App() {
       const next = current.filter((tab) => tab.id !== targetId || (tab.kind === "file") !== (prefix === "file"));
       // 关掉的是激活标签时，回退到协作/信息
       setActiveDockTab((active) => (
-        active === `${prefix}:${targetId}` ? (next.length > 0 ? `${next[next.length - 1].kind === "file" ? "file" : "artifact"}:${next[next.length - 1].id}` : "collab") : active
+        active === `${prefix}:${targetId}` ? (next.length > 0 ? `${next[next.length - 1].kind === "file" ? "file" : "artifact"}:${next[next.length - 1].id}` : lastPanelTabRef.current) : active
       ));
       return next;
     });
@@ -2049,6 +2066,52 @@ export default function App() {
     });
   }, [addDraftResource]);
 
+  /** 目录树拖拽 → 输入框资源：文件夹/工程整体引用；文件与 + 菜单同链路（图片多模态、docx 提文本） */
+  const addDroppedTreeResources = useCallback(async (items: Array<{ path: string; name: string; displayName?: string; isDir: boolean }>) => {
+    for (const item of items) {
+      if (!item.path) continue;
+      if (item.isDir) {
+        addDraftResource({
+          id: `folder:${item.path}`,
+          kind: "folder",
+          name: item.displayName || item.name || item.path.split("/").filter(Boolean).pop() || item.path,
+          path: item.path,
+        });
+        continue;
+      }
+      try {
+        const mimeType = mimeFromName(item.name);
+        let dataUrl: string | undefined;
+        if (mimeType.startsWith("image/")) {
+          dataUrl = `data:${mimeType};base64,${await invoke<string>("read_local_file_base64", { path: item.path })}`;
+          if (mimeType.includes("svg")) {
+            try {
+              dataUrl = await svgDataUrlToPngDataUrl(dataUrl);
+            } catch (caught) {
+              console.warn("SVG 转 PNG 失败，降级为文件文本上下文", caught);
+              dataUrl = undefined;
+            }
+          }
+        }
+        const textContent = item.name.toLowerCase().endsWith(".docx")
+          ? await extractDocxText(item.path)
+          : undefined;
+        addDraftResource({
+          id: `file:${item.path}`,
+          kind: "file",
+          name: item.displayName || item.name || item.path.split("/").filter(Boolean).pop() || item.path,
+          path: item.path,
+          mimeType,
+          dataUrl,
+          textContent,
+        });
+      } catch (caught) {
+        console.warn("添加拖拽资源失败", item.path, caught);
+        setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    }
+  }, [addDraftResource]);
+
   /** 粘贴文件 → 输入框资源：图片转 dataUrl 走多模态；文本类文件提取文本注入上下文 */
   const addPastedFiles = useCallback(async (files: File[]) => {
     let unsupportedCount = 0;
@@ -2286,14 +2349,10 @@ export default function App() {
     const controller = new AbortController();
     abortControllersRef.current.set(originSessionId, controller);
     let resolvedSessionId = "";
-    // 用 ref 避免 watchdog 回调和 finally 块之间的竞态：
-    // abort() 是同步触发 fetch reject，如果 done 事件刚好在 abort 前到达，
-    // 普通变量可能读到错误的 timedOut 值
-    const timedOutRef = { current: false };
-    const watchdog = window.setTimeout(() => {
-      timedOutRef.current = true;
-      controller.abort();
-    }, 300_000);
+    // 不设总时长硬上限：agent 单轮多步任务（改码/构建）经常远超 5 分钟，
+    // 此前的 300s 看门狗会在服务端正常执行时强制 abort，误报"长时间未返回"。
+    // 死连接兜底由 streamAgentMessage 的 120s 空闲看门狗承担（服务端已有 15s SSE 心跳保活）；
+    // 用户手动停止仍走 controller.abort()，静默收口
     const startedAt = Date.now();
     const run: SessionRunState = { startedAt, title: runTitle, agentId: runAgentId, source: "direct" };
     setSessionRuns((current) => ({ ...current, [originSessionId]: run }));
@@ -2587,14 +2646,14 @@ export default function App() {
       const isAbort =
         (caught instanceof DOMException && caught.name === "AbortError")
         || /request cancell?ed|\babort(?:ed)?\b/i.test(message);
-      if (isAbort && !timedOutRef.current) {
+      if (isAbort) {
         // 用户手动停止：静默结束，不报错、不通知
       } else {
         // 流式通道异常（空闲看门狗 / plugin-http 卡死，见 agent-client.ts StreamIdleError）：
         // 服务端任务通常已实际执行完成，只是结果没推回 webview。
         // 这里按 agentId 对账服务端会话，把已生成的回答拉回来渲染，避免白等一场。
         let recovered = false;
-        if (caught instanceof StreamIdleError || timedOutRef.current) {
+        if (caught instanceof StreamIdleError) {
           try {
             const sessions = await listSessions(port, 200);
             const matched = sessions.find((item) => item.agentId === runAgentId && item.sessionId)
@@ -2632,7 +2691,7 @@ export default function App() {
         if (recovered) {
           notifyRunFinished(originSessionId, sessionRunsRef.current[originSessionId], false);
         } else {
-          const finalMessage = isAbort ? "智能体长时间未返回结果，已自动停止" : message;
+          const finalMessage = message;
           if (activeSessionRef.current === originSessionId || activeSessionRef.current === resolvedSessionId) {
             setError(finalMessage);
           }
@@ -2640,7 +2699,6 @@ export default function App() {
         }
       }
     } finally {
-      window.clearTimeout(watchdog);
       // 数字人任务结束：在场状态复位为空闲，归属头像收起
       if (actingHuman) {
         updatePresence(originSessionId, actingHuman.id, "idle");
@@ -3635,6 +3693,7 @@ export default function App() {
 	            onPickResourceFile={() => void pickResourceFile()}
             onPasteFiles={(files) => void addPastedFiles(files)}
             onPasteLongText={addPastedText}
+            onDropTreeResources={(items) => void addDroppedTreeResources(items)}
 	            onAddResourceProject={addResourceProject}
 	            onAddResourcePlugin={addResourcePlugin}
 	          />
@@ -3644,6 +3703,29 @@ export default function App() {
         {/* 右侧面板：只承载内容，Tab 栏统一在顶部 app-toolbar */}
         {dockOpen ? (
           <RightDock>
+            {/* 信息面板常驻挂载（display 切换保活）：看文件预览/协作时工程目录树的
+                展开状态与读取缓存不丢，切回「信息」即恢复原样 */}
+            <div
+              className="dock-pane"
+              style={{ display: activeDockTab === "info" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}
+            >
+              <InfoRail
+                open
+                active={activeDockTab === "info"}
+                onClose={() => setDockOpen(false)}
+                servicePort={port}
+                serviceReady={serviceReady}
+                sessions={combinedSessions}
+                activeProject={activeProject}
+                activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
+                projects={combinedProjects}
+                projectBranches={projectBranches}
+                projectBranchOptions={projectBranchOptions}
+                switchingBranchPath={switchingBranchPath}
+                onSwitchProjectBranch={switchProjectBranch}
+                onOpenFile={openFileTab}
+              />
+            </div>
             {activeDockTab === "collab" ? (
               <CollabPanel
                 room={room}
@@ -3666,21 +3748,6 @@ export default function App() {
                   onFocusItem: (seq) => setFocusRequest({ seq, nonce: Date.now() }),
                   onOpenArtifact: openArtifactTab,
                 } : undefined}
-              />
-            ) : activeDockTab === "info" ? (
-              <InfoRail
-                open
-                onClose={() => setDockOpen(false)}
-                servicePort={port}
-                serviceReady={serviceReady}
-                sessions={combinedSessions}
-                activeProject={activeProject}
-                activeBranch={activeProject ? projectBranches[activeProject.path] : undefined}
-                projects={combinedProjects}
-                projectBranches={projectBranches}
-                projectBranchOptions={projectBranchOptions}
-                switchingBranchPath={switchingBranchPath}
-                onSwitchProjectBranch={switchProjectBranch}
               />
             ) : activeDockTab.startsWith("artifact:") ? (
               <ArtifactPreview

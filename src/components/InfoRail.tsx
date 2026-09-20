@@ -3,7 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listMessages } from "../lib/agent-client";
 import { normalizeConversationMessage, sessionTitle } from "../App";
 import type { ConversationMessage, SessionSummary, WorkspaceEntry } from "../types";
+import DirTreeView from "./DirTreeView";
 import {
+  ChevronIcon,
   FileIcon,
   FolderIcon,
   GitBranchIcon,
@@ -12,6 +14,8 @@ import {
 
 type InfoRailProps = {
   open: boolean;
+  /** 面板是否为当前激活的 Dock Tab（隐藏挂载时为 false：不响应 Esc、不做懒加载扫描） */
+  active?: boolean;
   onClose: () => void;
   servicePort: number | null;
   serviceReady: boolean;
@@ -23,6 +27,8 @@ type InfoRailProps = {
   projectBranchOptions?: Record<string, string[]>;
   switchingBranchPath?: string;
   onSwitchProjectBranch?: (project: WorkspaceEntry, branch: string) => void;
+  /** 目录树点击文件 → 右侧 Dock 打开内容预览 */
+  onOpenFile?: (path: string) => void;
 };
 
 type RailTab = "runs" | "files";
@@ -240,7 +246,10 @@ export default function InfoRail(props: InfoRailProps) {
     projectBranchOptions,
     switchingBranchPath,
     onSwitchProjectBranch,
+    onOpenFile,
   } = props;
+  // 未传 active 时沿用 open（独立面板语义）
+  const isActive = props.active ?? open;
 
   // 当前工作区加入的子工程（通过 @ 引用的本地项目，挂在工作区下）
   const joinedProjects = useMemo(() => (projects || []).filter((project) => (
@@ -280,6 +289,12 @@ export default function InfoRail(props: InfoRailProps) {
   const [gitChanges, setGitChanges] = useState<GitChangeSummary | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [gitExpanded, setGitExpanded] = useState(false);
+  // 当前展开目录树的工程路径（工作区或子工程）；null = 全部收起
+  const [expandedTreePath, setExpandedTreePath] = useState<string | null>(null);
+  // 切换信息面板对象（换工作区/换会话）时收起树，避免展示无关目录
+  useEffect(() => {
+    setExpandedTreePath(null);
+  }, [activeProject?.path]);
 
   useEffect(() => {
     if (!open || tab !== "files" || filesLoaded) return;
@@ -327,13 +342,14 @@ export default function InfoRail(props: InfoRailProps) {
   }, [open, tab, filesLoaded, serviceReady, servicePort, sessions]);
 
   useEffect(() => {
-    if (!open) return;
+    // 仅在面板可见（激活 Tab）时响应 Esc 关闭；隐藏挂载时不抢全局按键
+    if (!isActive) return;
     const handler = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [open, onClose]);
+  }, [isActive, onClose]);
 
   useEffect(() => {
     if (!open || !activeProject?.path) {
@@ -408,10 +424,33 @@ export default function InfoRail(props: InfoRailProps) {
                 <span>当前工作区</span>
               </div>
               <div className="rail-kv">
-                <div className="rail-kv-row">
-                  <span className="rail-kv-key">工程</span>
-                  <span className="rail-kv-value">{activeProject?.name || "默认工作区"}</span>
-                </div>
+                {activeProject?.path ? (
+                  <div
+                    className={`rail-kv-row clickable${expandedTreePath === activeProject.path ? " open" : ""}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={expandedTreePath === activeProject.path}
+                    title="点击查看工程目录"
+                    onClick={() => setExpandedTreePath((path) => (path === activeProject.path ? null : activeProject.path))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setExpandedTreePath((path) => (path === activeProject.path ? null : activeProject.path));
+                      }
+                    }}
+                  >
+                    <span className="rail-kv-key">
+                      <ChevronIcon className="rail-tree-chevron icon-10" />
+                      <FolderIcon className="rail-inline-icon" />工程
+                    </span>
+                    <span className="rail-kv-value">{activeProject.name}</span>
+                  </div>
+                ) : (
+                  <div className="rail-kv-row">
+                    <span className="rail-kv-key">工程</span>
+                    <span className="rail-kv-value">{activeProject?.name || "默认工作区"}</span>
+                  </div>
+                )}
                 {activeProject?.path ? (
                   <div className="rail-kv-row">
                     <span className="rail-kv-key">路径</span>
@@ -426,14 +465,38 @@ export default function InfoRail(props: InfoRailProps) {
                         {renderBranchValue(activeProject)}
                       </div>
                     ) : null}
-                    {joinedProjects.map((project) => (
-                      <div key={project.path} className="rail-kv-row">
-                        <span className="rail-kv-key" title={project.path}>
-                          <GitBranchIcon className="rail-inline-icon" />{project.name}
-                        </span>
-                        {renderBranchValue(project)}
-                      </div>
-                    ))}
+                    {joinedProjects.map((project) => {
+                      const treeOpen = expandedTreePath === project.path;
+                      return (
+                        <div key={project.path} className="rail-project-block">
+                          <div
+                            className={`rail-kv-row clickable${treeOpen ? " open" : ""}`}
+                            role="button"
+                            tabIndex={0}
+                            aria-expanded={treeOpen}
+                            title="点击查看工程目录"
+                            onClick={() => setExpandedTreePath((path) => (path === project.path ? null : project.path))}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setExpandedTreePath((path) => (path === project.path ? null : project.path));
+                              }
+                            }}
+                          >
+                            <span className="rail-kv-key" title={project.path}>
+                              <ChevronIcon className="rail-tree-chevron icon-10" />
+                              <FolderIcon className="rail-inline-icon" />{project.name}
+                            </span>
+                            {renderBranchValue(project)}
+                          </div>
+                          {treeOpen ? (
+                            <div className="rail-dir-tree-wrap">
+                              <DirTreeView rootPath={project.path} onOpenFile={onOpenFile} />
+                            </div>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </>
                 ) : (
                   <div className="rail-kv-row">
@@ -450,6 +513,11 @@ export default function InfoRail(props: InfoRailProps) {
                   </span>
                 </div>
               </div>
+              {activeProject?.path && expandedTreePath === activeProject.path ? (
+                <div className="rail-dir-tree-wrap">
+                  <DirTreeView rootPath={activeProject.path} onOpenFile={onOpenFile} />
+                </div>
+              ) : null}
             </section>
 
             {activeProject?.path && gitChanges?.isRepo ? (

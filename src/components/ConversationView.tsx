@@ -87,6 +87,8 @@ type ConversationViewProps = {
   onPasteFiles?: (files: File[]) => void;
   /** 粘贴超长文本：折叠为资源标签注入，而不是灌进输入框 */
   onPasteLongText?: (text: string) => void;
+  /** 目录树拖入文件/文件夹：由 App 读取并转为输入框资源 */
+  onDropTreeResources?: (items: Array<{ path: string; name: string; displayName?: string; isDir: boolean }>) => void;
   onAddResourceProject: (project: WorkspaceEntry) => void;
   onAddResourcePlugin: (kind: ComposerResource["pluginKind"]) => void;
 };
@@ -489,9 +491,12 @@ export default function ConversationView({
   onPickResourceFile,
   onPasteFiles,
   onPasteLongText,
+  onDropTreeResources,
   onAddResourceProject,
   onAddResourcePlugin,
 }: ConversationViewProps) {
+  // 目录树条目拖入输入框时的高亮
+  const [treeDragOver, setTreeDragOver] = useState(false);
   // 房间协作模式下即使会话消息为空也按对话态渲染（消息由事件流提供）
   const isHome = messages.length === 0 && !roomContent;
 
@@ -1065,7 +1070,36 @@ export default function ConversationView({
         </div>
       ) : null}
         <div
-          className="composer-input"
+          className={`composer-input${treeDragOver ? " tree-drag-over" : ""}`}
+          onDragOver={(event) => {
+            // 目录树拖入（自定义 MIME 或纯文本路径兜底）：高亮输入框并允许落放
+            if (!onDropTreeResources) return;
+            if (event.dataTransfer.types.includes("application/x-dsh-tree-resource") || event.dataTransfer.types.includes("text/plain")) {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "copy";
+              if (!treeDragOver) setTreeDragOver(true);
+            }
+          }}
+          onDragLeave={(event) => {
+            if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+            setTreeDragOver(false);
+          }}
+          onDrop={(event) => {
+            setTreeDragOver(false);
+            if (!onDropTreeResources) return;
+            const raw = event.dataTransfer.getData("application/x-dsh-tree-resource");
+            if (!raw) return;
+            event.preventDefault();
+            try {
+              const parsed = JSON.parse(raw) as { path?: string; name?: string; displayName?: string; isDir?: boolean };
+              const item = parsed && typeof parsed === "object" && parsed.path
+                ? { path: parsed.path, name: parsed.name || "", displayName: parsed.displayName, isDir: Boolean(parsed.isDir) }
+                : null;
+              if (item) onDropTreeResources([item]);
+            } catch {
+              // 非法数据忽略
+            }
+          }}
           onMouseDown={(event) => {
             // 兜底：点到输入区但目标不是 textarea 本身（覆盖层/内边距/边角）时，
             // 把焦点交还给 textarea，且把光标移到文本末尾，不打断正常输入
