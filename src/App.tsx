@@ -699,6 +699,11 @@ export default function App() {
     title: string;
     agentId: string;
     sessionId?: string;
+    /** 运行来源：room=房间协作路径，direct=直连流式路径。
+     *  收口判定以此为准，而不是 roomRunIdsRef 的成员关系——ref 与 state 的
+     *  一致性在任何一处被破坏（见 handleRoomRunningChange 的历史 bug）时，
+     *  硬兜底仍能凭 source 标签识别房间协作运行并就地收口，避免永久"生成中"。 */
+    source?: "room" | "direct";
   };
   const [sessionRuns, setSessionRuns] = useState<Record<string, SessionRunState>>({});
   const [lastRunDurations, setLastRunDurations] = useState<Record<string, number>>({});
@@ -950,15 +955,32 @@ export default function App() {
     // 同步登记硬兜底名单：发送路径的登记可能在 POST /messages 失败时被 catch 清掉，
     // 之后协作视图重新上抛 running=true 走的是这里——不补登记的话，
     // 10s 硬兜底 interval 只认 roomRunIdsRef，这条运行态会永久游离在外。
-    // 放在 setState 更新器外：更新器应保持纯函数（StrictMode 下会执行两次）。
-    if (running) roomRunIdsRef.current.add(sessionId);
-    setSessionRuns((current) => {
-      if (running) {
+    if (running) {
+      roomRunIdsRef.current.add(sessionId);
+      // updater 保持纯函数：任何 ref 副作用都不能放进 updater。
+      // StrictMode / 并发渲染下 updater 会被调用多次，此前把 roomRunIdsRef.delete
+      // 写在 false 分支的 updater 里：第一次调用删掉 ref、第二次调用因 !has 早退
+      // 返回原 state，最终 ref 与 sessionRuns 失配（ref 无、state 有）——
+      // 三条收口路径（onRunningChange/waitForRoomCompletion/硬兜底）全部要求
+      // roomRunIdsRef.has(sessionId)，失配后 UI 永久"生成中"（2026-09-20 10:23 根因）。
+      setSessionRuns((current) => {
         if (current[sessionId]) return current;
-        return { ...current, [sessionId]: { startedAt: Date.now(), title: "", agentId: sessionId } };
-      }
-      if (!roomRunIdsRef.current.has(sessionId) || !current[sessionId]) return current;
-      roomRunIdsRef.current.delete(sessionId);
+        return {
+          ...current,
+          [sessionId]: { startedAt: Date.now(), title: "", agentId: sessionId, source: "room" },
+        };
+      });
+      return;
+    }
+    // false 分支：先在 updater 外做 ref 判定与删除（幂等、只删一次），再走纯 updater 清 state。
+    // 判定用 source 标签兜底：即便 ref 已被意外清掉（历史失配态），房间协作的运行态也能正常收口；
+    // 直连路径的运行（source="direct"）依然不受影响，避免误删同会话直连运行记录。
+    const roomRun = roomRunIdsRef.current.has(sessionId)
+      || sessionRunsRef.current[sessionId]?.source === "room";
+    if (!roomRun) return;
+    roomRunIdsRef.current.delete(sessionId);
+    setSessionRuns((current) => {
+      if (!current[sessionId]) return current;
       const next = { ...current };
       delete next[sessionId];
       return next;
@@ -974,16 +996,19 @@ export default function App() {
       // 任务明明早已完成 UI 却永久"生成中"。连续失败达到阈值就升级收口：
       // 传输恢复后协作视图自会重新上抛真实运行态，宁可短暂误收口也不永久卡死。
       let consecutiveFailures = 0;
+      // 门卫用 sessionRuns 而非 roomRunIdsRef：ref 可能与 state 失配（历史 bug），
+      // 失配时这条循环是唯一还在跑的对账链路，不能静默退出
+      const stillRunning = () => Boolean(sessionRunsRef.current[sessionId]);
       for (;;) {
         await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-        if (!roomRunIdsRef.current.has(sessionId)) return;
+        if (!stillRunning()) return;
         try {
           const snapshot = await Promise.race([
             fetchServerRoom(port, roomId),
             new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("房间对账超时")), 8_000)),
           ]);
           consecutiveFailures = 0;
-          if (!roomRunIdsRef.current.has(sessionId)) return;
+          if (!stillRunning()) return;
           if (activeSessionRef.current === sessionId) {
             setServerRoom(snapshot);
             setRoom(serverRoomToProjection(snapshot));
@@ -1029,7 +1054,7 @@ export default function App() {
   // 服务端任务明明已完成，会话却永久"生成中"（2026-09-19 实测卡 39 分钟）。
   // 这里不依赖组件生命周期：定期对登记超过 20s 的房间协作会话向服务端对账，
   // 房间任务已全部终态则就地收口（清 sessionRuns + 复位输入框禁用）。
-  // 只处理 roomRunIdsRef 里登记的会话，直连路径有 300s 硬看门狗自行清理，互不干扰。
+  // 只处理房间协作路径（roomRunIdsRef 登记 / source="room"）的会话，直连路径有 300s 硬看门狗自行清理，互不干扰。
   useEffect(() => {
     if (!port) return;
     // 对账连续失败计数：传输层死亡（WebKit fetch 静默挂断）时每轮 8s 超时无限重试，
@@ -1048,13 +1073,21 @@ export default function App() {
       if (activeSessionRef.current === sessionId) setRoomRunning(false);
     };
     const timer = window.setInterval(() => {
+      // 待对账名单：roomRunIdsRef 登记的，以及打了 source="room" 标签的运行态。
+      // 后者是自愈通道：即便 ref 与 state 因任何原因失配（如历史 bug 中 updater
+      // 内副作用被重复执行导致 ref 丢失），标签让硬兜底仍能找到这条运行态，
+      // 经服务端对账确认任务终态后就地收口——宁可短暂误收口，不永久"生成中"。
       const pending = Object.entries(sessionRunsRef.current).filter(([sessionId, run]) => (
-        roomRunIdsRef.current.has(sessionId) && Date.now() - run.startedAt > 20_000
+        (roomRunIdsRef.current.has(sessionId) || run.source === "room")
+        && Date.now() - run.startedAt > 20_000
       ));
       if (pending.length === 0) return;
       void (async () => {
         for (const [sessionId, run] of pending) {
-          if (!roomRunIdsRef.current.has(sessionId)) continue; // 期间已被其他链路收口
+          // 期间已被其他链路收口（sessionRuns 里已不存在）就跳过；
+          // 判定依据是 sessionRuns 本身而非 roomRunIdsRef——ref 可能因历史
+          // 失配缺失，而这正是本兜底要自愈的对象
+          if (!sessionRunsRef.current[sessionId]) continue;
           try {
             // 优先用「该会话自己绑定的房间」对账：serverRoomId 是当前活跃会话的房间，
             // 用户切走会话后再对账会拿错房间——把仍在跑的后台会话误判为已完成并就地收口。
@@ -1967,7 +2000,7 @@ export default function App() {
       controller.abort();
     }, 300_000);
     const startedAt = Date.now();
-    const run: SessionRunState = { startedAt, title: runTitle, agentId: runAgentId };
+    const run: SessionRunState = { startedAt, title: runTitle, agentId: runAgentId, source: "direct" };
     setSessionRuns((current) => ({ ...current, [originSessionId]: run }));
     setLastRunDurations((current) => ({ ...current, [originSessionId]: 0 }));
     setError("");
