@@ -324,6 +324,10 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   const [derivedTaskStates, setDerivedTaskStates] = useState<Record<string, { state: string; at: number }>>({});
   // 最近一次快照成功刷新的时间：只有比快照新的终态事件才允许覆盖快照的活动态判定
   const roomFetchedAtRef = useRef(0);
+  // 历史是否已加载完成：SSE 订阅必须等它为 true 才启动。
+  // 否则订阅以 afterSeq=0 连接，服务端把全量事件流重推一遍，逐条入库逐条重绘，
+  // 用户点开历史会话时看到整段输出"重新刷一遍"（seenSeqs 去重只防重复，防不住重放）。
+  const [historyReady, setHistoryReady] = useState(false);
 
   // 初始：补历史 + 房间快照。必须重试到成功为止——room 为 null 会同时瘫痪
   // 运行态上报（下方 effect 的 if (!room) return）与对账轮询（if (!running) return），
@@ -332,6 +336,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   useEffect(() => {
     let cancelled = false;
     setEvents([]);
+    setHistoryReady(false);
     lastSeqRef.current = 0;
     seenSeqsRef.current = new Set();
     void (async () => {
@@ -357,6 +362,9 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
             if (state) seeded[event.taskId] = { state, at: 0 };
           }
           setDerivedTaskStates(seeded);
+          // 历史（含去重集合与 lastSeq）就位后再放行 SSE 订阅：
+          // 订阅建立时 afterSeq 取到的就是历史最新 seq，服务端只推增量事件
+          setHistoryReady(true);
           return;
         } catch (caught) {
           if (cancelled) return;
@@ -402,12 +410,15 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId]);
 
-  // 实时订阅（断线自动重连，按最新 seq 续传）
+  // 实时订阅（断线自动重连，按最新 seq 续传）。
+  // 必须等历史加载完成（historyReady）再连：提前连会以 afterSeq=0 触发服务端全量重放，
+  // 点开历史会话时整段输出会被逐条重刷一遍
   useEffect(() => {
+    if (!historyReady) return;
     const unsubscribe = subscribeRoomEvents(port, roomId, () => lastSeqRef.current, ingestEvent);
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [port, roomId]);
+  }, [port, roomId, historyReady]);
 
   useEffect(() => {
     const paths = Array.from(new Set((room?.artifacts || []).flatMap(roomArtifactFilePaths)));
