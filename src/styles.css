@@ -673,6 +673,12 @@ select:focus-visible {
   animation: version-breath 1.8s ease-in-out infinite;
 }
 
+/* 项目内有未读对话：角标染上未读提示色（无呼吸点，与进行中区分） */
+.nav-count.has-unread {
+  background: rgba(229, 72, 77, .1);
+  color: #e5484d;
+}
+
 .section-heading {
   padding: 0 7px;
   color: var(--text-subtle);
@@ -955,6 +961,26 @@ select:focus-visible {
   border-radius: 999px;
   background: var(--sidebar-accent);
   animation: session-breath 1.6s ease-in-out infinite;
+}
+
+/* 未读会话标记：后台跑完还没看的会话，行尾静态红点（区别于进行中的呼吸点），点开即清除 */
+.session-unread-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-right: 2px;
+  border-radius: 999px;
+  background: #e5484d;
+}
+
+.session-unread-dot.error {
+  background: var(--warning);
+}
+
+/* 未读会话标题加重，扫一眼即可定位 */
+.session-item.unread .session-title {
+  color: var(--text);
+  font-weight: 600;
 }
 
 @keyframes session-breath {

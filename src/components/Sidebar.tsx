@@ -28,6 +28,8 @@ type SidebarProps = {
   activeProjectPath: string;
   streaming?: boolean;
   runningSessionIds?: string[];
+  /** 未读会话（别名 id → 结束状态）：侧边栏会话行显示未读圆点 */
+  unreadSessions?: Record<string, "done" | "error">;
   projects: WorkspaceEntry[];
   sessions: SessionSummary[];
   sessionProjectMap: Record<string, string>;
@@ -159,6 +161,7 @@ export default function Sidebar({
   activeProjectPath,
   streaming = false,
   runningSessionIds = [],
+  unreadSessions = {},
   projects,
   sessions,
   sessionProjectMap,
@@ -331,6 +334,10 @@ export default function Sidebar({
   };
 
   const runningIds = useMemo(() => new Set(runningSessionIds), [runningSessionIds]);
+  // 未读判定：会话的任意别名 id 命中未读记录即视为有新内容
+  const unreadStatusOf = (session: SessionSummary): "done" | "error" | undefined => (
+    sessionIds(session).map((id) => unreadSessions[id]).find(Boolean)
+  );
   const isSessionRunning = (session: SessionSummary) => (
     sessionIds(session).some((id) => runningIds.has(id))
   );
@@ -343,10 +350,15 @@ export default function Sidebar({
   const projectCountBadge = (list: SessionSummary[]) => {
     const total = list.length;
     const running = runningCountOf(list);
+    const unread = list.filter((session) => Boolean(unreadStatusOf(session))).length;
+    const titleParts = [`${total} 个对话`];
+    if (running > 0) titleParts.push(`${running} 个进行中`);
+    if (unread > 0) titleParts.push(`${unread} 个未读`);
     return {
       running,
+      unread,
       label: running > 0 ? `${sessionCountLabel(running)}/${sessionCountLabel(total)}` : sessionCountLabel(total),
-      title: running > 0 ? `${total} 个对话，${running} 个进行中` : `${total} 个对话`,
+      title: titleParts.join("，"),
     };
   };
 
@@ -487,13 +499,17 @@ export default function Sidebar({
     const id = session.sessionId || session.agentId || "";
     const active = sessionIsActive(session, activeSessionId);
     const running = isSessionRunning(session) || (active && streaming);
+    const unreadStatus = unreadStatusOf(session);
+    // 当前打开的会话不显示红点：行就在屏幕上、消息流式实时渲染，不存在"没看到的新内容"。
+    // 双保险——即使挂标链路因会话别名/时序误判，打开的行也不会出现红点
+    const unread = Boolean(unreadStatus) && !running && !active;
     const title = sessionTitle(session, sessionCustomTitles);
     const ids = sessionIds(session);
     const sessionDropActive = dropTarget?.kind === "session" && dropTarget.ids.some((item) => ids.includes(item));
     return (
       <div
         key={id}
-        className={`session-item${active ? " active" : ""}${dragging?.kind === "session" && dragging.ids.some((item) => ids.includes(item)) ? " dragging" : ""}${sessionDropActive ? ` drop-${dropTarget.position}` : ""}`}
+        className={`session-item${active ? " active" : ""}${unread ? " unread" : ""}${dragging?.kind === "session" && dragging.ids.some((item) => ids.includes(item)) ? " dragging" : ""}${sessionDropActive ? ` drop-${dropTarget.position}` : ""}`}
         data-draggable="true"
         data-sidebar-session="true"
         data-session-ids={ids.join(",")}
@@ -530,6 +546,12 @@ export default function Sidebar({
         </button>
         {running ? (
           <span className="session-running-dot" title="对话进行中" aria-label="对话进行中" />
+        ) : unread ? (
+          <span
+            className={`session-unread-dot${unreadStatus === "error" ? " error" : ""}`}
+            title={unreadStatus === "error" ? "上次执行出错，点开查看" : "有新回复"}
+            aria-label={unreadStatus === "error" ? "上次执行出错，点开查看" : "有新回复"}
+          />
         ) : showTime && sessionTime(session) ? (
           <span className="session-time">{sessionTime(session)}</span>
         ) : null}
@@ -694,7 +716,7 @@ export default function Sidebar({
                   {projectSessions.length > 0 ? (() => {
                     const badge = projectCountBadge(projectSessions);
                     return (
-                      <span className={`nav-count${badge.running > 0 ? " has-running" : ""}`} title={badge.title}>
+                      <span className={`nav-count${badge.running > 0 ? " has-running" : ""}${badge.unread > 0 ? " has-unread" : ""}`} title={badge.title}>
                         {badge.label}
                       </span>
                     );
@@ -774,7 +796,7 @@ export default function Sidebar({
               {unassignedSessions.length > 0 ? (() => {
                 const badge = projectCountBadge(unassignedSessions);
                 return (
-                  <span className={`nav-count${badge.running > 0 ? " has-running" : ""}`} title={badge.title}>
+                  <span className={`nav-count${badge.running > 0 ? " has-running" : ""}${badge.unread > 0 ? " has-unread" : ""}`} title={badge.title}>
                     {badge.label}
                   </span>
                 );

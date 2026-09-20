@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import ConversationView from "./components/ConversationView";
 import Sidebar, { sessionIsToday, type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
@@ -88,6 +89,39 @@ const SIDEBAR_COLLAPSED_WIDTH = 68;
 const SIDEBAR_COLLAPSE_THRESHOLD = 132;
 const SIDEBAR_MIN_WIDTH = 236;
 const SIDEBAR_MAX_WIDTH = 460;
+
+/**
+ * 提交失败的"结果未知"类错误：超时 / 网络中断。
+ * 这类失败不代表服务端没收到消息（WebKit fetch 挂断、Runtime 瞬时断连
+ * 都会走到这里），必须先对账房间快照再定论，不能直接弹失败横幅。
+ */
+function isTransientSubmitError(message: string): boolean {
+  return /超时|fetch|network|连接|unavailable|Failed to fetch/i.test(message);
+}
+
+/**
+ * 对账房间快照确认提交是否已被服务端受理。
+ * 受理的判定：房间存在活动任务（刚受理时任务可能尚未建好，最多探测 3 轮、每轮 2s）。
+ * 快照拉取失败（Runtime 确实不可达）按未受理处理，走正常失败路径。
+ */
+async function verifyRoomAccepted(port: number, roomId: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const snapshot = await Promise.race([
+        fetchServerRoom(port, roomId),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("对账超时")), 6_000)),
+      ]);
+      const tasks = snapshot.tasks || [];
+      if (tasks.some((task) => ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"].includes(task.state))) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  }
+  return false;
+}
 
 function readSidebarWidth(): number {
   const stored = Number(localStorage.getItem("dsh-sidebar-width"));
@@ -337,6 +371,21 @@ function readPinnedSessionIds(): string[] {
       : [];
   } catch {
     return [];
+  }
+}
+
+/** 未读会话（别名 id → 结束状态）：后台运行结束后用户尚未查看的会话 */
+function readUnreadSessions(): Record<string, "done" | "error"> {
+  try {
+    const value = JSON.parse(localStorage.getItem("dsh-session-unread") || "{}") as Record<string, unknown>;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const next: Record<string, "done" | "error"> = {};
+    for (const [id, status] of Object.entries(value)) {
+      if (typeof id === "string" && id.trim() && (status === "done" || status === "error")) next[id] = status;
+    }
+    return next;
+  } catch {
+    return {};
   }
 }
 
@@ -667,6 +716,9 @@ export default function App() {
   const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(readSessionOrder);
   // 置顶会话（存所有别名 id，侧边栏顶部「置顶」区展示）
   const [pinnedSessionIds, setPinnedSessionIds] = useState<string[]>(readPinnedSessionIds);
+  // 未读会话（存所有别名 id → "done" | "error"）：运行结束后用户没在看的会话，
+  // 侧边栏会话行显示未读圆点，点开或窗口聚焦回该会话时清除
+  const [unreadSessions, setUnreadSessions] = useState<Record<string, "done" | "error">>(readUnreadSessions);
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
   const [messages, setMessages] = useState<ConversationMessage[]>(() => readSessionMessages(localStorage.getItem("dsh-active-session-id") || ""));
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
@@ -944,6 +996,68 @@ export default function App() {
     })().catch(() => undefined).finally(() => setRoomRunning(false));
   }, [activeSessionId, port, serverRoom, serverRoomId]);
 
+  // ── 未读会话标记 ──
+  // 运行结束时用户没在「会话可见 + 停留该会话」的状态下 → 记为未读。
+  // 判定与系统通知的 viewing 口径一致，避免"收到了通知但侧边栏毫无痕迹"。
+  // 直连路径在 notifyRunFinished 挂标，房间协作路径在三条收口链路（onRunningChange /
+  // waitForRoomCompletion / 硬兜底 forceSettle）挂标；清除入口见 selectSession 与聚焦兜底。
+
+  // viewing 判定刻意不含焦点：hasFocus()/onFocusChanged 在 WKWebView 下都出现过
+  // "窗口明明聚焦仍报失焦"的误报，两轮实测均导致停在当前会话仍收到通知/红点。
+  // 桌面单窗口场景下「窗口可见 + 该会话正打开」就代表用户正在看——消息是流式
+  // 实时渲染的，不存在"没看到的新内容"。真离开（切走会话/最小化）仍会正常挂标。
+  const isViewingSession = useCallback((sessionId: string) => (
+    typeof document !== "undefined"
+    && document.visibilityState === "visible"
+    && activeSessionRef.current === sessionId
+  ), []);
+
+  // 窗口重新聚焦时的兜底清除：即使刚才被误判挂了标（或挂标后切走又切回），
+  // 回到窗口且停留在该会话的那一刻即视为已读。聚焦事件本身可能误报，
+  // 但它只用于"清除"方向——误触发只是提前清标，不会反向误挂。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    try {
+      const win = getCurrentWindow();
+      void win.onFocusChanged(({ payload: focused }) => {
+        if (focused) clearActiveSessionUnreadRef.current();
+      })
+        .then((fn) => {
+          if (cancelled) fn();
+          else unlisten = fn;
+        })
+        .catch(() => undefined);
+    } catch {
+      // 非 Tauri 环境（纯浏览器 dev）：无原生焦点事件，DOM focus 兜底已足够
+    }
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const markSessionUnread = useCallback((sessionId: string, status: "done" | "error") => {
+    if (!sessionId || isViewingSession(sessionId)) return;
+    setUnreadSessions((current) => (current[sessionId] === status ? current : { ...current, [sessionId]: status }));
+  }, [isViewingSession]);
+
+  const clearSessionUnread = useCallback((ids: string[]) => {
+    const targets = ids.filter(Boolean);
+    if (targets.length === 0) return;
+    setUnreadSessions((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const id of targets) {
+        if (next[id]) {
+          delete next[id];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, []);
+
   // 协作面板的运行态上抛：除驱动输入框禁用（roomRunning）外，同步维护 sessionRuns，
   // 让侧边栏项目角标能统计房间协作（数字人）会话的「进行中/总数」。
   // 切会话时只复位 roomRunning 不清 sessionRuns——后台仍在跑的房间协作角标要继续显示；
@@ -957,6 +1071,9 @@ export default function App() {
     // 10s 硬兜底 interval 只认 roomRunIdsRef，这条运行态会永久游离在外。
     if (running) {
       roomRunIdsRef.current.add(sessionId);
+      // 房间确实在跑 = 此前的「请求超时/网络」横幅是误报（提交实际已受理），就地清除。
+      // 只清瞬时类错误，配置类错误（如"未配置模型"）不受影响。
+      setError((current) => current && isTransientSubmitError(current) ? "" : current);
       // updater 保持纯函数：任何 ref 副作用都不能放进 updater。
       // StrictMode / 并发渲染下 updater 会被调用多次，此前把 roomRunIdsRef.delete
       // 写在 false 分支的 updater 里：第一次调用删掉 ref、第二次调用因 !has 早退
@@ -979,13 +1096,15 @@ export default function App() {
       || sessionRunsRef.current[sessionId]?.source === "room";
     if (!roomRun) return;
     roomRunIdsRef.current.delete(sessionId);
+    // 房间协作收口即本轮任务完成：用户没在看就挂未读（窗口聚焦且停留时静默跳过）
+    markSessionUnread(sessionId, "done");
     setSessionRuns((current) => {
       if (!current[sessionId]) return current;
       const next = { ...current };
       delete next[sessionId];
       return next;
     });
-  }, []);
+  }, [markSessionUnread]);
 
   // 发送路径独立对账：RoomCollaborationView 可能因 SSE 静默断链 / 快照挂起而收不到终态；
   // 这里直接轮询“该会话绑定的房间”，只要任务全部终态就复位输入框运行态。
@@ -1046,7 +1165,7 @@ export default function App() {
         }
       }
     })();
-  }, [handleRoomRunningChange, port]);
+  }, [handleRoomRunningChange, markSessionUnread, port]);
 
   // 房间协作运行态的硬兜底：sessionRuns 的清除此前完全依赖 RoomCollaborationView
   // 挂载并经 onRunningChange(false) 上报。该链路任何一环断掉（本地投影 participants
@@ -1064,6 +1183,9 @@ export default function App() {
     const forceSettle = (sessionId: string, startedAt: number) => {
       roomRunIdsRef.current.delete(sessionId);
       setLastRunDurations((current) => ({ ...current, [sessionId]: Date.now() - startedAt }));
+      // 硬兜底收口时任务大概率已完成（对账确认终态/超时兜底）：用户没在看就挂未读，
+      // 避免后台会话"悄悄跑完"侧边栏毫无痕迹
+      markSessionUnread(sessionId, "done");
       setSessionRuns((current) => {
         if (!current[sessionId]) return current;
         const next = { ...current };
@@ -1126,7 +1248,7 @@ export default function App() {
       })();
     }, 10_000);
     return () => window.clearInterval(timer);
-  }, [port, serverRoomId]);
+  }, [port, serverRoomId, markSessionUnread]);
 
   const refreshDigitalHumans = useCallback(async (servicePort: number | null) => {
     try {
@@ -1442,6 +1564,10 @@ export default function App() {
   }, [pinnedSessionIds]);
 
   useEffect(() => {
+    localStorage.setItem("dsh-session-unread", JSON.stringify(unreadSessions));
+  }, [unreadSessions]);
+
+  useEffect(() => {
     localStorage.setItem("dsh-draft-sessions", JSON.stringify(draftSessions));
   }, [draftSessions]);
 
@@ -1657,18 +1783,22 @@ export default function App() {
     }
   }, []);
 
+  // ── 未读会话标记 ──（判定口径见 markSessionUnread）
   const notifyRunFinished = useCallback((sessionId: string, run: SessionRunState | undefined, failed: boolean, errorMessage?: string) => {
     // 提示音始终播放（无论用户是否停留在该会话）；系统通知仍仅在未聚焦该会话时发送
     playCompletionSound(failed);
-    const focused = typeof document !== "undefined" && document.visibilityState === "visible" && document.hasFocus();
-    const viewing = focused && activeSessionRef.current === sessionId;
+    // 判定统一走 isViewingSession（Tauri 原生焦点），不用 document.hasFocus()——
+    // WKWebView 下它可能返回 false，导致用户明明停在当前会话也被发通知/挂红点
+    const viewing = isViewingSession(sessionId);
     if (viewing) return;
+    // 用户没在看：除了系统通知，再给侧边栏会话行挂未读标记，点开后清除
+    markSessionUnread(sessionId, failed ? "error" : "done");
     const title = failed ? "对话执行出错" : "对话已完成";
     const body = run?.title
       ? (failed ? `「${run.title}」：${errorMessage || "执行失败"}` : `「${run.title}」已生成回复`)
       : (failed ? (errorMessage || "执行失败") : "已生成回复");
     void invoke("send_notification", { title, body }).catch(() => undefined);
-  }, []);
+  }, [isViewingSession, markSessionUnread]);
 
   const selectSession = useCallback(async (sessionId: string) => {
     if (!port) return;
@@ -1686,6 +1816,8 @@ export default function App() {
     setMessages(stripDigitalHumanAttribution(cachedMessages, currentHumans));
     setActiveSessionId(sessionId);
     setActiveView("conversation");
+    // 用户点开该会话：清除其全部别名的未读标记（点开即视为已读）
+    clearSessionUnread([...aliases, canonicalSessionId]);
     // 同步输入框项目选择器到该会话所属项目；无归属（默认工作区）时回退为空
     const hasDefaultProject = aliases.some((id) => sessionProjectMapRef.current[id] === "default");
     const sessionProject = hasDefaultProject ? "" : aliases.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
@@ -1711,7 +1843,32 @@ export default function App() {
     } catch {
       // 服务端不可用时保留本地缓存即可
     }
-  }, [port]);
+  }, [clearSessionUnread, port]);
+
+  // 未读标记的兜底清除：运行结束时若只是窗口暂时失焦（会话就是当前会话），
+  // 用户切回窗口的那一刻即视为"已看"——不需要再点一次会话。
+  // hasFocus 不再参与判定：DOM focus 事件 + Tauri onFocusChanged（见上）都只带
+  // "窗口重新聚焦"语义，此时只要会话可见且是当前会话就已读。
+  const clearActiveSessionUnread = useCallback(() => {
+    if (typeof document === "undefined") return;
+    if (document.visibilityState !== "visible") return;
+    const sessionId = activeSessionRef.current;
+    if (!sessionId) return;
+    clearSessionUnread([sessionId]);
+  }, [clearSessionUnread]);
+
+  // 供 Tauri 焦点 effect（声明在前）回调：ref 打通声明顺序
+  const clearActiveSessionUnreadRef = useRef<() => void>(() => undefined);
+  clearActiveSessionUnreadRef.current = clearActiveSessionUnread;
+
+  useEffect(() => {
+    document.addEventListener("visibilitychange", clearActiveSessionUnread);
+    window.addEventListener("focus", clearActiveSessionUnread);
+    return () => {
+      document.removeEventListener("visibilitychange", clearActiveSessionUnread);
+      window.removeEventListener("focus", clearActiveSessionUnread);
+    };
+  }, [clearActiveSessionUnread]);
 
   // 切到一个正在后台运行的会话时，本地缓存可能落后于服务端，补一次服务端消息拉取
   useEffect(() => {
@@ -1902,6 +2059,8 @@ export default function App() {
         mentions: draftMentions.length > 0 ? draftMentions : undefined,
         resources: messageResources.length > 0 ? messageResources : undefined,
       };
+      // 房间提交是否已受理的核查对象：try 内赋值，catch 里据此对账
+      let ensuredRoom: ServerRoomView | null = null;
       try {
         setError("");
         setRoomRunning(true);
@@ -1930,7 +2089,8 @@ export default function App() {
         updateMessagesForAliases([originSessionId], (current) => [...current, userMessage]);
         // 确保 @chips 与项目配置的数字人都已加入房间
         const title = sessionTitle(activeSession || { agentId: originSessionId, title: runTitle }, customSessionTitles);
-        const ensured = await ensureServerRoom(port, originSessionId, title === "新对话" ? runTitle : title, sessionProjectPathForHumans || "default");
+        ensuredRoom = await ensureServerRoom(port, originSessionId, title === "新对话" ? runTitle : title, sessionProjectPathForHumans || "default");
+        const ensured = ensuredRoom;
         let snapshot = ensured;
         const toJoin = [...mentionedHumans, ...projectHumans];
         for (const human of toJoin) {
@@ -1973,6 +2133,22 @@ export default function App() {
         setRoom(serverRoomToProjection(refreshed));
         waitForRoomCompletion(ensured.id, originSessionId, Date.now());
       } catch (caught) {
+        const submitError = caught instanceof Error ? caught.message : String(caught);
+        // 超时/网络类失败 ≠ 提交失败：POST /messages 可能已被服务端受理
+        // （WebKit fetch 静默挂断、Runtime 瞬时断连都属于"结果未知"）。
+        // 此前直接按失败收口并弹「请求超时」横幅，但房间任务实际在跑、
+        // 对话照常推进，横幅却永不消失（2026-09-20 截图复现）。
+        // 这里先对账房间快照：确认任务已被受理就按正常路径继续，否则才报错。
+        if (ensuredRoom && isTransientSubmitError(submitError)) {
+          const accepted = await verifyRoomAccepted(port, ensuredRoom.id);
+          if (accepted) {
+            setServerRoomId(ensuredRoom.id);
+            setActiveDockTab("collab");
+            setDockOpen(true);
+            waitForRoomCompletion(ensuredRoom.id, originSessionId, Date.now());
+            return;
+          }
+        }
         setRoomRunning(false);
         // 提交失败：同步清掉刚登记的运行态，否则角标会永久显示「进行中」
         roomRunIdsRef.current.delete(originSessionId);
@@ -1982,7 +2158,7 @@ export default function App() {
           delete next[originSessionId];
           return next;
         });
-        setError(caught instanceof Error ? caught.message : String(caught));
+        setError(submitError);
       }
       return;
     }
@@ -2011,6 +2187,19 @@ export default function App() {
     const sessionProjectPath = projectPathFromMap(sessionProjectMapRef.current, originSessionId, activeProjectPath);
     setSessionProjectMap((current) => ({ ...current, [originSessionId]: storedProjectPath(sessionProjectPath) }));
     const createdAt = new Date().toISOString();
+    // 标题即时更新：发送那一刻就用用户输入作为会话标题，不等 AI 响应。
+    // 与房间路径（上方 roomHasParticipants 分支）保持一致；服务端会话稍后由
+    // loadWorkspaceData 合并，同会话已存在时只改草稿标题，不覆盖真实标题
+    setDraftSessions((current) => {
+      const updated = current.map((session) => (
+        session.agentId === originSessionId || session.sessionId === originSessionId
+          ? { ...session, title: runTitle, updatedAt: createdAt }
+          : session
+      ));
+      return updated.some((session) => session.agentId === originSessionId || session.sessionId === originSessionId)
+        ? updated
+        : [{ agentId: originSessionId, title: runTitle, createdAt, updatedAt: createdAt }, ...updated];
+    });
 
     // 数字人归属解析（直连路径，此时项目数字人至多 1 个，多人已在上方走房间编排）：
     // 1. 输入框 @ 提及的数字人；
@@ -2638,6 +2827,8 @@ export default function App() {
     setHiddenSessionIds((current) => [...new Set([...current, ...ids])]);
     // 已删除会话的置顶记录一并移除，避免置顶区残留幽灵 id
     setPinnedSessionIds((current) => current.filter((id) => !idSet.has(id)));
+    // 未读记录一并清理，避免 localStorage 残留
+    clearSessionUnread(ids);
 
     // 清理本地缓存与归属映射
     setCustomSessionTitles((current) => {
@@ -2692,7 +2883,7 @@ export default function App() {
         setSessionProjectMap((current) => ({ ...current, [freshId]: storedProjectPath(activeProjectPath) }));
       }
     }
-  }, [activeProjectPath, combinedSessions, port]);
+  }, [activeProjectPath, clearSessionUnread, combinedSessions, port]);
 
   const deleteSession = useCallback((session: SessionSummary) => {
     deleteSessionIds([session.sessionId, session.agentId].filter((id): id is string => Boolean(id)));
@@ -3098,6 +3289,7 @@ export default function App() {
         activeProjectPath={activeProjectPath}
         streaming={streaming}
         runningSessionIds={Object.keys(sessionRuns)}
+        unreadSessions={unreadSessions}
         projects={combinedProjects}
         sessions={combinedSessions}
         sessionProjectMap={sessionProjectMap}
@@ -3192,7 +3384,12 @@ export default function App() {
           </header>
         )}
 
-        {error ? <div className="error-banner">{error}</div> : null}
+        {error ? (
+          <div className="error-banner">
+            {error}
+            <button className="error-banner-action" onClick={() => setError("")}>知道了</button>
+          </div>
+        ) : null}
         {serviceStatus !== "running" && serviceError ? (
           <div className="error-banner">
             智能体服务未就绪：{serviceError}。项目与会话数据暂不可用，
