@@ -17,8 +17,8 @@ import {
 import { buildRoomFeed, foldToolRuns } from "../lib/room-feed";
 import type { FeedRow, HumanRef, ToolRun } from "../lib/room-feed";
 import { EChartBlock } from "./EChartBlock";
-import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
-import { FileActionsArea } from "./FileActionsMenu";
+import { ApprovalCard } from "./ApprovalCard";
+import { FileCard, fileCardIcon, InlineFileCards, localFilePathFromHref, type FileCardState } from "./FilePreview";
 import { ArrowDownIcon, ChevronIcon } from "./icons";
 import { AttributionAvatar } from "./AttributionAvatar";
 
@@ -718,28 +718,22 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
             const canPreview = roomArtifactHasPreview(readyArtifact) && availability === "ready" && Boolean(onOpenArtifact);
             // 右键菜单目标：产物绑定且真实存在的本地文件
             const artifactMenuPath = roomArtifactFilePaths(readyArtifact).find((path) => existingArtifactFiles?.has(path)) || null;
-            const disabledTitle = availability === "missing" ? "文件已不存在，无法查看" : "产物内容还在生成，稍后可查看";
-            const metaText = canPreview ? readyArtifact?.kind || item.kindLabel : availability === "missing" ? "文件已不存在" : "内容生成中";
-            const openText = canPreview ? "查看 →" : availability === "missing" ? "已失效" : "稍后可查看";
+            const icon = fileCardIcon({ fileName: readyArtifact?.filePath, kindHint: readyArtifact?.kind || item.kindLabel });
+            const state: FileCardState = availability;
+            const metaText = state === "ready" ? icon.label : state === "pending" ? "内容生成中" : "文件已不存在";
             return (
               <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
-                  <FileActionsArea path={artifactMenuPath}>
-                    <button
-                      type="button"
-                      className={`room-artifact${canPreview ? " clickable" : availability === "missing" ? " missing" : " pending"}`}
-                      title={canPreview ? "点击在右侧查看" : disabledTitle}
-                      disabled={!canPreview}
-                      onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
-                    >
-                      <span className="room-artifact-icon">📄</span>
-                      <div className="room-artifact-text">
-                        <div className="room-artifact-title">{item.title}</div>
-                        <div className="room-artifact-meta">{metaText}</div>
-                      </div>
-                      <span className="room-artifact-open">{openText}</span>
-                    </button>
-                  </FileActionsArea>
+                  <FileCard
+                    title={item.title}
+                    icon={icon}
+                    meta={metaText}
+                    state={state}
+                    actionText="查看 →"
+                    onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
+                    menuPath={artifactMenuPath}
+                    disabledTitle={availability === "missing" ? "文件已不存在，无法查看" : "产物内容还在生成，稍后可查看"}
+                  />
                   <div className="message-meta">
                     <AttributionAvatar
                       name={item.human.name}
@@ -822,42 +816,11 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
         {runtimeApprovals.map((approval) => (
           <article key={approval.approvalId} className="message assistant">
             <div className="message-body">
-              <div className="room-approval">
-                <div className="room-approval-head">
-                  ⚠️ 数字人请求执行需审批操作
-                  {approval.sessionId ? <span className="room-approval-session" title={approval.sessionId}>（{approval.toolName || "工具调用"}）</span> : null}
-                </div>
-                <div className="room-approval-cmd">
-                  {approval.displayCommand
-                    || (approval.arguments ? JSON.stringify(approval.arguments) : approval.toolName || "执行写操作")}
-                </div>
-                <div className="room-approval-actions">
-                  <button
-                    type="button"
-                    className="primary-action compact"
-                    disabled={resolvingApprovalId === approval.approvalId}
-                    onClick={() => resolveApproval(approval.approvalId, "ALLOW_ONCE")}
-                  >
-                    {resolvingApprovalId === approval.approvalId ? "处理中…" : "允许一次"}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-action compact"
-                    disabled={resolvingApprovalId === approval.approvalId}
-                    onClick={() => resolveApproval(approval.approvalId, "ALLOW_SESSION")}
-                  >
-                    允许本会话
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost-action compact danger-text"
-                    disabled={resolvingApprovalId === approval.approvalId}
-                    onClick={() => resolveApproval(approval.approvalId, "DENY")}
-                  >
-                    拒绝
-                  </button>
-                </div>
-              </div>
+              <ApprovalCard
+                approval={approval}
+                resolving={resolvingApprovalId === approval.approvalId}
+                onResolve={(verdict) => resolveApproval(approval.approvalId, verdict)}
+              />
             </div>
           </article>
         ))}

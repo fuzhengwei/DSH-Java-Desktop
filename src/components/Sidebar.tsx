@@ -62,6 +62,8 @@ type SidebarProps = {
   onReorderProjects?: (dragPath: string, targetPath: string, position?: "before" | "after") => void;
   onRemoveProject: (project: WorkspaceEntry) => void;
   onRemoveLocalProject: (project: WorkspaceEntry) => void;
+  /** 清空项目对话：mode="old" 只清非今日的，"all" 清空全部（含确认弹窗后的批量删除） */
+  onClearProjectSessions?: (project: WorkspaceEntry, mode: "old" | "all") => void;
   /** 全部数字人（含项目归属），用于项目行头像堆叠与数量 */
   digitalHumans?: DigitalHuman[];
   /** 勾选/取消勾选：把现有数字人配置到项目（checked=false 时移出项目变全局） */
@@ -125,6 +127,18 @@ function projectName(project: WorkspaceEntry): string {
   return project.name || project.path.split("/").filter(Boolean).pop() || "项目";
 }
 
+/** 会话是否更新于今天（本地时区自然日），用于「清空非今日对话」的筛选 */
+export function sessionIsToday(session: SessionSummary): boolean {
+  const value = session.updatedAt || session.createdAt;
+  if (!value) return false;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return false;
+  const now = new Date();
+  return date.getFullYear() === now.getFullYear()
+    && date.getMonth() === now.getMonth()
+    && date.getDate() === now.getDate();
+}
+
 function sessionTime(session: SessionSummary): string {
   const value = session.updatedAt || session.createdAt;
   if (!value) return "";
@@ -174,12 +188,15 @@ export default function Sidebar({
   onReorderProjects,
   onRemoveProject,
   onRemoveLocalProject,
+  onClearProjectSessions,
   digitalHumans = [],
   onAssignDigitalHuman,
   onCreateDigitalHuman,
 }: SidebarProps) {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
   const [pendingDelete, setPendingDelete] = useState<WorkspaceEntry | null>(null);
+  // 清空项目对话的确认弹窗：记录目标项目、模式与影响条数
+  const [pendingClear, setPendingClear] = useState<{ project: WorkspaceEntry; mode: "old" | "all"; count: number } | null>(null);
   const [renamingSession, setRenamingSession] = useState<SessionSummary | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [pendingDeleteSession, setPendingDeleteSession] = useState<SessionSummary | null>(null);
@@ -701,6 +718,16 @@ export default function Sidebar({
                     onAddDigitalHuman={onAssignDigitalHuman ? () => openAssignPopover(project, projectRowRefs.current.get(project.path) || null) : undefined}
                     onEdit={() => onEditProject(project)}
                     onDelete={() => setPendingDelete(project)}
+                    onClearOldSessions={onClearProjectSessions && projectSessions.some((session) => !sessionIsToday(session))
+                      ? () => setPendingClear({
+                          project,
+                          mode: "old",
+                          count: projectSessions.filter((session) => !sessionIsToday(session)).length,
+                        })
+                      : undefined}
+                    onClearAllSessions={onClearProjectSessions && projectSessions.length > 0
+                      ? () => setPendingClear({ project, mode: "all", count: projectSessions.length })
+                      : undefined}
                   />
                 </div>
 
@@ -864,6 +891,32 @@ export default function Sidebar({
                   }}
                 >
                   删除
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingClear ? (
+        <div className="modal-overlay" onClick={() => setPendingClear(null)}>
+          <div className="modal confirm-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>清空对话</h3>
+            <p>
+              确定清空项目「{sanitizeDisplayName(projectName(pendingClear.project))}」的{pendingClear.mode === "old" ? "非今日" : "全部"}对话吗？
+              共 {pendingClear.count} 条对话将被删除，此操作不可恢复。
+            </p>
+            <div className="modal-actions">
+              <div className="modal-action-group">
+                <button className="ghost-action" onClick={() => setPendingClear(null)}>取消</button>
+                <button
+                  className="danger-action"
+                  onClick={() => {
+                    onClearProjectSessions?.(pendingClear.project, pendingClear.mode);
+                    setPendingClear(null);
+                  }}
+                >
+                  清空
                 </button>
               </div>
             </div>

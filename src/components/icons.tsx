@@ -106,6 +106,15 @@ export function TrashIcon({ className }: IconProps) {
   );
 }
 
+/** 清扫（清空对话）图标：小扫帚 */
+export function BroomIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M19.5 4.5 14 10M13 11l-1.5-1.5a2 2 0 0 0-2.9.1l-4.3 5a2 2 0 0 0 .2 2.8l2.1 2.1a2 2 0 0 0 2.8.2l5-4.3a2 2 0 0 0 .1-2.9zM9.5 14.5 6 18" />
+    </svg>
+  );
+}
+
 export function UsersIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>

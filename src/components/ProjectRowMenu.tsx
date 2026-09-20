@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { DigitalHuman } from "../types";
 import { HumanAvatar } from "./DigitalHumanCatalog";
 import {
+  BroomIcon,
   EditIcon,
   FolderPlusIcon,
   MoreVerticalIcon,
@@ -42,6 +43,10 @@ type MenuProps = {
   onAddDigitalHuman?: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** 清空非今日对话（无可清空内容时不传，菜单项隐藏） */
+  onClearOldSessions?: () => void;
+  /** 清空全部对话（无对话时不传，菜单项隐藏） */
+  onClearAllSessions?: () => void;
   /** 外部需要把 ⋮ 按钮当作其它浮层锚点时使用（如数字人配置浮层） */
   triggerRef?: (node: HTMLButtonElement | null) => void;
 };
@@ -53,6 +58,8 @@ export const ProjectRowMenu = memo(function ProjectRowMenu({
   onAddDigitalHuman,
   onEdit,
   onDelete,
+  onClearOldSessions,
+  onClearAllSessions,
   triggerRef,
 }: MenuProps) {
   const [open, setOpen] = useState(false);
@@ -118,6 +125,23 @@ export const ProjectRowMenu = memo(function ProjectRowMenu({
             <EditIcon className="icon-14" />
             编辑项目
           </button>
+          {(onClearOldSessions || onClearAllSessions) ? (
+            <>
+              <div className="project-menu-divider" aria-hidden="true" />
+              {onClearOldSessions ? (
+                <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onClearOldSessions)}>
+                  <BroomIcon className="icon-14" />
+                  清空非今日对话
+                </button>
+              ) : null}
+              {onClearAllSessions ? (
+                <button type="button" role="menuitem" className="project-menu-item danger" onClick={() => run(onClearAllSessions)}>
+                  <TrashIcon className="icon-14" />
+                  清空全部对话
+                </button>
+              ) : null}
+            </>
+          ) : null}
           <div className="project-menu-divider" aria-hidden="true" />
           <button type="button" role="menuitem" className="project-menu-item danger" onClick={() => run(onDelete)}>
             <TrashIcon className="icon-14" />

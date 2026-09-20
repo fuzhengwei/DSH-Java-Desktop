@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ConversationView from "./components/ConversationView";
-import Sidebar, { type WorkspaceView } from "./components/Sidebar";
+import Sidebar, { sessionIsToday, type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
 import InfoRail from "./components/InfoRail";
 import DigitalHumanCatalog from "./components/DigitalHumanCatalog";
@@ -2607,8 +2607,8 @@ export default function App() {
     });
   }, []);
 
-  const deleteSession = useCallback((session: SessionSummary) => {
-    const ids = [session.sessionId, session.agentId].filter((id): id is string => Boolean(id));
+  // 批量删除会话的核心逻辑：中止流式输出、移入隐藏列表、清理缓存/标题/归属/排序/置顶
+  const deleteSessionIds = useCallback((ids: string[]) => {
     if (ids.length === 0) return;
     const idSet = new Set(ids);
     const isActive = idSet.has(activeSessionRef.current);
@@ -2633,6 +2633,8 @@ export default function App() {
       (item.sessionId && idSet.has(item.sessionId)) || (item.agentId && idSet.has(item.agentId))
     )));
     setHiddenSessionIds((current) => [...new Set([...current, ...ids])]);
+    // 已删除会话的置顶记录一并移除，避免置顶区残留幽灵 id
+    setPinnedSessionIds((current) => current.filter((id) => !idSet.has(id)));
 
     // 清理本地缓存与归属映射
     setCustomSessionTitles((current) => {
@@ -2688,6 +2690,30 @@ export default function App() {
       }
     }
   }, [activeProjectPath, combinedSessions, port]);
+
+  const deleteSession = useCallback((session: SessionSummary) => {
+    deleteSessionIds([session.sessionId, session.agentId].filter((id): id is string => Boolean(id)));
+  }, [deleteSessionIds]);
+
+  // 清空项目对话：按侧边栏同样的归属规则筛出该项目的会话，mode="old" 只删非今日更新的
+  const clearProjectSessions = useCallback((project: WorkspaceEntry, mode: "old" | "all") => {
+    const targetPath = normalizedProjectPath(project.path);
+    if (!targetPath) return;
+    const ids = combinedSessions.flatMap((session) => {
+      const sessionIds = idsOfSession(session);
+      if (sessionIds.length === 0) return [];
+      const hasDefaultProject = sessionIds.some((id) => sessionProjectMapRef.current[id] === "default");
+      const mappedPath = hasDefaultProject
+        ? ""
+        : sessionIds.map((id) => normalizedProjectPath(sessionProjectMapRef.current[id])).find(Boolean)
+          || normalizedProjectPath(session.workspaceId)
+          || "";
+      if (mappedPath !== targetPath) return [];
+      if (mode === "old" && sessionIsToday(session)) return [];
+      return sessionIds;
+    });
+    deleteSessionIds(ids);
+  }, [combinedSessions, deleteSessionIds]);
 
   const pickLocalProject = useCallback(async (parentPath: string) => {
     try {
@@ -3082,6 +3108,7 @@ export default function App() {
         sessionCustomTitles={customSessionTitles}
         onRenameSession={renameSession}
         onDeleteSession={deleteSession}
+        onClearProjectSessions={clearProjectSessions}
         pinnedSessionIds={pinnedSessionIds}
         onTogglePinSession={togglePinSession}
         onMoveSessionToProject={moveSessionToProject}

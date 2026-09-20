@@ -11,6 +11,7 @@ import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
 import { FileActionsArea } from "./FileActionsMenu";
 import { fileTypeMeta, pathBasename, pathDirname, type LocalPathKind } from "../lib/fileType";
 import { EChartBlock } from "./EChartBlock";
+import { ApprovalCard } from "./ApprovalCard";
 
 /** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
 function extractText(node: unknown): string {
@@ -919,44 +920,19 @@ export default function ConversationView({
       ) : null}
       {approvals.length > 0 ? (
         <div className="runtime-approval" aria-live="polite">
-          <div className="runtime-approval-main">
-            {activeHuman ? (
-              <div className="msg-attribution" style={{ marginBottom: 6 }}>
+          {approvals.map((approval) => (
+            <ApprovalCard
+              key={approval.approvalId}
+              approval={approval}
+              resolving={Boolean(resolvingApprovalId)}
+              onResolve={(verdict) => onResolveApproval(approval.approvalId, verdict)}
+              leading={activeHuman ? (
                 <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
                   {activeHuman.avatarRef}
                 </span>
-                <span className="msg-attribution-name">{activeHuman.displayName} 请求确认</span>
-              </div>
-            ) : null}
-            <strong>{approvals[0].toolName || "Tool"}</strong>
-            <pre>
-              {approvals[0].displayCommand
-                || JSON.stringify(approvals[0].arguments || {}, null, 2)}
-            </pre>
-          </div>
-          <div className="runtime-approval-actions">
-            <button
-              className="primary-action compact"
-              disabled={Boolean(resolvingApprovalId)}
-              onClick={() => onResolveApproval(approvals[0].approvalId, "ALLOW_ONCE")}
-            >
-              {resolvingApprovalId === approvals[0].approvalId ? "处理中…" : "允许一次"}
-            </button>
-            <button
-              className="primary-action compact"
-              disabled={Boolean(resolvingApprovalId)}
-              onClick={() => onResolveApproval(approvals[0].approvalId, "ALLOW_SESSION")}
-            >
-              本次对话允许
-            </button>
-            <button
-              className="ghost-action compact"
-              disabled={Boolean(resolvingApprovalId)}
-              onClick={() => onResolveApproval(approvals[0].approvalId, "DENY")}
-            >
-              拒绝
-            </button>
-          </div>
+              ) : null}
+            />
+          ))}
         </div>
       ) : null}
       <div className={variant === "hero" ? "prompt-shell hero" : "prompt-shell chat"}>

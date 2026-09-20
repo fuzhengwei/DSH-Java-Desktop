@@ -1863,46 +1863,12 @@ select:focus-visible {
   45% { opacity: 1; transform: translateY(-2px) scale(1); }
 }
 
+/* 运行时审批容器（普通对话输入框上方）：卡片本体由共享 ApprovalCard（.room-approval）渲染 */
 .runtime-approval {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
+  gap: 8px;
   width: min(820px, calc(100% - 58px));
   margin: 0 auto 10px;
-  padding: 10px 12px;
-  border: 0;
-  border-radius: var(--radius);
-  background: #fff9ef;
-}
-
-.runtime-approval-main {
-  display: grid;
-  min-width: 0;
-  gap: 4px;
-}
-
-.runtime-approval-main strong {
-  font-size: 12px;
-}
-
-.runtime-approval-main pre {
-  max-height: 84px;
-  overflow: auto;
-  margin: 0;
-  padding: 8px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, .72);
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: 11px;
-  line-height: 17px;
-  white-space: pre-wrap;
-}
-
-.runtime-approval-actions {
-  display: flex;
-  gap: 7px;
 }
 
 .composer-dock {
@@ -5553,19 +5519,6 @@ select:focus-visible {
 /* 归属头像：穿插在内容尾部/执行行尾的小头像（名字收进悬浮提示） */
 .room-cursor { color: #2f6fdd; animation: dh-breathe 1s ease-in-out infinite; }
 
-.room-artifact {
-  display: flex; align-items: center; gap: 11px;
-  background: var(--surface); border: 1px solid var(--border-strong);
-  border-radius: 12px; padding: 10px 14px; max-width: 420px;
-  box-shadow: var(--shadow-soft); animation: msg-in .3s ease;
-}
-.room-artifact-icon {
-  width: 34px; height: 34px; border-radius: 9px;
-  background: rgba(65,96,240,.09); display: grid; place-items: center; font-size: 15px;
-}
-.room-artifact-title { font-size: 13px; font-weight: 600; }
-.room-artifact-meta { font-size: 11px; color: var(--text-subtle); }
-
 .room-handoff {
   display: flex; align-items: center; gap: 8px;
   margin: 6px 0; max-width: 660px;
@@ -5675,37 +5628,6 @@ select:focus-visible {
   transition: background .15s, color .15s;
 }
 .room-status-capsule .room-task-cancel:hover { background: rgba(197,48,48,.1); color: var(--danger); }
-
-/* ═══════ 产物卡可点击 ═══════ */
-.room-artifact.clickable {
-  cursor: pointer; text-align: left;
-  border: 1px solid var(--border-strong);
-  transition: border-color .15s, transform .15s, box-shadow .15s;
-}
-.room-artifact.clickable:hover {
-  border-color: rgba(65,96,240,.4);
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-card);
-}
-.room-artifact.pending,
-.room-artifact.missing,
-.room-artifact:disabled {
-  cursor: default;
-  opacity: .72;
-  box-shadow: none;
-}
-.room-artifact.pending .room-artifact-open,
-.room-artifact.missing .room-artifact-open {
-  color: var(--text-subtle);
-}
-.room-artifact.missing .room-artifact-icon {
-  background: rgba(197,48,48,.08);
-}
-.room-artifact-text { flex: 1; min-width: 0; }
-.room-artifact-open {
-  font-size: 12px; color: var(--sidebar-accent); font-weight: 600;
-  white-space: nowrap; margin-left: auto;
-}
 
 /* ═══════ 产物右侧滑出预览（workbuddy 式） ═══════ */
 .artifact-preview {
@@ -6034,21 +5956,7 @@ select:focus-visible {
 
 .gc-artifact { flex-direction: column; align-items: stretch; gap: 7px; min-width: 180px; }
 .gc-artifact-line { font-size: 13px; }
-.gc-artifact-card {
-  display: inline-flex; align-items: center; gap: 9px;
-  background: #f7f7f8; border-radius: 8px; padding: 8px 10px;
-  transition: background .13s;
-}
-.gc-bubble.gc-clickable:hover .gc-artifact-card { background: #f0f0f2; }
-.gc-artifact-pending {
-  cursor: default;
-  opacity: .75;
-}
-.gc-artifact-pending .gc-artifact-card { background: #f2f2f3; }
-.gc-artifact-icon { font-size: 17px; }
-.gc-artifact-text { display: flex; flex-direction: column; min-width: 0; }
-.gc-artifact-title { font-size: 12.5px; font-weight: 600; }
-.gc-artifact-meta { font-size: 10.5px; color: #b0b0b5; }
+/* 交付卡片本体由统一 .file-card.nested 渲染 */
 
 .gc-approval { border-color: rgba(183,121,31,.3); background: #fffbf2; }
 .gc-error { background: #fff5f5; color: var(--danger); }
@@ -6543,38 +6451,69 @@ select:focus-visible {
   display: flex; flex-wrap: wrap; gap: 8px;
   margin-top: 10px;
 }
-.inline-file-trigger-wrap {
-  display: inline-flex; align-items: stretch; gap: 0;
+
+/* ── 统一文件卡片：对话内嵌文件 / 数字人产物 / 群聊交付物共用 ── */
+.file-card-row {
+  display: inline-flex; align-items: stretch;
+  max-width: 100%;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   overflow: hidden;
   background: var(--surface);
 }
-.inline-file-trigger {
-  display: inline-flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
+.file-card {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 8px 12px 8px 8px;
   border: 0; background: transparent; cursor: pointer;
-  font-size: 12.5px; color: var(--text);
+  text-align: left; min-width: 0; max-width: 360px;
+  font-family: inherit;
   transition: background .12s ease;
 }
-.inline-file-trigger:hover { background: rgba(65,96,240,.06); }
-.inline-file-trigger:disabled { cursor: default; opacity: .65; background: var(--surface-2); }
-.inline-file-name { font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inline-file-hint { font-size: 11px; color: var(--text-subtle); }
-.inline-file-size {
-  font-size: 11px;
-  color: var(--text-subtle);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+.file-card.clickable:hover { background: rgba(65,96,240,.05); }
+.file-card:disabled { cursor: default; }
+.file-card.pending, .file-card.missing { opacity: .75; }
+/* nested：嵌在群聊交付气泡内的只读卡片 */
+.file-card.nested {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface-raised, #f6f7f9);
+  min-width: 0;
 }
-.inline-file-dock {
+.gc-artifact .file-card.nested { align-self: stretch; }
+.file-card-icon {
+  display: inline-grid; place-items: center; flex-shrink: 0;
+  width: 36px; height: 36px; border-radius: 9px;
+  font-size: 10px; font-weight: 800; color: #fff;
+  letter-spacing: .4px; line-height: 1;
+  background: linear-gradient(135deg, #5b74f5, #4160f0);
+}
+.file-card.missing .file-card-icon, .file-card.pending .file-card-icon { filter: grayscale(.4) opacity(.8); }
+.file-card-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.file-card-title {
+  font-size: 13px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-card-meta {
+  font-size: 11px; color: var(--text-subtle);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.file-card-action {
+  font-size: 12px; font-weight: 600; color: var(--sidebar-accent, #4160f0);
+  white-space: nowrap; flex-shrink: 0;
+}
+.file-card.missing .file-card-action, .file-card.pending .file-card-action {
+  color: var(--text-subtle); font-weight: 500;
+}
+.file-card-dock {
   border: 0; border-left: 1px solid var(--border);
-  padding: 8px 10px; background: transparent; cursor: pointer;
+  padding: 0 11px; background: transparent; cursor: pointer;
   font-size: 11.5px; color: var(--sidebar-accent, #4160f0); font-weight: 600;
   transition: background .12s ease;
   white-space: nowrap;
 }
-.inline-file-dock:hover { background: rgba(65,96,240,.08); }
+.file-card-dock:hover { background: rgba(65,96,240,.08); }
+/* 类型色块：badge（预览头）与卡片图标共用同一套渐变 */
 .file-kind-badge {
   display: inline-grid; place-items: center;
   min-width: 34px; height: 20px; padding: 0 6px;
@@ -6583,13 +6522,15 @@ select:focus-visible {
   background: linear-gradient(135deg, #5b74f5, #4160f0);
   letter-spacing: .3px;
 }
-.file-kind-badge.kind-docx { background: linear-gradient(135deg, #2b7cd3, #185abd); }
-.file-kind-badge.kind-xlsx { background: linear-gradient(135deg, #2fa163, #217346); }
-.file-kind-badge.kind-pdf { background: linear-gradient(135deg, #e05555, #c43a3a); }
-.file-kind-badge.kind-image { background: linear-gradient(135deg, #9a6ff0, #7c4fe0); }
-.file-kind-badge.kind-code { background: linear-gradient(135deg, #5a6b7d, #3e4d5e); }
-.file-kind-badge.kind-markdown { background: linear-gradient(135deg, #4a5568, #2d3748); }
-.file-kind-badge.kind-drawio { background: linear-gradient(135deg, #f0873a, #dd6b20); }
+.file-kind-badge.kind-docx, .file-card-icon.kind-docx { background: linear-gradient(135deg, #2b7cd3, #185abd); }
+.file-kind-badge.kind-xlsx, .file-card-icon.kind-xlsx { background: linear-gradient(135deg, #2fa163, #217346); }
+.file-kind-badge.kind-pdf, .file-card-icon.kind-pdf { background: linear-gradient(135deg, #e05555, #c43a3a); }
+.file-kind-badge.kind-image, .file-card-icon.kind-image { background: linear-gradient(135deg, #9a6ff0, #7c4fe0); }
+.file-kind-badge.kind-code, .file-card-icon.kind-code { background: linear-gradient(135deg, #5a6b7d, #3e4d5e); }
+.file-kind-badge.kind-markdown, .file-card-icon.kind-markdown { background: linear-gradient(135deg, #4a5568, #2d3748); }
+.file-kind-badge.kind-drawio, .file-card-icon.kind-drawio { background: linear-gradient(135deg, #f0873a, #dd6b20); }
+.file-card-icon.kind-text { background: linear-gradient(135deg, #7a8699, #5b6678); }
+.file-card-icon.kind-unknown { background: linear-gradient(135deg, #98a0ad, #7a8290); }
 
 /* ── draw.io 预览/编辑器 ── */
 .drawio-head {

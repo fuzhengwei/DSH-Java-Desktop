@@ -6,7 +6,8 @@ import { buildRoomFeed, truncateText } from "../lib/room-feed";
 import { buildChatFeed, toolDetailLine, toolSegmentVoice } from "../lib/room-chat";
 import type { ChatItem } from "../lib/room-chat";
 import { HumanAvatar } from "./DigitalHumanCatalog";
-import { ArrowRightIcon, ChevronIcon, UserIcon } from "./icons";
+import { ChevronIcon, UserIcon } from "./icons";
+import { FileCard, fileCardIcon } from "./FilePreview";
 import { FileActionsArea } from "./FileActionsMenu";
 
 type Props = {
@@ -161,6 +162,7 @@ const GroupChatView = memo(function GroupChatView({ port, roomId, humans, onFocu
               const canPreview = Boolean(readyArtifact && onOpenArtifact);
               // 右键菜单目标：产物绑定的本地文件
               const artifactMenuPath = readyArtifact?.filePath?.trim() || null;
+              const icon = fileCardIcon({ fileName: readyArtifact?.filePath, kindHint: readyArtifact?.kind || item.kindLabel });
               // 交付 → 一句「整理好了」+ 可点的产物卡，点击右侧滑出预览
               return (
                 <div key={item.id} className="gc-row">
@@ -170,20 +172,19 @@ const GroupChatView = memo(function GroupChatView({ port, roomId, humans, onFocu
                     <FileActionsArea path={artifactMenuPath}>
                       <button
                         type="button"
-                        className={`gc-bubble gc-artifact${canPreview ? " gc-clickable" : " gc-artifact-pending"}`}
+                        className={`gc-bubble gc-artifact${canPreview ? " gc-clickable" : ""}`}
                         onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
                         disabled={!canPreview}
                         title={canPreview ? "查看交付物（右键可打开/另存为）" : "产物内容还在生成，稍后可查看"}
                       >
                         <span className="gc-artifact-line">{canPreview ? "整理好了，你看看 👇" : "产物记录到了，内容还在生成…"}</span>
-                        <span className="gc-artifact-card">
-                          <span className="gc-artifact-icon">📄</span>
-                          <span className="gc-artifact-text">
-                            <span className="gc-artifact-title">{truncateText(item.title, 20)}</span>
-                            <span className="gc-artifact-meta">{canPreview ? readyArtifact?.kind || item.kindLabel : "暂不可查看"}</span>
-                          </span>
-                          {canPreview ? <ArrowRightIcon className="icon-12" /> : null}
-                        </span>
+                        <FileCard
+                          nested
+                          title={item.title}
+                          icon={icon}
+                          meta={canPreview ? icon.label : "暂不可查看"}
+                          state={canPreview ? "ready" : "pending"}
+                        />
                       </button>
                     </FileActionsArea>
                   </div>

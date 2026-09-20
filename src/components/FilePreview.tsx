@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import hljs from "highlight.js/lib/common";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
@@ -179,22 +179,107 @@ function decodeLocalPath(path: string): string {
   }
 }
 
-/** 扩展名徽标文案：代码类显示大写扩展名（TS/TSX/JAVA…），其余按类型显示中文 */
-function badgeLabelOf(name: string): { text: string; kind: FileKind } {
-  const kind = fileKindOf(name);
-  if (kind === "code") {
-    const ext = (name.split(".").pop() || "").toUpperCase();
-    return { text: ext.slice(0, 5) || "代码", kind };
-  }
-  if (kind === "unknown") return { text: "文件", kind };
-  return { text: KIND_LABEL[kind], kind };
-}
-
 function formatFileSize(size: number | null): string {
   if (size == null || !Number.isFinite(size)) return "";
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// ── 统一文件卡片 ─────────────────────────────────────────────
+// 对话内嵌文件、数字人房间产物、群聊交付物共用同一套卡片视觉：
+// 类型色块图标（代码类显示大写扩展名）+ 文件名 + 类型/大小元信息 + 动作文案。
+
+/** 图标色块上的短文案 */
+const KIND_ICON_TEXT: Record<FileKind, string> = {
+  markdown: "MD", text: "TXT", code: "CODE", docx: "DOC", xlsx: "XLS",
+  image: "IMG", pdf: "PDF", html: "HTML", drawio: "DRAW", unknown: "FILE",
+};
+
+/**
+ * 按文件名（或产物 kind 提示）推导卡片的图标、类型与中文标签。
+ *  - fileName 优先：真实文件能拿到精确扩展名（代码类显示 TS/JAVA 等大写扩展名）；
+ *  - 无文件名时用 kindHint（artifact.kind，如 "markdown"/"echarts"）近似推断。
+ */
+export function fileCardIcon(opts: { fileName?: string; kindHint?: string }): { text: string; kind: FileKind; label: string } {
+  const fileName = (opts.fileName || "").trim();
+  if (fileName) {
+    const kind = fileKindOf(fileName);
+    const ext = (fileName.split(".").pop() || "").toLowerCase();
+    if (kind === "code") {
+      const lang = languageFromExtension(fileName);
+      const label = lang ? lang.charAt(0).toUpperCase() + lang.slice(1) : "代码";
+      return { text: ext.slice(0, 4).toUpperCase() || "CODE", kind, label };
+    }
+    if (kind === "xlsx" && (ext === "csv" || ext === "tsv")) return { text: "CSV", kind, label: "表格" };
+    return { text: KIND_ICON_TEXT[kind], kind, label: KIND_LABEL[kind] };
+  }
+  const hint = (opts.kindHint || "").trim();
+  if (hint) {
+    const mapped = fileKindOf(`x.${hint.toLowerCase().replace(/[^a-z0-9]/g, "")}`);
+    if (mapped !== "unknown") return { text: KIND_ICON_TEXT[mapped], kind: mapped, label: KIND_LABEL[mapped] };
+    if (/echart|chart/i.test(hint)) return { text: "图表", kind: "image", label: "图表" };
+    return { text: hint.slice(0, 4).toUpperCase(), kind: "unknown", label: hint };
+  }
+  return { text: "FILE", kind: "unknown", label: "文件" };
+}
+
+export type FileCardState = "ready" | "pending" | "missing";
+
+/**
+ * 统一文件卡片。三种用法：
+ *  - 默认（button）：自带点击 + 右键菜单，消息流内直接使用；
+ *  - dock：传入 dock 节点（如「内嵌预览」按钮）拼在主按钮右侧，共享外框；
+ *  - nested：渲染为 span，嵌在另一个按钮内部（群聊交付卡），点击交给外层。
+ */
+export function FileCard(props: {
+  title: string;
+  icon: { text: string; kind: FileKind };
+  /** 第二行元信息：类型 · 大小 / 生成中 / 已失效（由调用方按状态组好） */
+  meta: string;
+  state?: FileCardState;
+  /** 就绪态动作文案，默认「查看 →」 */
+  actionText?: string;
+  onClick?: () => void;
+  /** 右键菜单绑定的真实文件路径 */
+  menuPath?: string | null;
+  /** 不可点时的悬浮提示（生成中 / 已失效原因） */
+  disabledTitle?: string;
+  dock?: ReactNode;
+  nested?: boolean;
+}) {
+  const { title, icon, meta, state = "ready", actionText, onClick, menuPath = null, disabledTitle, dock, nested } = props;
+  const clickable = !nested && state === "ready" && Boolean(onClick);
+  const action = state === "pending" ? "稍后可查看" : state === "missing" ? "已失效" : (actionText || "查看 →");
+  const body = (
+    <>
+      <span className={`file-card-icon kind-${icon.kind}`} aria-hidden="true">{icon.text}</span>
+      <span className="file-card-text">
+        <span className="file-card-title" title={title}>{title}</span>
+        <span className="file-card-meta">{meta}</span>
+      </span>
+      <span className="file-card-action">{action}</span>
+    </>
+  );
+  if (nested) {
+    return <span className={`file-card nested${state !== "ready" ? ` ${state}` : ""}`}>{body}</span>;
+  }
+  return (
+    <FileActionsArea path={menuPath}>
+      <span className="file-card-row">
+        <button
+          type="button"
+          className={`file-card${clickable ? " clickable" : state !== "ready" ? ` ${state}` : ""}`}
+          title={clickable ? `${title}（右键可打开/另存为）` : (disabledTitle || title)}
+          disabled={!clickable}
+          onClick={clickable ? onClick : undefined}
+        >
+          {body}
+        </button>
+        {dock}
+      </span>
+    </FileActionsArea>
+  );
 }
 
 export const FilePreview = function FilePreview(props: Props) {
@@ -515,40 +600,34 @@ export function InlineFileCards({ content, onOpenFile, basePath }: {
 function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size: number | null; exists: boolean; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const name = path.split("/").filter(Boolean).pop() || path;
-  const badge = badgeLabelOf(name);
+  const icon = fileCardIcon({ fileName: name });
   const sizeLabel = formatFileSize(size);
   // html/pdf 这类整页内容内嵌展示又窄又挤：有右侧面板时隐藏内嵌入口，主点击直接在右侧打开（与 Excel 一致）
-  const fullPageKind = ["html", "pdf"].includes(badge.kind);
+  const fullPageKind = ["html", "pdf"].includes(icon.kind);
   const allowInline = !onOpenFile || !fullPageKind;
   // 有右侧面板回调时主点击直接在面板打开（对齐文件产物的查看体验），否则内嵌展开
   const handleMainClick = () => {
     if (onOpenFile) onOpenFile(path);
     else setOpen(true);
   };
-  if (!open) {
-    return (
-      <FileActionsArea path={exists ? path : null}>
-        <span className="inline-file-trigger-wrap">
-          <button
-            type="button"
-            className="inline-file-trigger"
-            onClick={handleMainClick}
-            title={exists ? `${path}（右键可打开/另存为）` : `${path}（文件已不存在）`}
-            disabled={!exists}
-          >
-            <span className={`file-kind-badge kind-${badge.kind}`}>{badge.text}</span>
-            <span className="inline-file-name">{name}</span>
-            {sizeLabel ? <span className="inline-file-size">{sizeLabel}</span> : null}
-            <span className="inline-file-hint">{exists ? (onOpenFile ? "点击在右侧打开" : "点击预览") : "文件不存在"}</span>
-          </button>
-          {exists && allowInline ? (
-            <button type="button" className="inline-file-dock" onClick={() => setOpen(true)} title="在对话内展开预览">
-              内嵌预览 ⌄
-            </button>
-          ) : null}
-        </span>
-      </FileActionsArea>
-    );
+  if (open) {
+    return <FilePreview path={path} compact onClose={() => setOpen(false)} />;
   }
-  return <FilePreview path={path} compact onClose={() => setOpen(false)} />;
+  return (
+    <FileCard
+      title={name}
+      icon={icon}
+      meta={exists ? [icon.label, sizeLabel].filter(Boolean).join(" · ") : "文件已不存在"}
+      state={exists ? "ready" : "missing"}
+      actionText={onOpenFile ? "查看 →" : "预览"}
+      onClick={exists ? handleMainClick : undefined}
+      menuPath={exists ? path : null}
+      disabledTitle={`${path}（文件已不存在）`}
+      dock={exists && allowInline ? (
+        <button type="button" className="file-card-dock" onClick={() => setOpen(true)} title="在对话内展开预览">
+          内嵌预览
+        </button>
+      ) : null}
+    />
+  );
 }
