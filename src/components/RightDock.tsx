@@ -142,15 +142,26 @@ export function DockTabBar({
 type Props = {
   /** 各 Tab 的内容（由 App 按 activeTab 渲染传入） */
   children: ReactNode;
+  /** 目录树 + 文件分屏模式：进入时若 Dock 过窄则自动拓宽一次，保证文件区可读 */
+  splitMode?: boolean;
 };
 
 /** 右侧面板：只承载内容主体；Tab 栏统一放在顶部 topbar（见 DockTabBar） */
-const RightDock = memo(function RightDock({ children }: Props) {
+const RightDock = memo(function RightDock({ children, splitMode }: Props) {
   const [dockWidth, setDockWidth] = useState(readInitialDockWidth);
 
   useEffect(() => {
     window.localStorage.setItem(DOCK_WIDTH_STORAGE_KEY, String(dockWidth));
   }, [dockWidth]);
+
+  // 进入分屏时 Dock 不足 640px 则拓宽到 680px（只在该次进入时触发，不覆盖用户手动调整）
+  const splitModeRef = useRef(false);
+  useEffect(() => {
+    if (splitMode && !splitModeRef.current) {
+      setDockWidth((width) => (width < 640 ? clampDockWidth(680) : width));
+    }
+    splitModeRef.current = Boolean(splitMode);
+  }, [splitMode]);
 
   useEffect(() => {
     const handleResize = () => setDockWidth((width) => clampDockWidth(width));

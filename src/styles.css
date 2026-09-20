@@ -1356,6 +1356,7 @@ select:focus-visible {
 }
 
 .dir-tree-scroll {
+  flex: 1;
   overflow-y: auto;
   min-height: 0;
   padding: 2px 0 6px;
@@ -6052,7 +6053,7 @@ select:focus-visible {
   user-select: none !important;
 }
 .right-dock-body {
-  flex: 1; overflow: hidden; display: flex; flex-direction: column;
+  flex: 1; overflow: hidden; display: flex; flex-direction: row;
   min-height: 0; background: var(--surface);
 }
 /* 让嵌入的面板填满 dock body 并去掉自身边框/阴影/冗余头 */
@@ -6063,6 +6064,53 @@ select:focus-visible {
 }
 .right-dock-body .collab-panel-body { padding-top: 16px; }
 .right-dock-body .info-rail { flex: 1; }
+/* 目录树 + 文件预览分屏：树面板收窄在左，文件预览占余下空间在右 */
+.right-dock-body .dock-pane.info-dock-pane.tree-split {
+  border-right: 0;
+  overflow: hidden;
+}
+.right-dock-body .dock-pane.file-dock-pane .file-preview {
+  flex: 1; min-height: 0; height: auto;
+}
+/* 分屏中间分隔条：拖动调整目录树宽度 */
+.tree-split-handle {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  border-left: 1px solid var(--border);
+  transition: background .13s;
+}
+.tree-split-handle:hover {
+  background: var(--sidebar-accent);
+}
+/* 分屏模式：目录树铺满面板剩余高度（工作区区块弹性伸展，树容器解除 340px 上限） */
+.rail-body.tree-fill {
+  gap: 12px;
+}
+.rail-body.tree-fill > .rail-section-grow {
+  flex: 1 0 auto;
+  min-height: 200px;
+}
+/* 主树：「当前工作区」区块的直接子节点 */
+.rail-body.tree-fill .rail-section-grow > .rail-dir-tree-wrap {
+  flex: 1;
+  max-height: none;
+}
+/* 子工程树：嵌在 rail-kv > .rail-project-block 内，逐级打通 flex 链让树撑满 */
+.rail-body.tree-fill .rail-section-grow > .rail-kv {
+  flex: 1;
+  min-height: 0;
+}
+.rail-body.tree-fill .rail-kv > .rail-project-block {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.rail-body.tree-fill .rail-project-block > .rail-dir-tree-wrap {
+  flex: 1;
+  max-height: none;
+}
 
 /* 协作面板：头部内嵌加入按钮 */
 .collab-head-invite {
@@ -6903,6 +6951,35 @@ select:focus-visible {
 }
 .file-preview-error { color: #c43a3a; }
 .file-preview-plain { margin: 0; font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+
+/* ── 二进制文件预览（.class/.jar 等）：概要 + 十六进制 + 字符串 ── */
+.file-preview-binary { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.file-preview-binary .binary-summary {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 12px;
+  background: var(--surface-raised, #f6f7f9);
+  border: 1px solid var(--border); border-radius: 10px;
+  font-size: 12.5px; color: var(--text);
+}
+.file-preview-binary .binary-section-title { font-size: 11.5px; font-weight: 600; color: var(--text-subtle); }
+.file-preview-binary .binary-hex {
+  margin: 0; padding: 12px;
+  background: var(--surface-raised, #f6f7f9);
+  border: 1px solid var(--border); border-radius: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px; line-height: 1.6;
+  overflow: auto; white-space: pre; color: var(--text);
+}
+.file-preview-binary .binary-strings {
+  margin: 0; padding: 8px 12px 8px 28px;
+  background: var(--surface-raised, #f6f7f9);
+  border: 1px solid var(--border); border-radius: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11.5px; line-height: 1.7;
+  overflow: auto; max-height: 320px;
+  word-break: break-all; color: var(--text);
+}
+.file-preview-binary .binary-more { font-size: 11.5px; color: var(--text-subtle); }
 .file-preview-code {
   margin: 0; padding: 12px;
   background: var(--surface-raised, #f6f7f9);

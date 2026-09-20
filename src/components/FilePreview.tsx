@@ -18,7 +18,7 @@ import { DrawioPreview } from "./DrawioPreview";
  *  - 其它 → 提示不支持
  */
 
-export type FileKind = "markdown" | "text" | "code" | "docx" | "xlsx" | "image" | "pdf" | "html" | "drawio" | "unknown";
+export type FileKind = "markdown" | "text" | "code" | "docx" | "xlsx" | "image" | "pdf" | "html" | "drawio" | "binary" | "unknown";
 
 export function fileKindOf(name: string): FileKind {
   const ext = (name.split(".").pop() || "").toLowerCase();
@@ -32,6 +32,10 @@ export function fileKindOf(name: string): FileKind {
   if (ext === "pdf") return "pdf";
   if (ext === "html" || ext === "htm") return "html";
   if (ext === "drawio") return "drawio";
+  // 已知二进制：十六进制 + 字符串视图（如 .class 可看到常量池里的类名/方法名）
+  if (["class", "jar", "war", "so", "dylib", "dll", "exe", "bin", "o", "a",
+    "zip", "tar", "gz", "7z", "rar", "bz2", "xz",
+    "woff", "woff2", "ttf", "otf", "eot", "mp4", "mp3", "wav", "mov", "webm"].includes(ext)) return "binary";
   return "unknown";
 }
 
@@ -68,6 +72,7 @@ const KIND_LABEL: Record<FileKind, string> = {
   pdf: "PDF",
   html: "网页",
   drawio: "Draw.io",
+  binary: "二进制",
   unknown: "文件",
 };
 
@@ -193,7 +198,7 @@ function formatFileSize(size: number | null): string {
 /** 图标色块上的短文案 */
 const KIND_ICON_TEXT: Record<FileKind, string> = {
   markdown: "MD", text: "TXT", code: "CODE", docx: "DOC", xlsx: "XLS",
-  image: "IMG", pdf: "PDF", html: "HTML", drawio: "DRAW", unknown: "FILE",
+  image: "IMG", pdf: "PDF", html: "HTML", drawio: "DRAW", binary: "BIN", unknown: "FILE",
 };
 
 /**
@@ -298,6 +303,7 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
   const kind = useMemo(() => fileKindOf(displayName), [displayName]);
   const [text, setText] = useState("");
   const [binary, setBinary] = useState("");
+  const [binaryFallback, setBinaryFallback] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -305,17 +311,27 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
     let cancelled = false;
     setLoading(true);
     setError("");
+    setBinaryFallback(false);
     void (async () => {
       try {
-        if (kind === "docx" || kind === "xlsx" || kind === "image" || kind === "pdf" || kind === "html") {
+        if (kind === "docx" || kind === "xlsx" || kind === "image" || kind === "pdf" || kind === "html" || kind === "binary") {
           const base64 = await invoke<string>("read_local_file_base64", { path });
           if (cancelled) return;
           setBinary(base64);
           // docx/xlsx 需要解析库，动态加载（二进制先存着，交给 lib 渲染）
         } else {
-          const content = await invoke<string>("read_local_text_file", { path });
-          if (cancelled) return;
-          setText(content);
+          try {
+            const content = await invoke<string>("read_local_text_file", { path });
+            if (cancelled) return;
+            setText(content);
+          } catch (textError) {
+            // 无扩展名的二进制（非法 UTF-8）等：降级为十六进制视图而不是报错
+            const base64 = await invoke<string>("read_local_file_base64", { path });
+            if (cancelled) return;
+            setBinary(base64);
+            setBinaryFallback(true);
+            void textError;
+          }
         }
       } catch (caught) {
         if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
@@ -329,7 +345,7 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
   const header = (
     <FileActionsArea path={path}>
       <div className={`file-preview-head${compact ? " compact" : ""}`}>
-        <span className={`file-kind-badge kind-${kind}`}>{KIND_LABEL[kind]}</span>
+        <span className={`file-kind-badge kind-${binaryFallback ? "binary" : kind}`}>{KIND_LABEL[binaryFallback ? "binary" : kind]}</span>
         <span className="file-preview-name" title={path}>{displayName}</span>
         {onClose ? (
           <button type="button" className="file-preview-close" onClick={onClose} aria-label="关闭预览">✕</button>
@@ -377,6 +393,8 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
           <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
         ) : kind === "html" ? (
           <HtmlPreview base64={binary} name={displayName} />
+        ) : kind === "binary" || binaryFallback ? (
+          <BinaryView base64={binary} />
         ) : (
           <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
         )}
@@ -391,6 +409,100 @@ function binaryToText(base64: string): string {
   } catch {
     return "";
   }
+}
+
+/** 十六进制视图的字节上限（前端渲染性能考虑，.class 一般远小于此） */
+const HEX_DUMP_LIMIT = 4096;
+
+/**
+ * 二进制文件预览：文件概要（大小 / 魔数 / class 版本）+ 十六进制转储（前 4KB）
+ * + 可打印字符串（≥5 字符，前 100 条）。对 .class 而言字符串区就是常量池，
+ * 能直接看到类名、方法名、描述符等关键信息。
+ */
+function BinaryView({ base64 }: { base64: string }) {
+  const bytes = useMemo(() => {
+    try {
+      const raw = atob(base64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    } catch {
+      return new Uint8Array(0);
+    }
+  }, [base64]);
+
+  const summary = useMemo(() => {
+    const lines: string[] = [];
+    lines.push(`大小：${formatFileSize(bytes.length)}`);
+    if (bytes.length >= 4) {
+      const magic = Array.from(bytes.slice(0, 4)).map((b) => b.toString(16).padStart(2, "0")).join(" ").toUpperCase();
+      if (magic === "CA FE BA BE") {
+        const major = bytes.length >= 8 ? (bytes[6] << 8) | bytes[7] : 0;
+        const javaVersion = major >= 45 ? major - 44 : 0; // major 52 → Java 8，以此类推
+        lines.push(`类型：Java 字节码（CAFEBABE，class 版本 ${major}${javaVersion > 0 ? ` / Java ${javaVersion}` : ""}）`);
+      } else {
+        lines.push(`魔数：${magic}`);
+      }
+    }
+    return lines;
+  }, [bytes]);
+
+  const hexDump = useMemo(() => {
+    const slice = bytes.slice(0, HEX_DUMP_LIMIT);
+    const rows: string[] = [];
+    for (let offset = 0; offset < slice.length; offset += 16) {
+      const chunk = Array.from(slice.slice(offset, offset + 16));
+      const hex = chunk.map((b) => b.toString(16).padStart(2, "0")).join(" ").padEnd(47, " ");
+      const ascii = chunk.map((b) => (b >= 0x20 && b < 0x7f ? String.fromCharCode(b) : ".")).join("");
+      rows.push(`${offset.toString(16).padStart(8, "0")}  ${hex}  |${ascii}|`);
+    }
+    return rows.join("\n");
+  }, [bytes]);
+
+  const strings = useMemo(() => {
+    const found: string[] = [];
+    const scanLimit = Math.min(bytes.length, 1024 * 1024); // 大文件只扫前 1MB，防卡顿
+    let run = "";
+    for (let i = 0; i < scanLimit && found.length < 100; i++) {
+      const b = bytes[i];
+      if (b >= 0x20 && b < 0x7f) {
+        run += String.fromCharCode(b);
+      } else {
+        if (run.length >= 5) found.push(run);
+        run = "";
+      }
+    }
+    if (run.length >= 5 && found.length < 100) found.push(run);
+    return found;
+  }, [bytes]);
+
+  if (bytes.length === 0) {
+    return <div className="file-preview-error">文件为空或读取失败</div>;
+  }
+  return (
+    <div className="file-preview-binary">
+      <div className="binary-summary">
+        {summary.map((line) => (
+          <div key={line}>{line}</div>
+        ))}
+      </div>
+      <div className="binary-section-title">十六进制（前 {Math.min(bytes.length, HEX_DUMP_LIMIT)} 字节）</div>
+      <pre className="binary-hex">{hexDump}</pre>
+      {strings.length > 0 ? (
+        <>
+          <div className="binary-section-title">内嵌字符串（前 {strings.length} 条{bytes.length > 1024 * 1024 ? "，扫描前 1MB" : ""}）</div>
+          <ul className="binary-strings">
+            {strings.map((entry, index) => (
+              <li key={`${index}-${entry}`} className="binary-string-item">{entry}</li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+      {bytes.length > HEX_DUMP_LIMIT ? (
+        <div className="binary-more">仅展示前 {HEX_DUMP_LIMIT / 1024}KB，完整内容可在系统中打开</div>
+      ) : null}
+    </div>
+  );
 }
 
 /** 匹配引用 echarts 的 CDN script 标签（如 jsdelivr / unpkg / cdnjs） */

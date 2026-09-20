@@ -29,6 +29,8 @@ type InfoRailProps = {
   onSwitchProjectBranch?: (project: WorkspaceEntry, branch: string) => void;
   /** 目录树点击文件 → 右侧 Dock 打开内容预览 */
   onOpenFile?: (path: string) => void;
+  /** 分屏模式（目录树 + 文件并排）：目录树区域铺满面板剩余高度，方便点击 */
+  treeFill?: boolean;
 };
 
 type RailTab = "runs" | "files";
@@ -247,6 +249,7 @@ export default function InfoRail(props: InfoRailProps) {
     switchingBranchPath,
     onSwitchProjectBranch,
     onOpenFile,
+    treeFill = false,
   } = props;
   // 未传 active 时沿用 open（独立面板语义）
   const isActive = props.active ?? open;
@@ -417,8 +420,8 @@ export default function InfoRail(props: InfoRailProps) {
         </div>
 
         {tab === "runs" ? (
-          <div className="rail-body">
-            <section className="rail-section">
+          <div className={`rail-body${treeFill ? " tree-fill" : ""}`}>
+            <section className={`rail-section${treeFill ? " rail-section-grow" : ""}`}>
               <div className="rail-section-head">
                 <FolderIcon className="rail-section-icon" />
                 <span>当前工作区</span>

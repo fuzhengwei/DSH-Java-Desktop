@@ -830,7 +830,15 @@ export default function App() {
     setActiveDockTab(tab);
     setDockOpen((open) => !(open && activeDockTab === tab));
   }, [activeDockTab]);
-  const [artifactTabs, setArtifactTabs] = useState<Array<{ id: string; label: string; kind?: "artifact" | "file" }>>([]);
+  const [artifactTabs, setArtifactTabs] = useState<Array<{ id: string; label: string; kind?: "artifact" | "file"; fromTree?: boolean }>>([]);
+  // 分屏时目录树面板宽度（localStorage 持久化，拖拽中间分隔条调整）
+  const [treeSplitWidth, setTreeSplitWidth] = useState(() => {
+    const stored = Number(window.localStorage.getItem("dsh:tree-split-width"));
+    return Number.isFinite(stored) && stored >= 180 && stored <= 520 ? stored : 264;
+  });
+  useEffect(() => {
+    window.localStorage.setItem("dsh:tree-split-width", String(treeSplitWidth));
+  }, [treeSplitWidth]);
   const [humanMentions, setHumanMentions] = useState<DigitalHuman[]>([]);
   const [activeHumanId, setActiveHumanId] = useState("");
   const humanMentionsRef = useRef<DigitalHuman[]>([]);
@@ -1391,15 +1399,68 @@ export default function App() {
     setDockOpen(true);
   }, []);
 
-  /** 独立文件渲染：任意本地文件（md/word/excel/pdf/图片）在右侧面板打开 */
-  const openFileTab = useCallback((filePath: string) => {
+  /** 独立文件渲染：任意本地文件（md/word/excel/pdf/图片）在右侧面板打开。
+   *  fromTree：从工程目录树点开 → 分屏展示（目录树在左、文件在右）。 */
+  const openFileTab = useCallback((filePath: string, opts?: { fromTree?: boolean }) => {
     const label = filePath.split("/").filter(Boolean).pop() || filePath;
-    setArtifactTabs((current) => (
-      current.some((tab) => tab.id === filePath) ? current : [...current, { id: filePath, label, kind: "file" }]
-    ));
+    setArtifactTabs((current) => {
+      const existing = current.find((tab) => tab.kind === "file" && tab.id === filePath);
+      if (existing) {
+        // 已存在的文件 Tab 首次从目录树打开时升级为分屏态
+        return opts?.fromTree && !existing.fromTree
+          ? current.map((tab) => (tab === existing ? { ...tab, fromTree: true } : tab))
+          : current;
+      }
+      return [...current, { id: filePath, label, kind: "file", fromTree: opts?.fromTree }];
+    });
     setActiveDockTab(`file:${filePath}`);
     setDockOpen(true);
   }, []);
+
+  /** 目录树点击文件 → 分屏打开（保留工程目录树可见） */
+  const openTreeFileTab = useCallback((filePath: string) => {
+    openFileTab(filePath, { fromTree: true });
+  }, [openFileTab]);
+
+  /** 当前激活的文件 Tab 是否由目录树打开（决定 Dock 是否分屏展示目录树） */
+  const treeFileSplitActive = activeDockTab.startsWith("file:") && artifactTabs.some(
+    (tab) => tab.kind === "file" && tab.id === activeDockTab.slice(5) && tab.fromTree,
+  );
+
+  // 分屏中间分隔条拖拽：目录树在左，向右拖加宽（180–520px 夹紧）
+  const treeSplitDragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const startTreeSplitResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // 忽略：部分环境 pointerId 已释放
+    }
+    treeSplitDragRef.current = { startX: event.clientX, startWidth: treeSplitWidth };
+    document.body.classList.add("right-dock-resizing");
+    const onMove = (moveEvent: PointerEvent) => {
+      const drag = treeSplitDragRef.current;
+      if (!drag) return;
+      // 兜底：指针在窗口外松开时 buttons 归零，视为结束拖拽
+      if (moveEvent.buttons === 0) {
+        stopTreeSplitResize();
+        return;
+      }
+      const next = Math.min(520, Math.max(180, drag.startWidth + (moveEvent.clientX - drag.startX)));
+      setTreeSplitWidth(next);
+    };
+    const stopTreeSplitResize = () => {
+      treeSplitDragRef.current = null;
+      document.body.classList.remove("right-dock-resizing");
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", stopTreeSplitResize);
+      window.removeEventListener("pointercancel", stopTreeSplitResize);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", stopTreeSplitResize);
+    window.addEventListener("pointercancel", stopTreeSplitResize);
+  }, [treeSplitWidth]);
 
   const closeArtifactTab = useCallback((id: string) => {
     const [kind, ...rest] = id.split(":");
@@ -3702,16 +3763,24 @@ export default function App() {
 
         {/* 右侧面板：只承载内容，Tab 栏统一在顶部 app-toolbar */}
         {dockOpen ? (
-          <RightDock>
+          <RightDock splitMode={treeFileSplitActive}>
             {/* 信息面板常驻挂载（display 切换保活）：看文件预览/协作时工程目录树的
-                展开状态与读取缓存不丢，切回「信息」即恢复原样 */}
+                展开状态与读取缓存不丢，切回「信息」即恢复原样。
+                目录树打开的文件 Tab 激活时，面板收窄为固定宽度挂在左侧，实现「树 + 文件」分屏 */}
             <div
-              className="dock-pane"
-              style={{ display: activeDockTab === "info" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}
+              className={`dock-pane info-dock-pane${treeFileSplitActive ? " tree-split" : ""}`}
+              style={{
+                display: activeDockTab === "info" || treeFileSplitActive ? "flex" : "none",
+                flex: treeFileSplitActive ? `0 0 ${treeSplitWidth}px` : 1,
+                minWidth: 0,
+                minHeight: 0,
+                flexDirection: "column",
+              }}
             >
               <InfoRail
                 open
-                active={activeDockTab === "info"}
+                active={activeDockTab === "info" || treeFileSplitActive}
+                treeFill={treeFileSplitActive}
                 onClose={() => setDockOpen(false)}
                 servicePort={port}
                 serviceReady={serviceReady}
@@ -3723,9 +3792,19 @@ export default function App() {
                 projectBranchOptions={projectBranchOptions}
                 switchingBranchPath={switchingBranchPath}
                 onSwitchProjectBranch={switchProjectBranch}
-                onOpenFile={openFileTab}
+                onOpenFile={openTreeFileTab}
               />
             </div>
+            {treeFileSplitActive ? (
+              <div
+                className="tree-split-handle"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="调整目录树宽度"
+                title="拖动调整目录树宽度"
+                onPointerDown={startTreeSplitResize}
+              />
+            ) : null}
             {activeDockTab === "collab" ? (
               <CollabPanel
                 room={room}
@@ -3757,10 +3836,15 @@ export default function App() {
                 onOpenFile={openFileTab}
               />
             ) : activeDockTab.startsWith("file:") ? (
-              <FilePreview
-                path={activeDockTab.slice(5)}
-                onClose={() => closeArtifactTab(activeDockTab)}
-              />
+              <div
+                className="dock-pane file-dock-pane"
+                style={{ display: "flex", flex: 1, minWidth: 0, minHeight: 0, flexDirection: "column" }}
+              >
+                <FilePreview
+                  path={activeDockTab.slice(5)}
+                  onClose={() => closeArtifactTab(activeDockTab)}
+                />
+              </div>
             ) : null}
           </RightDock>
         ) : null}
