@@ -332,9 +332,15 @@ fn running_state(runtime: &AgentRuntime, message: String) -> ServiceState {
     }
 }
 
+/// Windows 上 Tauri resource_dir/app_data_dir 返回 `\\?\` 原义路径，
+/// 传给 `java -jar` 后 Spring Boot 的 jar:file URL 解析会失败，必须还原为普通 Win32 路径。
+fn plain_path(path: PathBuf) -> PathBuf {
+    dunce::simplified(&path).to_path_buf()
+}
+
 fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("DSH_AGENT_JAR") {
-        let path = PathBuf::from(path);
+        let path = plain_path(PathBuf::from(path));
         if path.exists() {
             return Ok(path);
         }
@@ -344,7 +350,7 @@ fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let path = resource_dir.join("agent/deepseek-harness-java-app.jar");
         if path.exists() {
-            return Ok(path);
+            return Ok(plain_path(path));
         }
     }
 
@@ -369,7 +375,7 @@ fn bundled_java_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         let path = resource_dir.join("agent/runtime/bin").join(runtime_java_name());
         if path.is_file() {
-            return Some(path);
+            return Some(plain_path(path));
         }
     }
 
@@ -568,10 +574,11 @@ fn start_agent(
         .ok_or_else(|| runtime_check.message.clone())?;
     let jar_path = locate_agent_jar(&app)?;
     let port = find_free_port()?;
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    let data_dir = plain_path(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| format!("无法定位应用数据目录：{error}"))?,
+    );
     std::fs::create_dir_all(&data_dir).map_err(|error| format!("创建数据目录失败：{error}"))?;
     let runtime_path = data_dir.join("agent-runtime.json");
     cleanup_stale_runtime(&runtime_path)?;

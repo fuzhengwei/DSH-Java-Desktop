@@ -988,6 +988,7 @@ dependencies = [
 name = "dsh-java-desktop"
 version = "0.1.0"
 dependencies = [
+ "dunce",
  "notify-rust",
  "rfd",
  "serde",
