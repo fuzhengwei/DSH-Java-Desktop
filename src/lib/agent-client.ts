@@ -555,6 +555,27 @@ export async function installExtensionSkill(
   });
 }
 
+export async function uploadExtensionSkillZip(
+  port: number,
+  file: File,
+  subdir?: string,
+  name?: string,
+): Promise<ExtensionSkillInstallResult> {
+  const form = new FormData();
+  form.append("file", file);
+  if (subdir) form.append("subdir", subdir);
+  if (name) form.append("name", name);
+  const response = await fetch(`${baseUrl(port)}/api/harness/extensions/skills/upload`, localAuthInit(`${baseUrl(port)}/api/harness/extensions/skills/upload`, {
+    method: "POST",
+    body: form,
+  }));
+  const payload = (await response.json().catch(() => null)) as ApiEnvelope<ExtensionSkillInstallResult> | null;
+  if (!response.ok || payload?.code !== "00000") {
+    throw new Error(payload?.info || `技能压缩包上传失败：HTTP ${response.status}`);
+  }
+  return payload.data as ExtensionSkillInstallResult;
+}
+
 export async function setExtensionSkillEnabled(port: number, name: string, enabled: boolean): Promise<boolean> {
   return request<boolean>(port, `/api/harness/extensions/skills/${encodeURIComponent(name)}/enabled`, {
     method: "POST",

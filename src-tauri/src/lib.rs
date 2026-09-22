@@ -62,6 +62,8 @@ struct LocalFileSelection {
 struct GitChangeSummary {
     is_repo: bool,
     branch: String,
+    /// 仓库根目录（GitChangedFile.path 相对于它），前端用它拼出绝对路径打开 Diff
+    repo_root: String,
     insertions: u64,
     deletions: u64,
     files: Vec<GitChangedFile>,
@@ -826,6 +828,15 @@ fn project_git_changes(path: String) -> Result<GitChangeSummary, String> {
     }
     summary.is_repo = true;
 
+    // 仓库根目录：前端需要用它把相对路径拼成绝对路径来打开文件 Diff
+    let root_output = Command::new("git")
+        .args(["-C", &path, "rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|error| format!("读取 Git 根目录失败：{error}"))?;
+    if root_output.status.success() {
+        summary.repo_root = String::from_utf8_lossy(&root_output.stdout).trim().to_string();
+    }
+
     let branch_output = Command::new("git")
         .args(["-C", &path, "branch", "--show-current"])
         .output()
@@ -921,6 +932,248 @@ fn project_git_changes(path: String) -> Result<GitChangeSummary, String> {
 }
 
 // ── 文件渲染：读取本地文件内容（md/word/excel 等） ──────────
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileDiffLine {
+    /// "add" | "del" | "context"
+    kind: String,
+    /// 旧文件行号（1 起；add 行为 null）
+    old_no: Option<u32>,
+    /// 新文件行号（1 起；del 行为 null）
+    new_no: Option<u32>,
+    text: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FileDiffHunk {
+    old_start: u32,
+    old_lines: u32,
+    new_start: u32,
+    new_lines: u32,
+    lines: Vec<FileDiffLine>,
+}
+
+#[derive(Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct FileDiff {
+    /// false：文件不在 git 仓库 / 无变化 / 解析失败，前端回退普通预览
+    available: bool,
+    /// "M" | "A" | "D" | "R"（对应未跟踪文件记为 A）
+    status: String,
+    is_binary: bool,
+    insertions: u64,
+    deletions: u64,
+    hunks: Vec<FileDiffHunk>,
+    /// diff 头里出现 rename 提示时给出旧路径（前端可展示 "从 xxx 重命名"）
+    old_path: Option<String>,
+}
+
+/// 解析 unified diff 的 hunk 头：@@ -l,s +l,s @@
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let rest = line.strip_prefix("@@ -")?;
+    let (old_part, new_part) = rest.split_once(" +")?;
+    let new_part = new_part.split(" @@").next()?;
+    let parse_range = |s: &str| -> (u32, u32) {
+        match s.split_once(',') {
+            Some((start, count)) => (start.parse().unwrap_or(1), count.parse().unwrap_or(0)),
+            None => (s.parse().unwrap_or(1), 1),
+        }
+    };
+    let (old_start, old_lines) = parse_range(old_part);
+    let (new_start, new_lines) = parse_range(new_part);
+    Some((old_start, old_lines, new_start, new_lines))
+}
+
+/// 按 git 语义解析单个文件的 diff（相对 HEAD，含暂存区；未跟踪文件整体视为新增）。
+/// 相对路径基于仓库根（与 project_git_changes 一致）；绝对路径则直接用。
+#[tauri::command]
+fn project_file_diff(path: String, file_path: String) -> Result<FileDiff, String> {
+    let mut result = FileDiff::default();
+
+    let inside = Command::new("git")
+        .args(["-C", &path, "rev-parse", "--is-inside-work-tree"])
+        .output()
+        .map_err(|error| format!("读取 Git 状态失败：{error}"))?;
+    if !inside.status.success() {
+        return Ok(result);
+    }
+
+    // 仓库根：diff 头里的路径都相对它；入参是绝对路径时按仓库内文件兜底换算
+    let root_output = Command::new("git")
+        .args(["-C", &path, "rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|error| format!("读取 Git 根目录失败：{error}"))?;
+    let repo_root = String::from_utf8_lossy(&root_output.stdout).trim().to_string();
+    let relative = if PathBuf::from(&file_path).is_absolute() {
+        if !repo_root.is_empty() {
+            PathBuf::from(&file_path)
+                .strip_prefix(&repo_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(file_path.clone())
+        } else {
+            file_path.clone()
+        }
+    } else {
+        file_path.clone()
+    };
+    if relative.is_empty() || relative.starts_with("..") {
+        return Ok(result);
+    }
+
+    let run_git = |args: &[&str]| -> Vec<String> {
+        let output = Command::new("git")
+            .args(["-C", &path])
+            .args(args)
+            .output();
+        match output {
+            Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::to_string)
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    // 判断命令是否执行成功（cat-file -e 成功时无 stdout，必须看退出码）
+    let git_ok = |args: &[&str]| -> bool {
+        Command::new("git")
+            .args(["-C", &path])
+            .args(args)
+            .output()
+            .map(|out| out.status.success())
+            .unwrap_or(false)
+    };
+
+    // 未跟踪文件：HEAD 里不存在 → 整个文件按新增逐行输出
+    let tracked = git_ok(&["cat-file", "-e", &format!("HEAD:{relative}")]);
+    if !tracked {
+        let full = if repo_root.is_empty() {
+            PathBuf::from(&path).join(&relative)
+        } else {
+            PathBuf::from(&repo_root).join(&relative)
+        };
+        if full.is_file() {
+            if let Ok(content) = fs::read(&full) {
+                if content.contains(&0u8) {
+                    result.available = true;
+                    result.status = "A".to_string();
+                    result.is_binary = true;
+                    return Ok(result);
+                }
+                result.available = true;
+                result.status = "A".to_string();
+                let text = String::from_utf8_lossy(&content);
+                let total = text.lines().count() as u32;
+                if total > 0 {
+                    result.insertions = total as u64;
+                    let lines = text
+                        .lines()
+                        .enumerate()
+                        .map(|(index, line)| FileDiffLine {
+                            kind: "add".to_string(),
+                            old_no: None,
+                            new_no: Some(index as u32 + 1),
+                            text: line.to_string(),
+                        })
+                        .collect();
+                    result.hunks.push(FileDiffHunk {
+                        old_start: 0,
+                        old_lines: 0,
+                        new_start: 1,
+                        new_lines: total,
+                        lines,
+                    });
+                }
+            }
+        }
+        return Ok(result);
+    }
+
+    let diff = run_git(&["diff", "HEAD", "--no-color", "-U3", "--", &relative]);
+    if diff.is_empty() {
+        return Ok(result);
+    }
+
+    let mut hunks: Vec<FileDiffHunk> = Vec::new();
+    let mut current: Option<FileDiffHunk> = None;
+    let mut old_no: u32 = 0;
+    let mut new_no: u32 = 0;
+    for line in diff {
+        if let Some(meta) = line.strip_prefix("rename from ") {
+            result.old_path = Some(meta.to_string());
+            continue;
+        }
+        if line.starts_with("rename to ") || line.starts_with("index ") || line.starts_with("--- ")
+            || line.starts_with("+++ ") || line.starts_with("diff --git ") || line.starts_with("new file mode")
+            || line.starts_with("deleted file mode") || line.starts_with("old mode") || line.starts_with("new mode")
+            || line.starts_with("similarity index") || line.starts_with("dissimilarity index")
+        {
+            continue;
+        }
+        if line.starts_with("Binary files") || line.starts_with("GIT binary patch") {
+            result.is_binary = true;
+            continue;
+        }
+        if let Some((old_start, old_count, new_start, new_count)) = parse_hunk_header(&line) {
+            if let Some(hunk) = current.take() {
+                hunks.push(hunk);
+            }
+            current = Some(FileDiffHunk {
+                old_start,
+                old_lines: old_count,
+                new_start,
+                new_lines: new_count,
+                lines: Vec::new(),
+            });
+            old_no = if old_count > 0 { old_start } else { old_start.saturating_sub(1) + 1 };
+            new_no = if new_count > 0 { new_start } else { new_start.saturating_sub(1) + 1 };
+            continue;
+        }
+        if let Some(hunk) = current.as_mut() {
+            if let Some(body) = line.strip_prefix('+') {
+                hunk.lines.push(FileDiffLine {
+                    kind: "add".to_string(),
+                    old_no: None,
+                    new_no: Some(new_no),
+                    text: body.to_string(),
+                });
+                new_no += 1;
+                result.insertions += 1;
+            } else if let Some(body) = line.strip_prefix('-') {
+                hunk.lines.push(FileDiffLine {
+                    kind: "del".to_string(),
+                    old_no: Some(old_no),
+                    new_no: None,
+                    text: body.to_string(),
+                });
+                old_no += 1;
+                result.deletions += 1;
+            } else if let Some(body) = line.strip_prefix(' ') {
+                hunk.lines.push(FileDiffLine {
+                    kind: "context".to_string(),
+                    old_no: Some(old_no),
+                    new_no: Some(new_no),
+                    text: body.to_string(),
+                });
+                old_no += 1;
+                new_no += 1;
+            }
+            // '\ No newline at end of file' 等其它行忽略
+        }
+    }
+    if let Some(hunk) = current.take() {
+        hunks.push(hunk);
+    }
+
+    if !hunks.is_empty() || result.is_binary {
+        result.available = true;
+        result.status = if result.old_path.is_some() { "R".to_string() } else { "M".to_string() };
+        result.hunks = hunks;
+    }
+    Ok(result)
+}
+
 
 /// 读取本地文本文件（md/txt/csv 等），大小限制 8MB，避免 UI 卡死。
 #[tauri::command]
@@ -1422,7 +1675,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds, list_directory])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, project_file_diff, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds, list_directory])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 

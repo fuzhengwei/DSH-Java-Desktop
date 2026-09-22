@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   ExtensionCliConfig,
   ExtensionMcpApplyResult,
@@ -15,12 +15,338 @@ import {
   setExtensionCliConfig,
   setExtensionSkillEnabled,
   testMcpServer,
+  uploadExtensionSkillZip,
   upsertMcpServer,
 } from "../lib/agent-client";
 
-type ExtensionsSettingsProps = {
-  servicePort: number | null;
-};
+/** 共享：通知/错误横幅。 */
+export function ExtensionNotices({ notice, error, onClearNotice, onClearError }: {
+  notice: string;
+  error: string;
+  onClearNotice: () => void;
+  onClearError: () => void;
+}) {
+  return (
+    <>
+      {notice ? <div className="plugin-notice" onClick={onClearNotice}>{notice}</div> : null}
+      {error ? <div className="plugin-notice" style={{ color: "#c0392b" }} onClick={onClearError}>{error}</div> : null}
+    </>
+  );
+}
+
+/** 共享：服务未连接占位。 */
+export function ExtensionDisconnected({ text }: { text: string }) {
+  return (
+    <section className="settings-panel">
+      <div className="settings-panel-head">
+        <div>
+          <h2>未连接</h2>
+          <p>{text}</p>
+        </div>
+      </div>
+      <div className="empty-card">请先在「服务」中确认本地智能体服务已启动。</div>
+    </section>
+  );
+}
+
+/** 状态提示 hooks：Skills / MCP / CLI 三个面板共用同一套通知语义。 */
+export function useExtensionNotify() {
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+  const notify = useCallback((message: string) => {
+    setNotice(message);
+    setError("");
+  }, []);
+  const fail = useCallback((message: string) => {
+    setError(message);
+    setNotice("");
+  }, []);
+  return { notice, error, notify, fail, setNotice, setError };
+}
+
+// ═══════════════════════════════════════════════════════
+// Skills 技能面板（独立设置项）
+// ═══════════════════════════════════════════════════════
+
+export function SkillsSettings({ servicePort }: { servicePort: number | null }) {
+  const { notice, error, notify, fail, setNotice, setError } = useExtensionNotify();
+  const [skills, setSkills] = useState<ExtensionSkillSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // 添加技能弹窗：null = 关闭；"zip" = 压缩包上传；"git" = Git 仓库
+  const [installMode, setInstallMode] = useState<null | "zip" | "git">(null);
+
+  // Git 安装表单
+  const [gitUrl, setGitUrl] = useState("");
+  const [skillSubdir, setSkillSubdir] = useState("");
+  const [skillName, setSkillName] = useState("");
+  const [installing, setInstalling] = useState(false);
+
+  // 压缩包上传
+  const [zipSubdir, setZipSubdir] = useState("");
+  const [zipName, setZipName] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const zipInputRef = useRef<HTMLInputElement | null>(null);
+
+  const closeInstall = () => {
+    setInstallMode(null);
+    setZipSubdir("");
+    setZipName("");
+  };
+
+  const refresh = useCallback(async () => {
+    if (!servicePort) return;
+    setLoading(true);
+    try {
+      setSkills(await listExtensionSkills(servicePort));
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [servicePort, fail]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!servicePort) {
+    return <ExtensionDisconnected text="智能体服务未连接，无法管理技能。" />;
+  }
+
+  const installSkill = async () => {
+    if (!servicePort || !gitUrl.trim()) return;
+    setInstalling(true);
+    try {
+      const result = await installExtensionSkill(servicePort, gitUrl.trim(), skillSubdir.trim() || undefined, skillName.trim() || undefined);
+      if (result.success) {
+        notify(result.message);
+        setGitUrl("");
+        setSkillSubdir("");
+        setSkillName("");
+        closeInstall();
+        await refresh();
+      } else {
+        fail(result.message);
+      }
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  const uploadZip = async (file: File) => {
+    if (!servicePort) return;
+    setUploading(true);
+    try {
+      const result = await uploadExtensionSkillZip(servicePort, file, zipSubdir.trim() || undefined, zipName.trim() || undefined);
+      if (result.success) {
+        notify(result.message);
+        closeInstall();
+        await refresh();
+      } else {
+        fail(result.message);
+      }
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const toggleSkill = async (skill: ExtensionSkillSummary) => {
+    if (!servicePort) return;
+    try {
+      await setExtensionSkillEnabled(servicePort, skill.name, !skill.enabled);
+      notify(`技能 ${skill.name} 已${skill.enabled ? "停用" : "启用"}`);
+      await refresh();
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const removeSkill = async (skill: ExtensionSkillSummary) => {
+    if (!servicePort) return;
+    if (!window.confirm(`确定删除技能「${skill.name}」？该操作会从磁盘移除技能目录。`)) return;
+    try {
+      await removeExtensionSkill(servicePort, skill.name);
+      notify(`技能 ${skill.name} 已删除`);
+      await refresh();
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  return (
+    <>
+      <ExtensionNotices
+        notice={notice}
+        error={error}
+        onClearNotice={() => setNotice("")}
+        onClearError={() => setError("")}
+      />
+
+      {/* ── 已安装技能（列表在上） ── */}
+      <section className="settings-panel">
+        <div className="settings-panel-head">
+          <div>
+            <h2>已安装技能</h2>
+            <p>技能目录会注入 Agent，启用后可通过 skill 工具加载。</p>
+          </div>
+          <div className="plugin-list-head-actions">
+            <button className="ghost-action compact" onClick={() => void refresh()} disabled={loading}>
+              {loading ? "刷新中…" : "刷新"}
+            </button>
+            <button className="primary-action compact" onClick={() => setInstallMode("zip")}>
+              添加技能
+            </button>
+          </div>
+        </div>
+        {skills.length === 0 ? (
+          <div className="empty-card">暂无技能。点击右上角「添加技能」安装，安装后可在对话中通过 skill 工具加载。</div>
+        ) : (
+          <div className="plugin-list">
+            {skills.map((skill) => (
+              <article key={skill.name} className="plugin-row">
+                <div className="plugin-row-main">
+                  <strong>{skill.name}</strong>
+                  <span>{skill.source}</span>
+                  <small>{skill.description || skill.path}</small>
+                </div>
+                <div className="plugin-row-badges">
+                  <span className={`status-chip ${skill.enabled ? "online" : "muted"}`}>
+                    {skill.enabled ? "启用" : "停用"}
+                  </span>
+                </div>
+                <div className="plugin-row-actions">
+                  <button className="ghost-action" onClick={() => void toggleSkill(skill)}>
+                    {skill.enabled ? "停用" : "启用"}
+                  </button>
+                  {skill.removable ? (
+                    <button className="danger-action" onClick={() => void removeSkill(skill)}>删除</button>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* ── 添加技能弹窗：压缩包 / Git 两种方式标签页切换 ── */}
+      {installMode ? (
+        <div className="modal-overlay" onClick={closeInstall}>
+          <div className="modal skill-install-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>添加技能</h3>
+              <button className="modal-close" onClick={closeInstall}>×</button>
+            </div>
+            <div className="skill-install-tabs" role="tablist">
+              <button
+                role="tab"
+                aria-selected={installMode === "zip"}
+                className={installMode === "zip" ? "skill-install-tab active" : "skill-install-tab"}
+                onClick={() => setInstallMode("zip")}
+              >
+                压缩包上传
+              </button>
+              <button
+                role="tab"
+                aria-selected={installMode === "git"}
+                className={installMode === "git" ? "skill-install-tab active" : "skill-install-tab"}
+                onClick={() => setInstallMode("git")}
+              >
+                Git 仓库
+              </button>
+            </div>
+
+            {installMode === "zip" ? (
+              <div className="modal-body">
+                <div className="form-grid">
+                  <label className="form-field">
+                    <span>压缩包内子目录（可选）</span>
+                    <input
+                      value={zipSubdir}
+                      placeholder="留空自动搜索 SKILL.md"
+                      onChange={(event) => setZipSubdir(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>技能名（可选）</span>
+                    <input
+                      value={zipName}
+                      placeholder="kebab-case，留空自动命名"
+                      onChange={(event) => setZipName(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field span-2">
+                    <span>压缩包文件（.zip，内需含 SKILL.md）</span>
+                    <input
+                      ref={zipInputRef}
+                      type="file"
+                      accept=".zip,application/zip"
+                      disabled={uploading}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) void uploadZip(file);
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <div className="modal-body">
+                <div className="form-grid">
+                  <label className="form-field span-2">
+                    <span>Git 仓库地址</span>
+                    <input
+                      value={gitUrl}
+                      placeholder="https://github.com/user/awesome-skill.git（仓库内需含 SKILL.md）"
+                      onChange={(event) => setGitUrl(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>子目录（可选）</span>
+                    <input
+                      value={skillSubdir}
+                      placeholder="仓库内技能目录，留空自动搜索 SKILL.md"
+                      onChange={(event) => setSkillSubdir(event.target.value)}
+                    />
+                  </label>
+                  <label className="form-field">
+                    <span>技能名（可选）</span>
+                    <input
+                      value={skillName}
+                      placeholder="kebab-case，留空自动命名"
+                      onChange={(event) => setSkillName(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              {installMode === "git" ? (
+                <>
+                  <span className="skill-install-hint">对话里也可以直接说「帮我装一个 xx 技能」让 Agent 自行拉取安装。</span>
+                  <button className="primary-action compact" onClick={() => void installSkill()} disabled={installing || !gitUrl.trim()}>
+                    {installing ? "拉取安装中…" : "从 Git 安装"}
+                  </button>
+                </>
+              ) : (
+                <span className="skill-install-hint">选择 .zip 后立即上传安装；安装完成后出现在上方列表。</span>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// MCP 服务面板（独立设置项）
+// ═══════════════════════════════════════════════════════
 
 type McpDraft = {
   editingName: string | null;
@@ -72,56 +398,19 @@ function parseKeyValueText(text: string): Record<string, string> {
   return result;
 }
 
-export default function ExtensionsSettings({ servicePort }: ExtensionsSettingsProps) {
-  const [skills, setSkills] = useState<ExtensionSkillSummary[]>([]);
+export function McpSettings({ servicePort }: { servicePort: number | null }) {
+  const { notice, error, notify, fail, setNotice, setError } = useExtensionNotify();
   const [mcpServers, setMcpServers] = useState<ExtensionMcpServer[]>([]);
-  const [cli, setCli] = useState<ExtensionCliConfig | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState("");
-  const [error, setError] = useState("");
-
-  // 技能安装表单
-  const [gitUrl, setGitUrl] = useState("");
-  const [skillSubdir, setSkillSubdir] = useState("");
-  const [skillName, setSkillName] = useState("");
-  const [installing, setInstalling] = useState(false);
-
-  // MCP 编辑表单
   const [mcpDraft, setMcpDraft] = useState<McpDraft | null>(null);
   const [mcpBusy, setMcpBusy] = useState(false);
   const [mcpTestResult, setMcpTestResult] = useState<ExtensionMcpApplyResult | null>(null);
 
-  // CLI 表单
-  const [cliDraft, setCliDraft] = useState<ExtensionCliConfig | null>(null);
-  const [cliSaving, setCliSaving] = useState(false);
-
-  const notify = useCallback((message: string) => {
-    setNotice(message);
-    setError("");
-  }, []);
-
-  const fail = useCallback((message: string) => {
-    setError(message);
-    setNotice("");
-  }, []);
-
   const refresh = useCallback(async () => {
     if (!servicePort) return;
-    setLoading(true);
     try {
-      const [skillList, serverList, cliConfig] = await Promise.all([
-        listExtensionSkills(servicePort),
-        listMcpServers(servicePort),
-        getExtensionCliConfig(servicePort),
-      ]);
-      setSkills(skillList);
-      setMcpServers(serverList);
-      setCli(cliConfig);
-      setCliDraft(cliConfig);
+      setMcpServers(await listMcpServers(servicePort));
     } catch (err) {
       fail(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
     }
   }, [servicePort, fail]);
 
@@ -130,62 +419,8 @@ export default function ExtensionsSettings({ servicePort }: ExtensionsSettingsPr
   }, [refresh]);
 
   if (!servicePort) {
-    return (
-      <section className="settings-panel">
-        <div className="settings-panel-head">
-          <div>
-            <h2>扩展能力</h2>
-            <p>智能体服务未连接，无法管理技能、MCP 与 CLI。</p>
-          </div>
-        </div>
-        <div className="empty-card">请先在「智能体服务」中确认服务已启动。</div>
-      </section>
-    );
+    return <ExtensionDisconnected text="智能体服务未连接，无法管理 MCP 服务。" />;
   }
-
-  const installSkill = async () => {
-    if (!servicePort || !gitUrl.trim()) return;
-    setInstalling(true);
-    try {
-      const result = await installExtensionSkill(servicePort, gitUrl.trim(), skillSubdir.trim() || undefined, skillName.trim() || undefined);
-      if (result.success) {
-        notify(result.message);
-        setGitUrl("");
-        setSkillSubdir("");
-        setSkillName("");
-        await refresh();
-      } else {
-        fail(result.message);
-      }
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  const toggleSkill = async (skill: ExtensionSkillSummary) => {
-    if (!servicePort) return;
-    try {
-      await setExtensionSkillEnabled(servicePort, skill.name, !skill.enabled);
-      notify(`技能 ${skill.name} 已${skill.enabled ? "停用" : "启用"}`);
-      await refresh();
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const removeSkill = async (skill: ExtensionSkillSummary) => {
-    if (!servicePort) return;
-    if (!window.confirm(`确定删除技能「${skill.name}」？该操作会从磁盘移除技能目录。`)) return;
-    try {
-      await removeExtensionSkill(servicePort, skill.name);
-      notify(`技能 ${skill.name} 已删除`);
-      await refresh();
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-    }
-  };
 
   const buildMcpPayload = (draft: McpDraft) => ({
     name: draft.name.trim(),
@@ -245,105 +480,15 @@ export default function ExtensionsSettings({ servicePort }: ExtensionsSettingsPr
     }
   };
 
-  const saveCli = async () => {
-    if (!servicePort || !cliDraft) return;
-    setCliSaving(true);
-    try {
-      const saved = await setExtensionCliConfig(servicePort, cliDraft);
-      setCli(saved);
-      setCliDraft(saved);
-      notify(saved.effectiveNotice || "CLI 配置已保存");
-    } catch (err) {
-      fail(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCliSaving(false);
-    }
-  };
-
   return (
     <>
-      {notice ? <div className="plugin-notice" onClick={() => setNotice("")}>{notice}</div> : null}
-      {error ? <div className="plugin-notice" style={{ color: "#c0392b" }} onClick={() => setError("")}>{error}</div> : null}
+      <ExtensionNotices
+        notice={notice}
+        error={error}
+        onClearNotice={() => setNotice("")}
+        onClearError={() => setError("")}
+      />
 
-      {/* ── 技能 ─────────────────────────────────── */}
-      <section className="settings-panel">
-        <div className="settings-panel-head">
-          <div>
-            <h2>Skills 技能</h2>
-            <p>技能目录会注入 Agent；对话里也可以直接说「帮我装一个 xx 技能」让 Agent 自行拉取安装。</p>
-          </div>
-          <div className="plugin-list-head-actions">
-            <button className="ghost-action compact" onClick={() => void refresh()} disabled={loading}>
-              {loading ? "刷新中…" : "刷新"}
-            </button>
-          </div>
-        </div>
-
-        <div className="plugin-install-actions" style={{ alignItems: "stretch", flexDirection: "column", gap: 8 }}>
-          <div className="form-grid">
-            <label className="form-field span-2">
-              <span>Git 仓库地址</span>
-              <input
-                value={gitUrl}
-                placeholder="https://github.com/user/awesome-skill.git（仓库内需含 SKILL.md）"
-                onChange={(event) => setGitUrl(event.target.value)}
-              />
-            </label>
-            <label className="form-field">
-              <span>子目录（可选）</span>
-              <input
-                value={skillSubdir}
-                placeholder="仓库内技能目录，留空自动搜索 SKILL.md"
-                onChange={(event) => setSkillSubdir(event.target.value)}
-              />
-            </label>
-            <label className="form-field">
-              <span>技能名（可选）</span>
-              <input
-                value={skillName}
-                placeholder="kebab-case，留空自动命名"
-                onChange={(event) => setSkillName(event.target.value)}
-              />
-            </label>
-          </div>
-          <div className="plugin-install-actions">
-            <button className="primary-action compact" onClick={() => void installSkill()} disabled={installing || !gitUrl.trim()}>
-              {installing ? "拉取安装中…" : "从 Git 安装"}
-            </button>
-          </div>
-        </div>
-
-        {skills.length === 0 ? (
-          <div className="empty-card">暂无技能。安装后可在对话中通过 skill 工具加载。</div>
-        ) : (
-          <div className="plugin-list">
-            {skills.map((skill) => (
-              <article key={skill.name} className="plugin-row">
-                <div className="plugin-row-main">
-                  <strong>{skill.name}</strong>
-                  <span>{skill.source}</span>
-                  <small>{skill.description || skill.path}</small>
-                </div>
-                <div className="plugin-row-badges">
-                  <span className={`status-chip ${skill.enabled ? "online" : "muted"}`}>
-                    {skill.enabled ? "启用" : "停用"}
-                  </span>
-                </div>
-                <div className="plugin-row-actions">
-                  <button className="ghost-action" onClick={() => void toggleSkill(skill)}>
-                    {skill.enabled ? "停用" : "启用"}
-                  </button>
-                  {skill.removable ? (
-                    <button className="danger-action" onClick={() => void removeSkill(skill)}>删除</button>
-                  ) : null}
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {/* ── MCP ─────────────────────────────────── */}
       <section className="settings-panel">
         <div className="settings-panel-head">
           <div>
@@ -468,8 +613,63 @@ export default function ExtensionsSettings({ servicePort }: ExtensionsSettingsPr
           </div>
         )}
       </section>
+    </>
+  );
+}
 
-      {/* ── CLI ─────────────────────────────────── */}
+// ═══════════════════════════════════════════════════════
+// CLI 子智能体面板（独立设置项）
+// ═══════════════════════════════════════════════════════
+
+export function CliSettings({ servicePort }: { servicePort: number | null }) {
+  const { notice, error, notify, fail, setNotice, setError } = useExtensionNotify();
+  const [cli, setCli] = useState<ExtensionCliConfig | null>(null);
+  const [cliDraft, setCliDraft] = useState<ExtensionCliConfig | null>(null);
+  const [cliSaving, setCliSaving] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!servicePort) return;
+    try {
+      const config = await getExtensionCliConfig(servicePort);
+      setCli(config);
+      setCliDraft(config);
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
+  }, [servicePort, fail]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  if (!servicePort) {
+    return <ExtensionDisconnected text="智能体服务未连接，无法管理 CLI 子智能体。" />;
+  }
+
+  const saveCli = async () => {
+    if (!servicePort || !cliDraft) return;
+    setCliSaving(true);
+    try {
+      const saved = await setExtensionCliConfig(servicePort, cliDraft);
+      setCli(saved);
+      setCliDraft(saved);
+      notify(saved.effectiveNotice || "CLI 配置已保存");
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCliSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <ExtensionNotices
+        notice={notice}
+        error={error}
+        onClearNotice={() => setNotice("")}
+        onClearError={() => setError("")}
+      />
+
       <section className="settings-panel">
         <div className="settings-panel-head">
           <div>

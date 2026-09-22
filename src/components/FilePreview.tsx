@@ -1,11 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import hljs from "highlight.js/lib/common";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { rehypeHighlight, languageFromExtension } from "../lib/markdown-plugins";
 import { FileActionsArea } from "./FileActionsMenu";
 import { DrawioPreview } from "./DrawioPreview";
+import { DiffView, useFileDiff } from "./DiffView";
+import { CompressIcon, ExpandIcon, PanelCollapseIcon } from "./icons";
 
 /**
  * 通用文件预览：按扩展名路由渲染方式。
@@ -83,8 +85,27 @@ type Props = {
   name?: string;
   /** 关闭按钮（Dock 内使用时） */
   onClose?: () => void;
+  /** 收回：收起整个右侧 Dock 面板（Dock 内文件预览时提供） */
+  onCollapse?: () => void;
+  /** 放大/还原：把文件预览区放大到铺满窗口（Dock 内文件预览时提供） */
+  onToggleMaximize?: () => void;
+  /** 当前是否处于放大状态（控制放大按钮图标切换） */
+  maximized?: boolean;
   /** 紧凑模式（对话内嵌卡片） */
   compact?: boolean;
+  /** 文件所在工程根（用于定位 git 仓库展示 Diff；不传则不启用 Diff） */
+  basePath?: string;
+  /** 代码预览中选中片段 → 「加入对话」（作为代码片段资源注入输入框） */
+  onAddCodeSnippet?: (snippet: CodeSnippet) => void;
+};
+
+/** 文件预览中选中的代码片段（含定位信息，供对话引用） */
+export type CodeSnippet = {
+  path: string;
+  name: string;
+  code: string;
+  startLine: number;
+  endLine: number;
 };
 
 /** 消息正文中可识别为本地文件路径的扩展名（文档 + 代码） */
@@ -298,7 +319,8 @@ export const FilePreview = function FilePreview(props: Props) {
   return <FilePreviewBody {...props} />;
 };
 
-function FilePreviewBody({ path, name, onClose, compact }: Props) {
+/** 文本/代码类文件：有 Git 变更时头部出现「源码 / Diff」切换 */
+function FilePreviewBody({ path, name, onClose, onCollapse, onToggleMaximize, maximized, compact, basePath, onAddCodeSnippet }: Props) {
   const displayName = name || path.split("/").filter(Boolean).pop() || path;
   const kind = useMemo(() => fileKindOf(displayName), [displayName]);
   const [text, setText] = useState("");
@@ -306,6 +328,16 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
   const [binaryFallback, setBinaryFallback] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  // "source" 默认源码视图；文件有 Git 差异时才允许切 "diff"
+  const [view, setView] = useState<"source" | "diff">("source");
+  const diffable = Boolean(basePath) && (kind === "code" || kind === "text" || kind === "markdown");
+  const { diff } = useFileDiff(diffable ? (basePath as string) : "", path);
+  const hasDiff = Boolean(diff?.available && !diff.isBinary);
+
+  useEffect(() => {
+    // 文件切换时重置视图，避免在新文件上停留在失效的 Diff
+    setView("source");
+  }, [path]);
 
   useEffect(() => {
     let cancelled = false;
@@ -347,6 +379,52 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
       <div className={`file-preview-head${compact ? " compact" : ""}`}>
         <span className={`file-kind-badge kind-${binaryFallback ? "binary" : kind}`}>{KIND_LABEL[binaryFallback ? "binary" : kind]}</span>
         <span className="file-preview-name" title={path}>{displayName}</span>
+        {diffable && hasDiff ? (
+          <span className="file-preview-viewtoggle" role="tablist" aria-label="视图切换">
+            <button
+              type="button"
+              className={view === "source" ? "active" : ""}
+              onClick={() => setView("source")}
+            >
+              源码
+            </button>
+            <button
+              type="button"
+              className={view === "diff" ? "active" : ""}
+              onClick={() => setView("diff")}
+            >
+              Diff
+              {diff ? (
+                <em className="rail-diff">
+                  {diff.insertions > 0 ? <em className="rail-diff-add">+{diff.insertions}</em> : null}
+                  {diff.deletions > 0 ? <em className="rail-diff-del">-{diff.deletions}</em> : null}
+                </em>
+              ) : null}
+            </button>
+          </span>
+        ) : null}
+        {onToggleMaximize ? (
+          <button
+            type="button"
+            className="file-preview-btn"
+            onClick={onToggleMaximize}
+            aria-label={maximized ? "还原大小" : "放大预览"}
+            title={maximized ? "还原大小" : "放大预览"}
+          >
+            {maximized ? <CompressIcon className="icon-14" /> : <ExpandIcon className="icon-14" />}
+          </button>
+        ) : null}
+        {onCollapse ? (
+          <button
+            type="button"
+            className="file-preview-btn"
+            onClick={onCollapse}
+            aria-label="收回面板"
+            title="收回面板"
+          >
+            <PanelCollapseIcon className="icon-14" />
+          </button>
+        ) : null}
         {onClose ? (
           <button type="button" className="file-preview-close" onClick={onClose} aria-label="关闭预览">✕</button>
         ) : null}
@@ -371,37 +449,49 @@ function FilePreviewBody({ path, name, onClose, compact }: Props) {
     );
   }
 
+  const diffView = diffable && view === "diff" && hasDiff ? (
+    <DiffView basePath={basePath as string} filePath={path} />
+  ) : null;
+
+  const sourceBody = (
+    <>
+      {kind === "markdown" ? (
+        <div className="file-preview-markdown">
+          <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
+        </div>
+      ) : kind === "text" ? (
+        <pre className="file-preview-plain">{text}</pre>
+      ) : kind === "code" ? (
+        <CodeView code={text} name={displayName} onAddSnippet={onAddCodeSnippet ? (code, startLine, endLine) => onAddCodeSnippet({ path, name: displayName, code, startLine, endLine }) : undefined} />
+      ) : kind === "docx" ? (
+        <DocxPreview base64={binary} />
+      ) : kind === "xlsx" ? (
+        <SheetPreview base64={binary} name={displayName} />
+      ) : kind === "image" ? (
+        <img className="file-preview-image" alt={displayName} src={`data:image;base64,${binary}`} />
+      ) : kind === "pdf" ? (
+        <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
+      ) : kind === "html" ? (
+        <HtmlPreview base64={binary} name={displayName} />
+      ) : kind === "binary" || binaryFallback ? (
+        <BinaryView base64={binary} />
+      ) : (
+        <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
+      )}
+    </>
+  );
+
   return (
     <div className={`file-preview${compact ? " compact" : ""}`}>
       {header}
-      <div className="file-preview-body">
-        {kind === "markdown" ? (
-          <div className="file-preview-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]}>{text}</ReactMarkdown>
-          </div>
-        ) : kind === "text" ? (
-          <pre className="file-preview-plain">{text}</pre>
-        ) : kind === "code" ? (
-          <CodeView code={text} />
-        ) : kind === "docx" ? (
-          <DocxPreview base64={binary} />
-        ) : kind === "xlsx" ? (
-          <SheetPreview base64={binary} name={displayName} />
-        ) : kind === "image" ? (
-          <img className="file-preview-image" alt={displayName} src={`data:image;base64,${binary}`} />
-        ) : kind === "pdf" ? (
-          <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
-        ) : kind === "html" ? (
-          <HtmlPreview base64={binary} name={displayName} />
-        ) : kind === "binary" || binaryFallback ? (
-          <BinaryView base64={binary} />
-        ) : (
-          <div className="file-preview-error">暂不支持预览该格式，可在系统中直接打开</div>
-        )}
-      </div>
+      {diffView ? (
+        <div className="file-preview-body diff-body">{diffView}</div>
+      ) : (
+        <div className="file-preview-body">{sourceBody}</div>
+      )}
     </div>
   );
-};;
+};
 
 function binaryToText(base64: string): string {
   try {
@@ -548,13 +638,16 @@ const CODE_VIEW_MAX_LINES = 20_000;
 /** 自动语言探测的字符上限：超大文件直接按纯文本展示，避免 highlightAuto 卡顿 */
 const AUTO_DETECT_MAX_CHARS = 100_000;
 
-/** 代码文件查看器：行号栏 + 源码，对齐 IDE 的阅读体验 */
-function CodeView({ code, name }: { code: string; name?: string }) {
+/** 代码文件查看器：行号栏 + 源码，对齐 IDE 的阅读体验；支持选中片段「加入对话」 */
+function CodeView({ code, name, onAddSnippet }: { code: string; name?: string; onAddSnippet?: (code: string, startLine: number, endLine: number) => void }) {
   const allLines = code.split("\n");
   const truncated = allLines.length > CODE_VIEW_MAX_LINES;
   const shown = truncated ? allLines.slice(0, CODE_VIEW_MAX_LINES) : allLines;
   const shownText = shown.join("\n");
   const gutter = Array.from({ length: shown.length }, (_, index) => index + 1).join("\n");
+  const codeElRef = useRef<HTMLElement | null>(null);
+  // 当前选中片段（plain 文本 + 行号范围）；null 表示无有效选中
+  const [selection, setSelection] = useState<{ code: string; startLine: number; endLine: number } | null>(null);
 
   // 按扩展名做语法高亮；未知扩展名且内容不大时自动探测，失败则回退纯文本
   const highlightedHtml = useMemo(() => {
@@ -572,18 +665,88 @@ function CodeView({ code, name }: { code: string; name?: string }) {
     return null;
   }, [shownText, name]);
 
+  // 计算 selection 锚点在 code 元素纯文本中的偏移（TreeWalker 累加文本节点长度）
+  const textOffsetOf = (codeEl: HTMLElement, range: Range, atStart: boolean): number | null => {
+    const targetNode = atStart ? range.startContainer : range.endContainer;
+    const targetOffset = atStart ? range.startOffset : range.endOffset;
+    let count = 0;
+    let hit = false;
+    const walker = document.createTreeWalker(codeEl, NodeFilter.SHOW_TEXT);
+    let node: Node | null = walker.nextNode();
+    while (node) {
+      if (node === targetNode) {
+        count += targetOffset;
+        hit = true;
+        break;
+      }
+      count += (node.textContent || "").length;
+      node = walker.nextNode();
+    }
+    return hit ? count : null;
+  };
+
+  // selectionchange：仅当选中发生在本代码块内时计算片段与行号范围
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const codeEl = codeElRef.current;
+      if (!codeEl || !onAddSnippet) return;
+      const domSelection = document.getSelection();
+      if (!domSelection || domSelection.isCollapsed || domSelection.rangeCount === 0) {
+        setSelection(null);
+        return;
+      }
+      const range = domSelection.getRangeAt(0);
+      if (!codeEl.contains(range.commonAncestorContainer)) {
+        setSelection(null);
+        return;
+      }
+      const startOffset = textOffsetOf(codeEl, range, true);
+      const endOffset = textOffsetOf(codeEl, range, false);
+      if (startOffset == null || endOffset == null || endOffset <= startOffset) {
+        setSelection(null);
+        return;
+      }
+      const selected = shownText.slice(startOffset, endOffset);
+      const startLine = shownText.slice(0, startOffset).split("\n").length;
+      const endLine = startLine + selected.split("\n").length - 1;
+      setSelection({ code: selected, startLine, endLine });
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, [shownText, onAddSnippet]);
+
+  const selectionLineCount = selection ? selection.endLine - selection.startLine + 1 : 0;
+
   return (
     <div className="file-preview-codeblock">
       {truncated ? (
         <div className="file-preview-truncated">文件过长，仅显示前 {CODE_VIEW_MAX_LINES.toLocaleString()} 行</div>
       ) : null}
-      <div className="code-view">
+      <div className={`code-view${selection ? " has-selection" : ""}`}>
         <pre className="code-view-gutter" aria-hidden="true">{gutter}</pre>
         <pre className="code-view-lines">
           {highlightedHtml != null
-            ? <code dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
-            : <code>{shownText}</code>}
+            ? <code ref={codeElRef} dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
+            : <code ref={codeElRef}>{shownText}</code>}
         </pre>
+        {selection && onAddSnippet ? (
+          <button
+            type="button"
+            className="code-selection-add"
+            title={`将第 ${selection.startLine}-${selection.endLine} 行加入对话`}
+            onMouseDown={(event) => {
+              // 阻止按钮抢焦点导致选区在 click 前被清空
+              event.preventDefault();
+            }}
+            onClick={() => {
+              onAddSnippet(selection.code, selection.startLine, selection.endLine);
+              setSelection(null);
+              document.getSelection()?.removeAllRanges();
+            }}
+          >
+            加入对话（{selectionLineCount} 行 · L{selection.startLine}-{selection.endLine}）
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -647,11 +810,13 @@ function SheetPreview({ base64, name }: { base64: string; name: string }) {
 }
 
 /** 对话内嵌文件渲染卡片：正文中出现本地文件路径（绝对或相对项目根）时自动渲染 */
-export function InlineFileCards({ content, onOpenFile, basePath }: {
+export function InlineFileCards({ content, onOpenFile, basePath, onAddCodeSnippet }: {
   content: string;
   onOpenFile?: (path: string) => void;
   /** 当前项目根路径：用于把 Agent 回复中的相对路径（src/App.tsx）解析为可读取的绝对路径 */
   basePath?: string;
+  /** 内嵌代码预览中选中片段 → 加入对话 */
+  onAddCodeSnippet?: (snippet: CodeSnippet) => void;
 }) {
   const rawPaths = useMemo(() => extractFilePaths(content), [content]);
   const [entries, setEntries] = useState<Map<string, { path: string; size: number | null; exists: boolean }> | null>(null);
@@ -713,6 +878,7 @@ export function InlineFileCards({ content, onOpenFile, basePath }: {
             size={entry.size}
             exists={entry.exists}
             onOpenFile={onOpenFile}
+            onAddCodeSnippet={onAddCodeSnippet}
           />
         );
       })}
@@ -720,7 +886,7 @@ export function InlineFileCards({ content, onOpenFile, basePath }: {
   );
 }
 
-function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size: number | null; exists: boolean; onOpenFile?: (path: string) => void }) {
+function InlineFileCard({ path, size, exists, onOpenFile, onAddCodeSnippet }: { path: string; size: number | null; exists: boolean; onOpenFile?: (path: string) => void; onAddCodeSnippet?: (snippet: CodeSnippet) => void }) {
   const [open, setOpen] = useState(false);
   const name = path.split("/").filter(Boolean).pop() || path;
   const icon = fileCardIcon({ fileName: name });
@@ -734,7 +900,7 @@ function InlineFileCard({ path, size, exists, onOpenFile }: { path: string; size
     else setOpen(true);
   };
   if (open) {
-    return <FilePreview path={path} compact onClose={() => setOpen(false)} />;
+    return <FilePreview path={path} compact onClose={() => setOpen(false)} onAddCodeSnippet={onAddCodeSnippet} />;
   }
   return (
     <FileCard

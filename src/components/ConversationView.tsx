@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { ArrowDownIcon, ChevronIcon, CopyIcon, DrawIoIcon, EChartIcon, ExcelSheetIcon, FileIcon, FolderIcon, GitBranchIcon, MarkdownIcon, PlusIcon, SendIcon, ShieldIcon, StopIcon, ToolIcon, WordDocIcon, XIcon } from "./icons";
 import { HumanAvatar, PRESENCE_TEXT } from "./DigitalHumanCatalog";
 import { AttributionAvatar } from "./AttributionAvatar";
-import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
+import { InlineFileCards, localFilePathFromHref, type CodeSnippet } from "./FilePreview";
 import { FileActionsArea } from "./FileActionsMenu";
 import { fileTypeMeta, pathBasename, pathDirname, type LocalPathKind } from "../lib/fileType";
 import type { ExtensionSkillSummary } from "../lib/agent-client";
@@ -100,6 +100,8 @@ type ConversationViewProps = {
   /** 已安装且启用的 Skills 技能：+ 菜单里可选注入对话 */
   skills?: ExtensionSkillSummary[];
   onAddResourceSkill?: (skill: ExtensionSkillSummary) => void;
+  /** 代码预览选中片段 → 加入对话（转为代码片段资源标签） */
+  onAddCodeSnippet?: (snippet: CodeSnippet) => void;
 };
 
 const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
@@ -133,11 +135,15 @@ function PluginIcon({ kind, className }: { kind: NonNullable<ComposerResource["p
 
 function resourceLabel(resource: ComposerResource): string {
   if (resource.kind === "plugin" && resource.pluginKind) return PLUGIN_RESOURCE_LABELS[resource.pluginKind];
+  if (resource.kind === "code" && resource.startLine && resource.endLine) {
+    return `${resource.name} L${resource.startLine}-${resource.endLine}`;
+  }
   return resource.name;
 }
 
 function resourceKindLabel(resource: ComposerResource): string {
   if (resource.kind === "folder") return "文件夹";
+  if (resource.kind === "code") return "代码";
   if (resource.kind === "file") {
     if (resource.mimeType?.startsWith("image/")) return "图片";
     // 无本地路径的纯文本资源 = 粘贴的文本内容，折叠展示
@@ -149,13 +155,26 @@ function resourceKindLabel(resource: ComposerResource): string {
   return "插件";
 }
 
-/** 资源标签悬浮提示：粘贴的文本展示字数与前几行预览，其余展示本地路径 */
+/** 资源标签悬浮提示：粘贴的文本/代码片段展示内容预览，其余展示本地路径 */
 function resourceTooltip(resource: ComposerResource): string {
   if (resource.kind === "file" && !resource.path && resource.textContent) {
     const preview = resource.textContent.slice(0, 300);
     return `粘贴的文本 · ${resource.textContent.length} 字符\n\n${preview}${resource.textContent.length > 300 ? "\n…" : ""}`;
   }
+  if (resource.kind === "code" && resource.textContent) {
+    const range = resource.startLine && resource.endLine ? `第 ${resource.startLine}-${resource.endLine} 行` : "选中片段";
+    const preview = resource.textContent.slice(0, 300);
+    return `${resource.name} · ${range}\n\n${preview}${resource.textContent.length > 300 ? "\n…" : ""}`;
+  }
   return resource.path || resourceLabel(resource);
+}
+
+/** 资源标签图标：代码片段与文件同用文件图标，避免未指定插件类型时误走 PluginIcon */
+function resourceChipIcon(resource: ComposerResource) {
+  if (resource.kind === "folder" || resource.kind === "project") return <FolderIcon className="icon-12" />;
+  if (resource.kind === "file" || resource.kind === "code") return <FileIcon className="icon-12" />;
+  if (resource.kind === "skill") return <ToolIcon className="icon-12" />;
+  return <PluginIcon kind={resource.pluginKind!} className="icon-12" />;
 }
 
 type TimelineItem =
@@ -531,6 +550,7 @@ export default function ConversationView({
   onAddResourcePlugin,
   skills = [],
   onAddResourceSkill,
+  onAddCodeSnippet,
 }: ConversationViewProps) {
   // 目录树条目拖入输入框时的高亮
   const [treeDragOver, setTreeDragOver] = useState(false);
@@ -1120,7 +1140,7 @@ export default function ConversationView({
         <div className="resource-banner" aria-label="已添加资源">
           {resources.map((resource) => (
             <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resourceTooltip(resource)}>
-              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : resource.kind === "skill" ? <ToolIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
+              {resourceChipIcon(resource)}
               <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
               <span className="resource-chip-name">{resourceLabel(resource)}</span>
               <button
@@ -1762,6 +1782,7 @@ export default function ConversationView({
                       digitalHumans={digitalHumans}
                       onOpenFile={onOpenFile}
                       basePath={sessionProjectPath || activeProject?.path}
+                      onAddCodeSnippet={onAddCodeSnippet}
                       runSummary={
                         !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
                           ? runSummaryForLast
@@ -1844,6 +1865,7 @@ const MessageItem = memo(function MessageItem({
   digitalHumans,
   onOpenFile,
   basePath,
+  onAddCodeSnippet,
 }: {
   message: ConversationMessage;
   asThought?: boolean;
@@ -1859,6 +1881,8 @@ const MessageItem = memo(function MessageItem({
   onOpenFile?: (path: string) => void;
   /** 当前项目根：用于把回复中的相对代码路径解析为可打开的文件 */
   basePath?: string;
+  /** 内嵌代码预览选中片段 → 加入对话 */
+  onAddCodeSnippet?: (snippet: CodeSnippet) => void;
 }) {
   const isTool = message.role === "tool";
   const reasoningText = message.reasoning?.trim() || "";
@@ -1947,7 +1971,7 @@ const MessageItem = memo(function MessageItem({
               <div className="message-mentions">
                 {message.resources.map((resource) => (
                   <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resourceTooltip(resource)}>
-                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : resource.kind === "skill" ? <ToolIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
+                    {resourceChipIcon(resource)}
                     <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
                     <span className="resource-chip-name">{resourceLabel(resource)}</span>
                   </span>
@@ -1966,7 +1990,7 @@ const MessageItem = memo(function MessageItem({
               </div>
             ) : null}
             {/* 产出的本地文件（md/word/excel/代码等）：内嵌渲染卡片，点击查看 */}
-            {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} basePath={basePath} /> : null}
+            {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} basePath={basePath} onAddCodeSnippet={onAddCodeSnippet} /> : null}
             {runSummary ? (
               <div className="run-summary">
                 {runSummary.duration ? (

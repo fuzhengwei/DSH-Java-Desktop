@@ -388,3 +388,40 @@ export function ArrowRightIcon({ className }: IconProps) {
     </svg>
   );
 }
+
+/** 面板收回：圆角矩形 + 左侧竖线（侧栏收起/展开切换） */
+export function PanelCollapseIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M9.5 5v14" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+/** 漏斗筛选 */
+export function FilterIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <path d="M4 5.5h16l-6.2 7.2v5.1l-3.6 1.7v-6.8z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 放大：两支对角向外箭头 */
+export function ExpandIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
+    </svg>
+  );
+}
+
+/** 还原：两支对角向内箭头（放大状态的逆操作） */
+export function CompressIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M20 10h-6V4M14 10l7-7M4 14h6v6M10 14l-7 7" />
+    </svg>
+  );
+}

@@ -4,6 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ConversationView from "./components/ConversationView";
 import Sidebar, { sessionIsToday, type WorkspaceView } from "./components/Sidebar";
 import SettingsView, { type SettingsSection } from "./components/SettingsView";
+import { EditDigitalHumanSettingsModal } from "./components/DigitalHumansSettings";
 import InfoRail from "./components/InfoRail";
 import DigitalHumanCatalog from "./components/DigitalHumanCatalog";
 import AddDigitalHumanWizard from "./components/AddDigitalHumanWizard";
@@ -12,7 +13,7 @@ import { ParticipantPicker } from "./components/ParticipantPicker";
 import RoomCollaborationView from "./components/RoomCollaborationView";
 import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
-import { FilePreview } from "./components/FilePreview";
+import { FilePreview, type CodeSnippet } from "./components/FilePreview";
 import { ArrowLeftIcon, PlusIcon, RefreshIcon, UsersIcon } from "./components/icons";
 import { stripHiddenContext, truncateSessionTitle, visibleUserMessage } from "./lib/text";
 import { playCompletionSound, unlockAudio } from "./lib/sound";
@@ -133,13 +134,13 @@ async function verifyRoomAccepted(port: number, roomId: string): Promise<boolean
 function readSidebarWidth(): number {
   const stored = Number(localStorage.getItem("dsh-sidebar-width"));
   if (!Number.isFinite(stored) || stored <= 0) return SIDEBAR_DEFAULT_WIDTH;
-  if (stored <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_COLLAPSED_WIDTH;
+  // 收起已改为显式状态（dsh-sidebar-collapsed），历史遗留的窄宽度直接归位到默认宽度
+  if (stored <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_DEFAULT_WIDTH;
   return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, stored));
 }
 
-function normalizeSidebarWidth(width: number): number {
-  if (width <= SIDEBAR_COLLAPSE_THRESHOLD) return SIDEBAR_COLLAPSED_WIDTH;
-  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+function readSidebarCollapsed(): boolean {
+  return localStorage.getItem("dsh-sidebar-collapsed") === "1";
 }
 
 type ProjectEditTarget = {
@@ -236,6 +237,11 @@ function resourcesHiddenContext(resources: ComposerResource[]): string {
   if (resources.length === 0) return "";
   const lines = resources.map((resource) => {
     if (resource.kind === "folder") return `- 文件夹：${resource.name} (${resource.path})`;
+    if (resource.kind === "code") {
+      const range = resource.startLine && resource.endLine ? `第 ${resource.startLine}-${resource.endLine} 行` : "部分内容";
+      const body = (resource.textContent || "").trimEnd();
+      return `- 代码片段：${resource.name}（${range}）(${resource.path || "无本地路径"})；用户在文件预览中选中的代码内容如下，回答时请直接针对这段代码：\n[代码片段开始]\n${body}\n[代码片段结束]`;
+    }
     if (resource.kind === "file") {
       const multimodal = resource.mimeType?.startsWith("image/") ? "；图片已作为多模态附件提供，请先识别图片内容" : "";
       let docText = "";
@@ -289,7 +295,10 @@ function mimeFromName(name: string): string {
 function dedupeResources(resources: ComposerResource[]): ComposerResource[] {
   const seen = new Set<string>();
   return resources.filter((resource) => {
-    const key = `${resource.kind}:${resource.path || resource.pluginKind || resource.id}`;
+    // 代码片段按文件 + 行号范围 + 内容长度去重：同文件不同选区都保留
+    const key = resource.kind === "code"
+      ? `code:${resource.path || resource.id}:${resource.startLine ?? 0}-${resource.endLine ?? 0}:${(resource.textContent || "").length}`
+      : `${resource.kind}:${resource.path || resource.pluginKind || resource.id}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -728,6 +737,8 @@ function messagesFromPayload(payload: unknown): ConversationMessage[] | null {
 export default function App() {
   const [activeView, setActiveView] = useState<WorkspaceView>("conversation");
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  // 侧边栏收起为显式状态：按钮切换 + 拖边条到最左联动，持久化到 localStorage
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [service, setService] = useState<AgentServiceState | null>(null);
   const [serviceStatus, setServiceStatus] = useState<"checking" | "stopped" | "running" | "starting">("checking");
@@ -811,6 +822,8 @@ export default function App() {
   const [digitalHumans, setDigitalHumans] = useState<DigitalHuman[]>([]);
   const [digitalHumansLoaded, setDigitalHumansLoaded] = useState(false);
   const [selectedHumanId, setSelectedHumanId] = useState("");
+  /** 设置页数字人分栏：正在编辑的数字人（弹窗由本层渲染） */
+  const [editingSettingsHuman, setEditingSettingsHuman] = useState<DigitalHuman | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   // 数字人向导的归属项目（从项目行「添加数字人」进入时带上）
   const [wizardProjectPath, setWizardProjectPath] = useState("");
@@ -843,6 +856,11 @@ export default function App() {
     if (tab.startsWith("artifact:") || tab.startsWith("file:")) setDockOpen(true);
   }, []);
   const [artifactTabs, setArtifactTabs] = useState<Array<{ id: string; label: string; kind?: "artifact" | "file"; fromTree?: boolean }>>([]);
+  // 文件预览「放大」：Dock 铺满工具栏以下的窗口；切走文件 Tab / 收起 Dock 时自动还原
+  const [fileMaximized, setFileMaximized] = useState(false);
+  useEffect(() => {
+    if (!dockOpen || !activeDockTab.startsWith("file:")) setFileMaximized(false);
+  }, [dockOpen, activeDockTab]);
   // 分屏时目录树面板宽度（localStorage 持久化，拖拽中间分隔条调整）
   const [treeSplitWidth, setTreeSplitWidth] = useState(() => {
     const stored = Number(window.localStorage.getItem("dsh:tree-split-width"));
@@ -873,8 +891,17 @@ export default function App() {
 
   const port = service?.port ?? null;
   const serviceReady = serviceStatus === "running" && Boolean(port);
-  const sidebarCollapsed = sidebarWidth <= SIDEBAR_COLLAPSE_THRESHOLD;
-  const appShellStyle = { "--sidebar-width": `${sidebarWidth}px` } as CSSProperties & Record<string, string>;
+  const appShellStyle = { "--sidebar-width": `${sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : sidebarWidth}px` } as CSSProperties & Record<string, string>;
+
+  useEffect(() => {
+    localStorage.setItem("dsh-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+  }, [sidebarCollapsed]);
+
+  /** 收起/展开按钮：展开时若宽度还停在收起阈值以下，先归位到默认宽度 */
+  const toggleSidebarCollapsed = useCallback(() => {
+    if (sidebarWidth <= SIDEBAR_COLLAPSE_THRESHOLD) setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+    setSidebarCollapsed((current) => !current);
+  }, [sidebarWidth]);
 
   const startSidebarResize = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -885,8 +912,9 @@ export default function App() {
     } catch {
       // 忽略：部分环境 pointerId 已释放
     }
+    // 收起态下向右拖动 = 从默认宽度开始展开
     const startX = event.clientX;
-    const startWidth = sidebarWidth;
+    const startWidth = sidebarCollapsed ? SIDEBAR_DEFAULT_WIDTH : sidebarWidth;
     setSidebarResizing(true);
 
     const stopResize = () => {
@@ -907,13 +935,20 @@ export default function App() {
         stopResize();
         return;
       }
-      setSidebarWidth(normalizeSidebarWidth(startWidth + moveEvent.clientX - startX));
+      const nextWidth = startWidth + moveEvent.clientX - startX;
+      if (nextWidth <= SIDEBAR_COLLAPSE_THRESHOLD) {
+        // 拖到最左：收起（宽度保持原值，展开时直接恢复）
+        setSidebarCollapsed(true);
+      } else {
+        setSidebarCollapsed(false);
+        setSidebarWidth(Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, nextWidth)));
+      }
     };
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", stopResize);
     window.addEventListener("pointercancel", stopResize);
-  }, [sidebarWidth]);
+  }, [sidebarCollapsed, sidebarWidth]);
 
   useEffect(() => {
     localStorage.setItem("dsh-sidebar-width", String(sidebarWidth));
@@ -1459,7 +1494,8 @@ export default function App() {
         stopTreeSplitResize();
         return;
       }
-      const next = Math.min(520, Math.max(180, drag.startWidth + (moveEvent.clientX - drag.startX)));
+      // 目录树在分屏右侧：向左拖分隔条加宽、向右拖收窄
+      const next = Math.min(520, Math.max(180, drag.startWidth - (moveEvent.clientX - drag.startX)));
       setTreeSplitWidth(next);
     };
     const stopTreeSplitResize = () => {
@@ -2309,6 +2345,19 @@ export default function App() {
       kind: "skill",
       name: skill.name,
       path: skill.path,
+    });
+  }, [addDraftResource]);
+
+  /** 代码预览中选中片段 → 输入框代码片段资源（带文件与行号，发送后随 hidden context 注入源码） */
+  const addCodeSnippetResource = useCallback((snippet: CodeSnippet) => {
+    addDraftResource({
+      id: `code:${snippet.path}:${snippet.startLine}-${snippet.endLine}:${Date.now().toString(36)}`,
+      kind: "code",
+      name: snippet.name,
+      path: snippet.path,
+      textContent: snippet.code,
+      startLine: snippet.startLine,
+      endLine: snippet.endLine,
     });
   }, [addDraftResource]);
 
@@ -3524,6 +3573,38 @@ export default function App() {
           onEdit={editModel}
           onToggleModel={(model) => void toggleModel(model)}
           onReconnect={() => void startService()}
+          digitalHumans={digitalHumans}
+          digitalHumansLoading={!digitalHumansLoaded}
+          digitalHumanProjects={combinedProjects.filter((project) => !project.local || !project.parentPath)}
+          onDigitalHumansChanged={() => void refreshDigitalHumans(port)}
+          onAddDigitalHuman={() => {
+            setWizardProjectPath("");
+            setWizardOpen(true);
+          }}
+          onEditDigitalHuman={setEditingSettingsHuman}
+        />
+        {editingSettingsHuman ? (
+          <EditDigitalHumanSettingsModal
+            human={editingSettingsHuman}
+            onClose={() => setEditingSettingsHuman(null)}
+            onSaved={() => void refreshDigitalHumans(port)}
+          />
+        ) : null}
+        <AddDigitalHumanWizard
+          open={wizardOpen}
+          port={port}
+          projectPath={wizardProjectPath || undefined}
+          projectName={wizardProjectPath ? combinedProjects.find((project) => project.path === wizardProjectPath)?.name : undefined}
+          onClose={() => {
+            setWizardOpen(false);
+            setWizardProjectPath("");
+          }}
+          onCreated={(human) => {
+            setDigitalHumans((current) => [...current, human]);
+            setSelectedHumanId(human.id);
+            // 设置页向导创建完成后留在当前视图，刷新列表即可
+            void refreshDigitalHumans(port);
+          }}
         />
       </div>
     );
@@ -3656,6 +3737,7 @@ export default function App() {
       <Sidebar
         activeView={activeView}
         collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebarCollapsed}
         activeSessionId={activeSessionId}
         activeProjectPath={activeProjectPath}
         streaming={streaming}
@@ -3668,7 +3750,15 @@ export default function App() {
         creatingProject={creatingProject}
         projectModalOpen={projectModalOpen}
         projectName={projectName}
-        onViewChange={setActiveView}
+        onViewChange={(view) => {
+          if (view === "digital-humans") {
+            // 侧边栏「数字人」入口 → 设置页数字人分栏（旧的独立目录页保留给向导创建后跳转）
+            setActiveView("settings");
+            setSettingsSection("digital-humans");
+            return;
+          }
+          setActiveView(view);
+        }}
         onSelectDefaultWorkspace={selectDefaultWorkspace}
         onSelectSession={(id) => void selectSession(id)}
         sessionCustomTitles={customSessionTitles}
@@ -3854,7 +3944,8 @@ export default function App() {
           <RightDock splitMode={treeFileSplitActive}>
             {/* 信息面板常驻挂载（display 切换保活）：看文件预览/协作时工程目录树的
                 展开状态与读取缓存不丢，切回「信息」即恢复原样。
-                目录树打开的文件 Tab 激活时，面板收窄为固定宽度挂在左侧，实现「树 + 文件」分屏 */}
+                目录树打开的文件 Tab 激活时，面板收窄为固定宽度挂在右侧（CSS order 交换），
+                实现「文件 + 树」分屏：左侧文件内容、右侧目录树 */}
             <div
               className={`dock-pane info-dock-pane${treeFileSplitActive ? " tree-split" : ""}`}
               style={{
@@ -3889,7 +3980,7 @@ export default function App() {
                 role="separator"
                 aria-orientation="vertical"
                 aria-label="调整目录树宽度"
-                title="拖动调整目录树宽度"
+                title="拖动调整目录树宽度（左侧为文件预览）"
                 onPointerDown={startTreeSplitResize}
               />
             ) : null}
@@ -3930,7 +4021,12 @@ export default function App() {
               >
                 <FilePreview
                   path={activeDockTab.slice(5)}
+                  basePath={activeProject?.path}
                   onClose={() => closeArtifactTab(activeDockTab)}
+                  onCollapse={() => setDockOpen(false)}
+                  onToggleMaximize={() => setFileMaximized((value) => !value)}
+                  maximized={fileMaximized}
+                  onAddCodeSnippet={addCodeSnippetResource}
                 />
               </div>
             ) : null}
@@ -3939,6 +4035,13 @@ export default function App() {
       </main>
       </div>{/* /.app-body */}
 
+      {editingSettingsHuman ? (
+        <EditDigitalHumanSettingsModal
+          human={editingSettingsHuman}
+          onClose={() => setEditingSettingsHuman(null)}
+          onSaved={() => void refreshDigitalHumans(port)}
+        />
+      ) : null}
       <AddDigitalHumanWizard
         open={wizardOpen}
         port={port}
@@ -3951,8 +4054,8 @@ export default function App() {
         onCreated={(human) => {
           setDigitalHumans((current) => [...current, human]);
           setSelectedHumanId(human.id);
-          // 归属项目的创建完成后留在当前视图；全局创建回目录查看详情
-          if (!wizardProjectPath) setActiveView("digital-humans");
+          // 设置页向导创建完成后留在当前视图，刷新列表即可
+          void refreshDigitalHumans(port);
         }}
       />
       <ParticipantPicker
@@ -3963,7 +4066,8 @@ export default function App() {
         onJoin={joinCurrentRoom}
         onOpenCatalog={() => {
           setPickerOpen(false);
-          setActiveView("digital-humans");
+          setActiveView("settings");
+          setSettingsSection("digital-humans");
         }}
       />    </div>
   );

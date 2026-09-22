@@ -48,7 +48,7 @@ export type ResourcePluginKind = "word" | "excel" | "md" | "echart" | "drawio";
 
 export type ComposerResource = {
   id: string;
-  kind: "folder" | "file" | "project" | "plugin" | "skill";
+  kind: "folder" | "file" | "project" | "plugin" | "skill" | "code";
   name: string;
   path?: string;
   pluginKind?: ResourcePluginKind;
@@ -56,6 +56,9 @@ export type ComposerResource = {
   dataUrl?: string;
   /** 文档类附件（如 .docx）在前端提取的纯文本，随隐藏上下文注入对话 */
   textContent?: string;
+  /** 代码片段资源：在文件预览中选中的起始/结束行（1-based，含端点） */
+  startLine?: number;
+  endLine?: number;
 };
 
 export type ConversationMessage = {

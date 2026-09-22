@@ -29,6 +29,8 @@ type InfoRailProps = {
   onSwitchProjectBranch?: (project: WorkspaceEntry, branch: string) => void;
   /** 目录树点击文件 → 右侧 Dock 打开内容预览 */
   onOpenFile?: (path: string) => void;
+  /** 目录树「收回面板」→ 收起整个右侧 Dock */
+  onCollapse?: () => void;
   /** 分屏模式（目录树 + 文件并排）：目录树区域铺满面板剩余高度，方便点击 */
   treeFill?: boolean;
 };
@@ -45,6 +47,8 @@ type GitChangedFile = {
 type GitChangeSummary = {
   isRepo: boolean;
   branch: string;
+  /** 仓库根目录（files[].path 相对于它，用于拼绝对路径打开 Diff） */
+  repoRoot?: string;
   insertions: number;
   deletions: number;
   files: GitChangedFile[];
@@ -249,6 +253,7 @@ export default function InfoRail(props: InfoRailProps) {
     switchingBranchPath,
     onSwitchProjectBranch,
     onOpenFile,
+    onCollapse,
     treeFill = false,
   } = props;
   // 未传 active 时沿用 open（独立面板语义）
@@ -518,7 +523,7 @@ export default function InfoRail(props: InfoRailProps) {
               </div>
               {activeProject?.path && expandedTreePath === activeProject.path ? (
                 <div className="rail-dir-tree-wrap">
-                  <DirTreeView rootPath={activeProject.path} onOpenFile={onOpenFile} />
+                  <DirTreeView rootPath={activeProject.path} onOpenFile={onOpenFile} onCollapse={onCollapse} />
                 </div>
               ) : null}
             </section>
@@ -546,16 +551,34 @@ export default function InfoRail(props: InfoRailProps) {
                 ) : (
                   <>
                     <ul className="rail-git-list">
-                      {(gitExpanded ? gitChanges.files : gitChanges.files.slice(0, 5)).map((file) => (
-                        <li key={`${file.status}-${file.path}`} className="rail-git-row">
-                          <span className={`rail-git-status s-${file.status}`}>{file.status}</span>
-                          <span className="rail-git-path rail-mono" title={file.path}>{fileNameOf(file.path)}</span>
-                          <span className="rail-git-diff rail-mono">
-                            {file.insertions != null ? <em className="rail-diff-add">+{file.insertions}</em> : null}
-                            {file.deletions != null && file.deletions > 0 ? <em className="rail-diff-del">-{file.deletions}</em> : null}
-                          </span>
-                        </li>
-                      ))}
+                      {(gitExpanded ? gitChanges.files : gitChanges.files.slice(0, 5)).map((file) => {
+                        const absolutePath = file.path.startsWith("/")
+                          ? file.path
+                          : [gitChanges.repoRoot, file.path].filter(Boolean).join("/");
+                        return (
+                          <li
+                            key={`${file.status}-${file.path}`}
+                            className={`rail-git-row${file.status !== "D" && onOpenFile ? " clickable" : ""}`}
+                            role={file.status !== "D" && onOpenFile ? "button" : undefined}
+                            tabIndex={file.status !== "D" && onOpenFile ? 0 : undefined}
+                            title={file.status !== "D" && onOpenFile ? `查看 ${file.path} 的变更差异` : file.path}
+                            onClick={file.status !== "D" && onOpenFile ? () => onOpenFile(absolutePath) : undefined}
+                            onKeyDown={(event) => {
+                              if ((event.key === "Enter" || event.key === " ") && file.status !== "D" && onOpenFile) {
+                                event.preventDefault();
+                                onOpenFile(absolutePath);
+                              }
+                            }}
+                          >
+                            <span className={`rail-git-status s-${file.status}`}>{file.status}</span>
+                            <span className="rail-git-path rail-mono" title={file.path}>{fileNameOf(file.path)}</span>
+                            <span className="rail-git-diff rail-mono">
+                              {file.insertions != null ? <em className="rail-diff-add">+{file.insertions}</em> : null}
+                              {file.deletions != null && file.deletions > 0 ? <em className="rail-diff-del">-{file.deletions}</em> : null}
+                            </span>
+                          </li>
+                        );
+                      })}
                     </ul>
                     {gitChanges.files.length > 5 ? (
                       <button type="button" className="rail-git-more" onClick={() => setGitExpanded((value) => !value)}>

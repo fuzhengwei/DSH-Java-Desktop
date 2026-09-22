@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { DigitalHuman, SessionSummary, WorkspaceEntry } from "../types";
 import { sanitizeDisplayName, stripHiddenContext, truncateSessionTitle, visibleUserMessage } from "../lib/text";
 import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./ProjectRowMenu";
@@ -7,12 +7,14 @@ import {
   ChevronIcon,
   ChatDotsIcon,
   EditIcon,
+  FilterIcon,
   FolderIcon,
   LayersIcon,
+  PanelCollapseIcon,
   PinIcon,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
-  UsersIcon,
   XIcon,
 } from "./icons";
 
@@ -21,9 +23,30 @@ export type WorkspaceView = "conversation" | "settings" | "digital-humans";
 /** 侧边栏每个项目默认展示的会话条数，超出部分点击「加载更多」追加 */
 const SESSION_PAGE_SIZE = 10;
 
+/** 会话状态筛选维度（筛选弹层） */
+type SessionStatusFilter = "all" | "running" | "unread" | "pinned";
+/** 会话时间筛选维度（筛选弹层） */
+type SessionTimeFilter = "all" | "today" | "7d" | "30d";
+
+const STATUS_FILTER_OPTIONS: Array<{ value: SessionStatusFilter; label: string }> = [
+  { value: "all", label: "全部状态" },
+  { value: "running", label: "进行中" },
+  { value: "unread", label: "有未读" },
+  { value: "pinned", label: "已置顶" },
+];
+
+const TIME_FILTER_OPTIONS: Array<{ value: SessionTimeFilter; label: string }> = [
+  { value: "all", label: "全部时间" },
+  { value: "today", label: "今天" },
+  { value: "7d", label: "最近 7 天" },
+  { value: "30d", label: "最近 30 天" },
+];
+
 type SidebarProps = {
   activeView: WorkspaceView;
   collapsed?: boolean;
+  /** 收起/展开侧边栏（宽度与持久化由 App 层管理） */
+  onToggleCollapsed?: () => void;
   activeSessionId: string;
   activeProjectPath: string;
   streaming?: boolean;
@@ -155,6 +178,7 @@ function sessionTime(session: SessionSummary): string {
 export default function Sidebar({
   activeView,
   collapsed = false,
+  onToggleCollapsed,
   activeSessionId,
   activeProjectPath,
   streaming = false,
@@ -210,9 +234,80 @@ export default function Sidebar({
     setVisibleCounts((current) => ({ ...current, [path]: (current[path] ?? SESSION_PAGE_SIZE) + step }));
   };
 
+  // ── 侧边栏工具：搜索 / 筛选 / 列表模式 ──
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all");
+  const [timeFilter, setTimeFilter] = useState<SessionTimeFilter>("all");
+  // 列表模式："all" 默认对话列表（平铺全部对话），"projects" 按项目分组
+  const [listMode, setListMode] = useState<"all" | "projects">(
+    () => (localStorage.getItem("dsh-sidebar-list-mode") === "projects" ? "projects" : "all"),
+  );
+  useEffect(() => {
+    localStorage.setItem("dsh-sidebar-list-mode", listMode);
+  }, [listMode]);
+  // 默认对话列表分页
+  const [allListCount, setAllListCount] = useState(SESSION_PAGE_SIZE);
+  // 筛选/搜索条件变化时重置分页，避免停留在过大的页数上
+  useEffect(() => {
+    setVisibleCounts({});
+    setAllListCount(SESSION_PAGE_SIZE);
+  }, [searchText, statusFilter, timeFilter]);
+
+  const runningIds = useMemo(() => new Set(runningSessionIds), [runningSessionIds]);
+  // 未读判定：会话的任意别名 id 命中未读记录即视为有新内容
+  const unreadStatusOf = (session: SessionSummary): "done" | "error" | undefined => (
+    sessionIds(session).map((id) => unreadSessions[id]).find(Boolean)
+  );
+  const isSessionRunning = (session: SessionSummary) => (
+    sessionIds(session).some((id) => runningIds.has(id))
+  );
+  const pinnedIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
+  const isSessionPinned = (session: SessionSummary) => sessionIds(session).some((id) => pinnedIdSet.has(id));
+
+  // 搜索 + 状态/时间筛选：同时作用于置顶区、项目会话列表与默认对话列表
+  const filteredSessions = useMemo(() => {
+    const query = searchText.trim().toLowerCase();
+    return sessions.filter((session) => {
+      if (query) {
+        const haystack = [
+          sessionTitle(session, sessionCustomTitles),
+          session.lastMessage || "",
+          session.agentId || "",
+        ].join(" ").toLowerCase();
+        if (!haystack.includes(query)) return false;
+      }
+      if (statusFilter === "running" && !(isSessionRunning(session) || (sessionIsActive(session, activeSessionId) && streaming))) return false;
+      if (statusFilter === "unread" && !unreadStatusOf(session)) return false;
+      if (statusFilter === "pinned" && !isSessionPinned(session)) return false;
+      if (timeFilter !== "all") {
+        const value = session.updatedAt || session.createdAt;
+        const time = value ? new Date(value).getTime() : NaN;
+        if (Number.isNaN(time)) return false;
+        if (timeFilter === "today" && !sessionIsToday(session)) return false;
+        if (timeFilter === "7d" && time < Date.now() - 7 * 24 * 60 * 60 * 1000) return false;
+        if (timeFilter === "30d" && time < Date.now() - 30 * 24 * 60 * 60 * 1000) return false;
+      }
+      return true;
+    });
+  }, [activeSessionId, pinnedIdSet, runningIds, sessionCustomTitles, sessions, statusFilter, streaming, searchText, timeFilter, unreadSessions]);
+
+  const filtersActive = statusFilter !== "all" || timeFilter !== "all" || searchText.trim().length > 0;
+
+  // 默认对话列表：全部（过滤后）会话按更新时间倒序平铺，点击行直接选中
+  const defaultListSessions = useMemo(() => {
+    const timeOf = (session: SessionSummary) => {
+      const value = session.updatedAt || session.createdAt || "";
+      const time = new Date(value).getTime();
+      return Number.isNaN(time) ? 0 : time;
+    };
+    return [...filteredSessions].sort((a, b) => timeOf(b) - timeOf(a));
+  }, [filteredSessions]);
+
   const groupedSessions = useMemo(() => {
     const groups = new Map<string, SessionSummary[]>();
-    for (const session of sessions) {
+    for (const session of filteredSessions) {
       const ids = sessionIds(session);
       const hasDefaultProject = ids.some((id) => sessionProjectMap[id] === "default");
       const projectPath = hasDefaultProject
@@ -245,7 +340,7 @@ export default function Sidebar({
       });
     }
     return groups;
-  }, [sessionOrder, sessionProjectMap, sessions]);
+  }, [filteredSessions, sessionOrder, sessionProjectMap]);
 
   const groupedLocalProjects = useMemo(() => {
     const groups = new Map<string, WorkspaceEntry[]>();
@@ -305,8 +400,6 @@ export default function Sidebar({
   const unassignedSessions = groupedSessions.get("__unassigned__") || [];
 
   // 置顶会话：按置顶顺序（最新置顶在最前）从全部会话中解析，已删除/隐藏的自动跳过
-  const pinnedIdSet = useMemo(() => new Set(pinnedSessionIds), [pinnedSessionIds]);
-  const isSessionPinned = (session: SessionSummary) => sessionIds(session).some((id) => pinnedIdSet.has(id));
   const pinnedSessions = useMemo(() => {
     const seen = new Set<SessionSummary>();
     const list: SessionSummary[] = [];
@@ -320,6 +413,12 @@ export default function Sidebar({
     return list;
   }, [pinnedSessionIds, sessions]);
 
+  // 置顶区同样吃搜索/筛选条件（保持原有置顶顺序）
+  const visiblePinnedSessions = useMemo(
+    () => pinnedSessions.filter((session) => filteredSessions.includes(session)),
+    [filteredSessions, pinnedSessions],
+  );
+
   // 会话归属的项目路径：置顶区的行沿用真实归属，拖拽/选中行为与项目内一致
   const projectPathOfSessionForPinned = (session: SessionSummary) => {
     const ids = sessionIds(session);
@@ -331,14 +430,6 @@ export default function Sidebar({
         || "";
   };
 
-  const runningIds = useMemo(() => new Set(runningSessionIds), [runningSessionIds]);
-  // 未读判定：会话的任意别名 id 命中未读记录即视为有新内容
-  const unreadStatusOf = (session: SessionSummary): "done" | "error" | undefined => (
-    sessionIds(session).map((id) => unreadSessions[id]).find(Boolean)
-  );
-  const isSessionRunning = (session: SessionSummary) => (
-    sessionIds(session).some((id) => runningIds.has(id))
-  );
   // 项目内正在运行的会话数（当前激活且正在流式输出的会话也算进行中）
   const runningCountOf = (list: SessionSummary[]) => (
     list.filter((session) => isSessionRunning(session) || (sessionIsActive(session, activeSessionId) && streaming)).length
@@ -624,15 +715,33 @@ export default function Sidebar({
         } : undefined}
         onClose={closeAssignPopover}
       />
-      <div className="brand" title="DSH Java Desktop">
-        <img className="brand-mark" src="/dsh-icon.png?v=20260917" alt="DSH" />
-        <div className="brand-copy">
-          <div className="brand-title">
-            DSH
-            <UpdateStatusBadge />
+      <div className="brand-row">
+        <div
+          className="brand"
+          title={collapsed && onToggleCollapsed ? "展开侧边栏" : "DSH Java Desktop"}
+          onClick={collapsed && onToggleCollapsed ? onToggleCollapsed : undefined}
+          role={collapsed && onToggleCollapsed ? "button" : undefined}
+        >
+          <img className="brand-mark" src="/dsh-icon.png?v=20260917" alt="DSH" />
+          <div className="brand-copy">
+            <div className="brand-title">
+              DSH
+              <UpdateStatusBadge />
+            </div>
+            <div className="brand-subtitle">Java Desktop</div>
           </div>
-          <div className="brand-subtitle">Java Desktop</div>
         </div>
+        {!collapsed && onToggleCollapsed ? (
+          <button
+            type="button"
+            className="sidebar-collapse-toggle"
+            title="收起侧边栏"
+            aria-label="收起侧边栏"
+            onClick={onToggleCollapsed}
+          >
+            <PanelCollapseIcon className="icon-16" />
+          </button>
+        ) : null}
       </div>
 
       <nav className="nav-group" aria-label="主导航">
@@ -642,20 +751,160 @@ export default function Sidebar({
         </button>
       </nav>
 
+      {/* 工具行：搜索 / 筛选 / 对话与项目列表切换（收起态整体隐藏） */}
+      {!collapsed ? (
+        <div className="sidebar-tools">
+          {searchOpen ? (
+            <div className="sidebar-search">
+              <SearchIcon className="icon-14" />
+              <input
+                value={searchText}
+                autoFocus
+                placeholder="搜索对话"
+                onChange={(event) => setSearchText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchText("");
+                    setSearchOpen(false);
+                  }
+                }}
+              />
+              {searchText ? (
+                <button type="button" className="sidebar-search-clear" aria-label="清空搜索" onClick={() => setSearchText("")}>
+                  <XIcon className="icon-14" />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="sidebar-tools-row">
+            <button
+              type="button"
+              className={`sidebar-tool-btn${searchOpen ? " active" : ""}`}
+              title="搜索对话"
+              aria-label="搜索对话"
+              onClick={() => {
+                setSearchOpen((open) => {
+                  if (open) setSearchText("");
+                  return !open;
+                });
+              }}
+            >
+              <SearchIcon className="icon-15" />
+            </button>
+            <button
+              type="button"
+              className={`sidebar-tool-btn${filtersActive ? " active" : ""}`}
+              title="筛选对话"
+              aria-label="筛选对话"
+              onClick={() => setFilterOpen((open) => !open)}
+            >
+              <FilterIcon className="icon-15" />
+            </button>
+            <div className="sidebar-mode-tabs" role="tablist" aria-label="列表模式">
+              <button
+                type="button"
+                className={listMode === "all" ? "active" : ""}
+                onClick={() => setListMode("all")}
+                title="平铺展示全部对话"
+              >
+                对话
+              </button>
+              <button
+                type="button"
+                className={listMode === "projects" ? "active" : ""}
+                onClick={() => setListMode("projects")}
+                title="按项目分组展示"
+              >
+                项目
+              </button>
+            </div>
+          </div>
+          {filterOpen ? (
+            <>
+              <div className="sidebar-filter-backdrop" onClick={() => setFilterOpen(false)} />
+              <div className="sidebar-filter-popover">
+                <div className="filter-group-title">状态</div>
+                {STATUS_FILTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`filter-option${statusFilter === option.value ? " selected" : ""}`}
+                    onClick={() => setStatusFilter(option.value)}
+                  >
+                    <span>{option.label}</span>
+                    {statusFilter === option.value ? <span className="filter-check">✓</span> : null}
+                  </button>
+                ))}
+                <div className="filter-group-title filter-group-gap">筛选时间</div>
+                {TIME_FILTER_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`filter-option${timeFilter === option.value ? " selected" : ""}`}
+                    onClick={() => setTimeFilter(option.value)}
+                  >
+                    <span>{option.label}</span>
+                    {timeFilter === option.value ? <span className="filter-check">✓</span> : null}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="filter-reset"
+                  onClick={() => {
+                    setStatusFilter("all");
+                    setTimeFilter("all");
+                  }}
+                >
+                  重置筛选条件
+                </button>
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
       {!collapsed ? (
       <div className="sidebar-scroll">
         <div className="section-heading-row">
           <div className="section-heading section-heading-label">
             <PinIcon className="icon-14" />
             <span>置顶</span>
-            <span className="section-count">{pinnedSessions.length}</span>
+            <span className="section-count">{visiblePinnedSessions.length}</span>
           </div>
         </div>
         <div className="pinned-list">
-          {pinnedSessions.length === 0 ? (
+          {visiblePinnedSessions.length === 0 ? (
             <div className="empty-note subtle">把对话行上的图钉点亮，即可置顶到这里。</div>
-          ) : pinnedSessions.map((session) => renderSessionRow(session, true, projectPathOfSessionForPinned(session)))}
+          ) : visiblePinnedSessions.map((session) => renderSessionRow(session, true, projectPathOfSessionForPinned(session)))}
         </div>
+        {listMode === "all" ? (
+          <>
+            <div className="section-heading-row">
+              <div className="section-heading section-heading-label">
+                <ChatDotsIcon className="icon-14" />
+                <span>对话</span>
+                <span className="section-count">{defaultListSessions.length}</span>
+              </div>
+            </div>
+            <div className="pinned-list">
+              {defaultListSessions.length === 0 ? (
+                <div className="empty-note subtle">
+                  {filtersActive ? "没有符合搜索/筛选条件的对话。" : "还没有对话，点上方「新对话」开始。"}
+                </div>
+              ) : defaultListSessions.slice(0, allListCount).map((session) => renderSessionRow(session, true, projectPathOfSessionForPinned(session)))}
+              {defaultListSessions.length > allListCount ? (
+                <button
+                  type="button"
+                  className="load-more-sessions"
+                  onClick={() => setAllListCount((count) => count + SESSION_PAGE_SIZE)}
+                >
+                  加载更多（还有 {defaultListSessions.length - allListCount} 条）
+                </button>
+              ) : null}
+            </div>
+          </>
+        ) : (
+        <>
         <div className="section-heading-row">
           <div className="section-heading section-heading-label">
             <LayersIcon className="icon-14" />
@@ -754,7 +1003,7 @@ export default function Sidebar({
 
                 {expanded ? (
                   <div className="project-sessions">
-                    {projectSessions.length === 0 ? <div className="empty-note subtle">暂无对话</div> : null}
+                    {projectSessions.length === 0 ? <div className="empty-note subtle">{filtersActive ? "无匹配对话" : "暂无对话"}</div> : null}
                     {projectSessions.slice(0, visibleCounts[project.path] ?? SESSION_PAGE_SIZE).map((session) => renderSessionRow(session, true, project.path))}
                     {projectSessions.length > (visibleCounts[project.path] ?? SESSION_PAGE_SIZE) ? (
                       <button
@@ -818,14 +1067,12 @@ export default function Sidebar({
             ) : null}
           </div>
         </div>
+        </>
+        )}
       </div>
       ) : null}
 
       <div className="sidebar-footer">
-        <button className={activeView === "digital-humans" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("digital-humans")}>
-          <UsersIcon className="icon-16" />
-          <span>数字人</span>
-        </button>
         <button className={activeView === "settings" ? "footer-link active" : "footer-link"} onClick={() => onViewChange("settings")}>
           <SettingsIcon className="icon-16" />
           <span>设置</span>

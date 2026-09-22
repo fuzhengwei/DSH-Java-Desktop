@@ -241,10 +241,12 @@ type Props = {
   children: ReactNode;
   /** 目录树 + 文件分屏模式：进入时若 Dock 过窄则自动拓宽一次，保证文件区可读 */
   splitMode?: boolean;
+  /** 放大模式：铺满工具栏以下的整个窗口（文件预览「放大」） */
+  maximized?: boolean;
 };
 
 /** 右侧面板：只承载内容主体；Tab 栏统一放在顶部 topbar（见 DockTabBar） */
-const RightDock = memo(function RightDock({ children, splitMode }: Props) {
+const RightDock = memo(function RightDock({ children, splitMode, maximized }: Props) {
   const [dockWidth, setDockWidth] = useState(readInitialDockWidth);
 
   useEffect(() => {
@@ -314,34 +316,41 @@ const RightDock = memo(function RightDock({ children, splitMode }: Props) {
   };
 
   return (
-    <aside className="right-dock" role="complementary" aria-label="侧栏" style={{ width: dockWidth }}>
-      <div
-        className="right-dock-resize-handle"
-        role="separator"
-        aria-label="调整侧栏宽度"
-        aria-orientation="vertical"
-        aria-valuemin={MIN_DOCK_WIDTH}
-        aria-valuemax={MAX_DOCK_WIDTH}
-        aria-valuenow={dockWidth}
-        tabIndex={0}
-        onPointerDown={handleResizeStart}
-        onKeyDown={(event) => {
-          if (event.key === "ArrowLeft") {
-            event.preventDefault();
-            resizeBy(24);
-          } else if (event.key === "ArrowRight") {
-            event.preventDefault();
-            resizeBy(-24);
-          } else if (event.key === "Home") {
-            event.preventDefault();
-            setDockWidth(MAX_DOCK_WIDTH);
-          } else if (event.key === "End") {
-            event.preventDefault();
-            setDockWidth(MIN_DOCK_WIDTH);
-          }
-        }}
-      />
-      <div className="right-dock-body">{children}</div>
+    <aside
+      className={`right-dock${maximized ? " maximized" : ""}`}
+      role="complementary"
+      aria-label="侧栏"
+      style={maximized ? undefined : { width: dockWidth }}
+    >
+      {maximized ? null : (
+        <div
+          className="right-dock-resize-handle"
+          role="separator"
+          aria-label="调整侧栏宽度"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_DOCK_WIDTH}
+          aria-valuemax={MAX_DOCK_WIDTH}
+          aria-valuenow={dockWidth}
+          tabIndex={0}
+          onPointerDown={handleResizeStart}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft") {
+              event.preventDefault();
+              resizeBy(24);
+            } else if (event.key === "ArrowRight") {
+              event.preventDefault();
+              resizeBy(-24);
+            } else if (event.key === "Home") {
+              event.preventDefault();
+              setDockWidth(MAX_DOCK_WIDTH);
+            } else if (event.key === "End") {
+              event.preventDefault();
+              setDockWidth(MIN_DOCK_WIDTH);
+            }
+          }}
+        />
+      )}
+      <div className={`right-dock-body${splitMode ? " split-mode" : ""}`}>{children}</div>
     </aside>
   );
 });
