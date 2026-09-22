@@ -24,6 +24,10 @@ struct ServiceState {
     runtime_source: Option<String>,
     java_path: Option<String>,
     java_version: Option<String>,
+    /// 本机鉴权 API Key（启动时随机生成，注入 JAR 的 harness.auth.api-keys）。
+    /// None 表示该实例以无鉴权模式运行（兼容手动 standalone 启动等场景）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -85,6 +89,8 @@ struct AgentRuntime {
     jar_path: PathBuf,
     runtime_path: PathBuf,
     java_runtime: JavaRuntime,
+    /// 启动时生成并注入 JAR 的本机鉴权 key；前端凭此携带 X-API-Key
+    api_key: Option<String>,
 }
 
 struct AgentRuntimeState(Mutex<Option<AgentRuntime>>);
@@ -297,6 +303,7 @@ fn default_state(message: &str) -> ServiceState {
         runtime_source: None,
         java_path: None,
         java_version: None,
+        api_key: None,
     }
 }
 
@@ -316,6 +323,7 @@ fn state_with_runtime(
         runtime_source: runtime.source.clone(),
         java_path: runtime.java_path.clone(),
         java_version: runtime.java_version.clone(),
+        api_key: None,
     }
 }
 
@@ -329,6 +337,7 @@ fn running_state(runtime: &AgentRuntime, message: String) -> ServiceState {
         runtime_source: Some(runtime.java_runtime.source.clone()),
         java_path: Some(runtime.java_runtime.path.display().to_string()),
         java_version: Some(runtime.java_runtime.version.clone()),
+        api_key: runtime.api_key.clone(),
     }
 }
 
@@ -517,6 +526,45 @@ fn find_free_port() -> Result<u16, String> {
         .map_err(|error| format!("分配端口失败：{error}"))
 }
 
+/// 生成 256 位随机本机鉴权 key（hex）。
+/// 用 OS 随机源（/dev/urandom、BCryptGenRandom 等），无需额外依赖。
+fn generate_api_key() -> Result<String, String> {
+    use std::sync::OnceLock;
+    static RNG_ERR: OnceLock<String> = OnceLock::new();
+
+    #[cfg(unix)]
+    fn random_bytes(buffer: &mut [u8]) -> Result<(), ()> {
+        use std::io::Read;
+        let mut file = fs::File::open("/dev/urandom").map_err(|_| ())?;
+        file.read_exact(buffer).map_err(|_| ())
+    }
+
+    #[cfg(windows)]
+    fn random_bytes(buffer: &mut [u8]) -> Result<(), ()> {
+        // Rust 标准库 HashMap RandomState 内部走 BCryptGenRandom，但拿不到原始字节；
+        // 这里直接用 process 标识 + 时间熵拼 32 字节做兜底（弱于 CSPRNG，仅防御本机误用场景）
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id() as u128;
+        let mut seed = nanos ^ (pid << 64) ^ (nanos.wrapping_mul(0x9E3779B97F4A7C15));
+        for chunk in buffer.chunks_mut(16) {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let bytes = seed.to_le_bytes();
+            let take = chunk.len().min(16);
+            chunk[..take].copy_from_slice(&bytes[..take]);
+        }
+        Ok(())
+    }
+
+    let mut bytes = [0u8; 32];
+    random_bytes(&mut bytes).map_err(|_| {
+        RNG_ERR.get_or_init(|| "生成 API Key 失败".to_string()).clone()
+    })?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 fn service_snapshot(app: &tauri::AppHandle, state: &State<AgentRuntimeState>) -> ServiceState {
     let mut guard = state.0.lock().unwrap();
     if let Some(runtime) = guard.as_mut() {
@@ -588,14 +636,29 @@ fn start_agent(
         data_dir.join("deepseek-harness-java").display()
     );
 
-    let child = Command::new(&java_runtime.path)
+    // 本机鉴权：每次启动生成随机 key，注入 JAR 强制校验（D-04）。
+    // key 生成失败时降级为无鉴权模式（保持可用性，日志告警）。
+    let api_key = match generate_api_key() {
+        Ok(key) => Some(key),
+        Err(error) => {
+            eprintln!("[agent-runtime] {error}，本次以无鉴权模式启动");
+            None
+        }
+    };
+
+    let mut start_command = Command::new(&java_runtime.path);
+    start_command
         .arg(format!("-Dserver.port={port}"))
         .arg("-jar")
         .arg(&jar_path)
         .arg("--spring.profiles.active=standalone")
         .arg(format!("--spring.datasource.url={database_url}"))
         .arg("--spring.datasource.username=sa")
-        .arg("--spring.datasource.password=")
+        .arg("--spring.datasource.password=");
+    if let Some(key) = &api_key {
+        start_command.arg(format!("--harness.auth.api-keys={key}"));
+    }
+    let child = start_command
         .current_dir(&data_dir)
         .stdout(Stdio::from(log_file.try_clone().map_err(|error| format!("复制日志句柄失败：{error}"))?))
         .stderr(Stdio::from(log_file))
@@ -615,6 +678,7 @@ fn start_agent(
         jar_path: jar_path.clone(),
         runtime_path,
         java_runtime: java_runtime.clone(),
+        api_key: api_key.clone(),
     });
 
     Ok(ServiceState {
@@ -626,6 +690,7 @@ fn start_agent(
         runtime_source: runtime_check.source,
         java_path: runtime_check.java_path,
         java_version: runtime_check.java_version,
+        api_key,
     })
 }
 

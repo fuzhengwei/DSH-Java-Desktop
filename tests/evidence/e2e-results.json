@@ -1,0 +1,383 @@
+{
+  "base": "http://127.0.0.1:8916",
+  "fake": {
+    "startedAt": 1790064581764,
+    "requests": [],
+    "totalRequests": 0,
+    "maxMessages": 0,
+    "maxChars": 0,
+    "maxTools": 0,
+    "cfg": {
+      "mode": "tool",
+      "modelId": "fake-dsh-model",
+      "chunks": 3,
+      "delayMs": 1,
+      "chunkChars": 10,
+      "firstByteDelayMs": 0,
+      "reasoning": false,
+      "reasoningChunks": 4,
+      "toolRounds": 200,
+      "toolName": "shell_execute",
+      "toolArgs": {
+        "command": "echo step-probe"
+      },
+      "stallAfterFirst": false,
+      "errorStatus": 0
+    }
+  },
+  "startedAt": "2026-09-22T11:38:26.635Z",
+  "scenarios": [
+    {
+      "scenarioId": "S2",
+      "title": "长对话 40 轮（上下文增长/延迟劣化）",
+      "assertions": [
+        {
+          "name": "全部 8 轮对话成功",
+          "ok": true,
+          "detail": "8/8"
+        },
+        {
+          "name": "上游上下文随轮次增长",
+          "ok": true,
+          "detail": "2347 → 87571"
+        },
+        {
+          "name": "未发现「上下文无限增长无上限」",
+          "ok": true,
+          "detail": "max=87571 字符"
+        }
+      ],
+      "metrics": {
+        "rounds": 8,
+        "successRounds": 8,
+        "upstreamRequests": 8,
+        "firstTurnUpstreamChars": 2347,
+        "lastTurnUpstreamChars": 87571,
+        "maxUpstreamChars": 87571,
+        "maxUpstreamApproxTokens": 21893,
+        "lastDonePayloadBytes": 12322,
+        "donePayloadGrowthRatio": 1,
+        "avgTurnMsFirst5": 170,
+        "avgTurnMsLast5": 161,
+        "latencyDegradation": 0.94,
+        "compactionDetected": null,
+        "perTurn": [
+          {
+            "round": 1,
+            "totalMs": 182,
+            "chunkCount": 3,
+            "upstreamMessages": 2,
+            "upstreamChars": 2347,
+            "upstreamApproxTokens": 587,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 2,
+            "totalMs": 187,
+            "chunkCount": 3,
+            "upstreamMessages": 4,
+            "upstreamChars": 14521,
+            "upstreamApproxTokens": 3630,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 3,
+            "totalMs": 160,
+            "chunkCount": 3,
+            "upstreamMessages": 6,
+            "upstreamChars": 26697,
+            "upstreamApproxTokens": 6674,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 4,
+            "totalMs": 161,
+            "chunkCount": 3,
+            "upstreamMessages": 8,
+            "upstreamChars": 38871,
+            "upstreamApproxTokens": 9718,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 5,
+            "totalMs": 162,
+            "chunkCount": 3,
+            "upstreamMessages": 10,
+            "upstreamChars": 51047,
+            "upstreamApproxTokens": 12762,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 6,
+            "totalMs": 159,
+            "chunkCount": 3,
+            "upstreamMessages": 12,
+            "upstreamChars": 63221,
+            "upstreamApproxTokens": 15805,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 7,
+            "totalMs": 163,
+            "chunkCount": 3,
+            "upstreamMessages": 14,
+            "upstreamChars": 75395,
+            "upstreamApproxTokens": 18849,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 8,
+            "totalMs": 160,
+            "chunkCount": 3,
+            "upstreamMessages": 16,
+            "upstreamChars": 87571,
+            "upstreamApproxTokens": 21893,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          }
+        ]
+      },
+      "notes": [],
+      "raw": {
+        "perTurn": [
+          {
+            "round": 1,
+            "totalMs": 182,
+            "chunkCount": 3,
+            "upstreamMessages": 2,
+            "upstreamChars": 2347,
+            "upstreamApproxTokens": 587,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 2,
+            "totalMs": 187,
+            "chunkCount": 3,
+            "upstreamMessages": 4,
+            "upstreamChars": 14521,
+            "upstreamApproxTokens": 3630,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 3,
+            "totalMs": 160,
+            "chunkCount": 3,
+            "upstreamMessages": 6,
+            "upstreamChars": 26697,
+            "upstreamApproxTokens": 6674,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 4,
+            "totalMs": 161,
+            "chunkCount": 3,
+            "upstreamMessages": 8,
+            "upstreamChars": 38871,
+            "upstreamApproxTokens": 9718,
+            "doneMessages": 2,
+            "doneBytes": 12321,
+            "ok": true
+          },
+          {
+            "round": 5,
+            "totalMs": 162,
+            "chunkCount": 3,
+            "upstreamMessages": 10,
+            "upstreamChars": 51047,
+            "upstreamApproxTokens": 12762,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 6,
+            "totalMs": 159,
+            "chunkCount": 3,
+            "upstreamMessages": 12,
+            "upstreamChars": 63221,
+            "upstreamApproxTokens": 15805,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 7,
+            "totalMs": 163,
+            "chunkCount": 3,
+            "upstreamMessages": 14,
+            "upstreamChars": 75395,
+            "upstreamApproxTokens": 18849,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          },
+          {
+            "round": 8,
+            "totalMs": 160,
+            "chunkCount": 3,
+            "upstreamMessages": 16,
+            "upstreamChars": 87571,
+            "upstreamApproxTokens": 21893,
+            "doneMessages": 2,
+            "doneBytes": 12322,
+            "ok": true
+          }
+        ],
+        "compactionDrop": null
+      },
+      "durationMs": 1354,
+      "status": "PASS"
+    }
+  ],
+  "finishedAt": "2026-09-22T11:38:27.990Z",
+  "finalFakeStats": {
+    "startedAt": 1790064581764,
+    "requests": [
+      {
+        "seq": 1,
+        "at": 1790077106652,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 2,
+        "chars": 2347,
+        "approxTokens": 587,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user"
+      },
+      {
+        "seq": 2,
+        "at": 1790077106852,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 4,
+        "chars": 14521,
+        "approxTokens": 3630,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user"
+      },
+      {
+        "seq": 3,
+        "at": 1790077107023,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 6,
+        "chars": 26697,
+        "approxTokens": 6674,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user"
+      },
+      {
+        "seq": 4,
+        "at": 1790077107184,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 8,
+        "chars": 38871,
+        "approxTokens": 9718,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user,assistant,user"
+      },
+      {
+        "seq": 5,
+        "at": 1790077107346,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 10,
+        "chars": 51047,
+        "approxTokens": 12762,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user,assistant,user,assistant,user"
+      },
+      {
+        "seq": 6,
+        "at": 1790077107509,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 12,
+        "chars": 63221,
+        "approxTokens": 15805,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user"
+      },
+      {
+        "seq": 7,
+        "at": 1790077107671,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 14,
+        "chars": 75395,
+        "approxTokens": 18849,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user"
+      },
+      {
+        "seq": 8,
+        "at": 1790077107835,
+        "model": "fake-model",
+        "stream": true,
+        "messages": 16,
+        "chars": 87571,
+        "approxTokens": 21893,
+        "tools": 39,
+        "systemChars": 2111,
+        "roles": "system,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user,assistant,user"
+      }
+    ],
+    "totalRequests": 8,
+    "maxMessages": 16,
+    "maxChars": 87571,
+    "maxTools": 39,
+    "cfg": {
+      "mode": "text",
+      "modelId": "fake-dsh-model",
+      "chunks": 120,
+      "delayMs": 1,
+      "chunkChars": 100,
+      "firstByteDelayMs": 0,
+      "reasoning": false,
+      "reasoningChunks": 4,
+      "toolRounds": 0,
+      "toolName": "shell_execute",
+      "toolArgs": {
+        "command": "echo step-probe"
+      },
+      "stallAfterFirst": false,
+      "errorStatus": 0
+    }
+  },
+  "summary": {
+    "total": 1,
+    "pass": 1,
+    "fail": 0,
+    "assertions": 3,
+    "assertionsFailed": 0
+  }
+}

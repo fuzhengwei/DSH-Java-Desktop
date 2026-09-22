@@ -58,6 +58,7 @@ import {
   updatePresence,
   type ServerRoomView,
 } from "./lib/digital-human-client";
+import { setLocalApiKey } from "./lib/http";
 import type {
   AgentServiceState,
   ApprovalMode,
@@ -1728,6 +1729,8 @@ export default function App() {
     try {
       const existingState = await invoke<AgentServiceState>("agent_status");
       setService(existingState);
+      // D-04 本机鉴权：把 Rust 壳注入 JAR 的 key 同步给 HTTP 层（null = 无鉴权模式）
+      setLocalApiKey(existingState.apiKey);
       if (existingState.status === "running" && existingState.port) {
         setServiceBoot({ stage: "服务进程已在运行，正在等待接口就绪", progress: 45 });
         await waitForService(existingState.port, 45_000, (elapsed, timeout) => {
@@ -1748,6 +1751,7 @@ export default function App() {
           const state = await invoke<AgentServiceState>("start_agent");
           if (!state.port) throw new Error(state.message || "服务启动失败");
           setService(state);
+          setLocalApiKey(state.apiKey);
           setServiceBoot({ stage: "智能体进程已拉起，正在等待服务就绪", progress: 30 });
           await waitForService(state.port, 45_000, (elapsed, timeout) => {
             setServiceBoot({
@@ -1797,6 +1801,7 @@ export default function App() {
       try {
         const state = await invoke<AgentServiceState>("agent_status");
         if (cancelled) return;
+        setLocalApiKey(state.apiKey);
         if (state.status !== "running") {
           setService(state);
           setServiceStatus("stopped");

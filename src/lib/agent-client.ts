@@ -1,4 +1,4 @@
-import { httpFetch } from "./http";
+import { httpFetch, localAuthInit } from "./http";
 import type {
   ApiEnvelope,
   ConversationMessage,
@@ -21,7 +21,7 @@ function baseUrl(port: number): string {
 export async function readHealth(port: number): Promise<boolean> {
   try {
     const response = await withTimeout(
-      fetch(`${baseUrl(port)}/api/harness/config/effective`),
+      fetch(`${baseUrl(port)}/api/harness/config/effective`, localAuthInit(`${baseUrl(port)}/api/harness/config/effective`)),
       5_000,
       "健康检查超时",
     );
@@ -78,13 +78,13 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label = "请求�
 
 async function requestOnce<T>(port: number, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const response = await withTimeout(
-    fetch(`${baseUrl(port)}${path}`, {
+    fetch(`${baseUrl(port)}${path}`, localAuthInit(`${baseUrl(port)}${path}`, {
       ...init,
       headers: {
         "Content-Type": "application/json",
         ...init?.headers,
       },
-    }),
+    })),
     timeoutMs,
   );
   const payload = await withTimeout(
@@ -378,12 +378,12 @@ export async function streamAgentMessage(
   // 连接阶段加超时：WKWebView 的 window.fetch 偶发挂断（请求到服务端但响应不返回），
   // 不加超时会让整个流式调用永久挂起
   const response = await Promise.race([
-    httpFetch(`${baseUrl(port)}/api/agent/stream`, {
+    httpFetch(`${baseUrl(port)}/api/agent/stream`, localAuthInit(`${baseUrl(port)}/api/agent/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal,
-    }),
+    })),
     new Promise<never>((_, reject) => window.setTimeout(
       () => reject(new Error("流式连接超时（15s）")), 15_000,
     )),

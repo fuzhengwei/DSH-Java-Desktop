@@ -17,7 +17,41 @@ import { fetch as pluginFetch } from "@tauri-apps/plugin-http";
 const NATIVE_RETRY_MS = 60_000;
 const nativeBlockedOrigins = new Map<string, number>();
 
+/**
+ * 本机鉴权 API Key（D-04）：Rust 壳启动 JAR 时随机生成并注入 harness.auth.api-keys，
+ * 前端对 127.0.0.1 的请求统一自动附带 X-API-Key。null = 无鉴权模式（JAR 未启用校验）。
+ */
+let localApiKey: string | null = null;
+
+export function setLocalApiKey(key: string | null | undefined): void {
+  localApiKey = key || null;
+}
+
+/** 返回附带本机鉴权头后的 init（供不经 httpFetch 的裸 fetch 调用点复用） */
+export function localAuthInit(url: string, init?: RequestInit): RequestInit {
+  return withLocalAuth(url, init);
+}
+
+function withLocalAuth(url: string, init?: RequestInit): RequestInit {
+  if (!localApiKey) return init ?? {};
+  let sameOriginLocal = false;
+  try {
+    sameOriginLocal = new URL(url).hostname === "127.0.0.1" || new URL(url).hostname === "localhost";
+  } catch {
+    sameOriginLocal = false;
+  }
+  if (!sameOriginLocal) return init ?? {};
+  return {
+    ...init,
+    headers: {
+      ...init?.headers,
+      "X-API-Key": localApiKey,
+    },
+  };
+}
+
 export async function httpFetch(url: string, init?: RequestInit): Promise<Response> {
+  const initWithAuth = withLocalAuth(url, init);
   let origin = "";
   try {
     origin = new URL(url).origin;
@@ -30,11 +64,11 @@ export async function httpFetch(url: string, init?: RequestInit): Promise<Respon
     || Date.now() - blockedAt > NATIVE_RETRY_MS;
   if (nativeAllowed) {
     try {
-      return await window.fetch(url, init);
+      return await window.fetch(url, initWithAuth);
     } catch (error) {
       if (!origin) throw error;
       nativeBlockedOrigins.set(origin, Date.now());
     }
   }
-  return pluginFetch(url, init);
+  return pluginFetch(url, initWithAuth);
 }

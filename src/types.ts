@@ -16,6 +16,8 @@ export type AgentServiceState = {
   runtimeSource: "bundled" | "system" | "custom" | null;
   javaPath: string | null;
   javaVersion: string | null;
+  /** 本机鉴权 API Key（Rust 壳启动 JAR 时随机生成注入）；null 表示无鉴权模式 */
+  apiKey?: string | null;
 };
 
 export type ApiEnvelope<T> = {
