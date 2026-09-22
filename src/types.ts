@@ -46,7 +46,7 @@ export type ResourcePluginKind = "word" | "excel" | "md" | "echart" | "drawio";
 
 export type ComposerResource = {
   id: string;
-  kind: "folder" | "file" | "project" | "plugin";
+  kind: "folder" | "file" | "project" | "plugin" | "skill";
   name: string;
   path?: string;
   pluginKind?: ResourcePluginKind;
@@ -96,6 +96,23 @@ export type RuntimeApproval = {
   toolName?: string;
   displayCommand?: string;
   arguments?: Record<string, unknown>;
+  createdAt?: string;
+};
+
+/** ask_user_question 挂起的单个问题 */
+export type RuntimeQuestionItem = {
+  id: string;
+  question: string;
+  header?: string | null;
+  options?: Array<{ label: string; description?: string | null }> | null;
+  multiSelect?: boolean;
+};
+
+/** ask_user_question 挂起的待回答请求（前端轮询渲染问答卡） */
+export type RuntimeQuestion = {
+  questionId: string;
+  agentId?: string;
+  questions: RuntimeQuestionItem[];
   createdAt?: string;
 };
 

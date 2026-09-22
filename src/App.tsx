@@ -14,7 +14,7 @@ import ArtifactPreview from "./components/ArtifactPreview";
 import RightDock, { DockTabBar } from "./components/RightDock";
 import { FilePreview } from "./components/FilePreview";
 import { ArrowLeftIcon, PlusIcon, RefreshIcon, UsersIcon } from "./components/icons";
-import { stripHiddenContext, truncateSessionTitle } from "./lib/text";
+import { stripHiddenContext, truncateSessionTitle, visibleUserMessage } from "./lib/text";
 import { playCompletionSound, unlockAudio } from "./lib/sound";
 import {
   activateModelSetting,
@@ -24,6 +24,10 @@ import {
   listMessages,
   listModelSettings,
   listRuntimeApprovals,
+  listExtensionSkills,
+  type ExtensionSkillSummary,
+  listPendingUserQuestions,
+  submitUserAnswer,
   listSessions,
   listWorkspaces,
   createWorkspace,
@@ -68,7 +72,9 @@ import type {
   SessionSummary,
   WorkspaceEntry,
   RuntimeApproval,
+  RuntimeQuestion,
 } from "./types";
+import type { UserAnswerSubmission } from "./components/QuestionCard";
 
 // UI 构建标记：渲染在顶部标题栏，用于确认窗口内 webview 加载的是哪一版前端
 // （排查「修复已提交但窗口仍跑旧代码」的问题；发版前可移除）
@@ -240,6 +246,9 @@ function resourcesHiddenContext(resources: ComposerResource[]): string {
       return `- 文件：${resource.name} (${resource.path || "无本地路径"})${resource.mimeType ? `；类型：${resource.mimeType}` : ""}${multimodal}${docText}`;
     }
     if (resource.kind === "project") return `- 项目：${resource.name} (${resource.path})`;
+    if (resource.kind === "skill") {
+      return `- 技能：${resource.name} (${resource.path})；请先阅读该技能目录下的 SKILL.md 及其附带的资料与脚本，并严格按技能说明的流程完成任务。`;
+    }
     const prompt = resource.pluginKind ? RESOURCE_PLUGIN_PROMPTS[resource.pluginKind] : "按指定插件类型交付内容。";
     return `- 插件：${resourceDisplayName(resource)}；${prompt}`;
   });
@@ -692,15 +701,6 @@ function parseThinkingMarkup(value: string): { content: string; reasoning: strin
   };
 }
 
-function visibleUserMessage(value: string): string {
-  const marker = "用户原始请求：";
-  const instructionPrefix = "请先使用可用工具完成下面的任务，";
-  if (value.startsWith(instructionPrefix) && value.includes(marker)) {
-    return value.slice(value.indexOf(marker) + marker.length).trim();
-  }
-  return value;
-}
-
 export function sessionTitle(session: SessionSummary, customTitles?: Record<string, string>): string {
   const customTitle = [session.sessionId, session.agentId]
     .map((id) => (id && customTitles ? customTitles[id] : ""))
@@ -752,7 +752,12 @@ export default function App() {
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem("dsh-active-session-id") || newSessionId());
   const [messages, setMessages] = useState<ConversationMessage[]>(() => readSessionMessages(localStorage.getItem("dsh-active-session-id") || ""));
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
+  // 已安装的 Skills 技能（扩展能力设置里管理的同一份）：供输入框 + 菜单选择注入对话
+  const [extensionSkills, setExtensionSkills] = useState<ExtensionSkillSummary[]>([]);
   const [resolvingApprovalId, setResolvingApprovalId] = useState("");
+  // ask_user_question 挂起的待回答问题（流式期间轮询，渲染问答卡）
+  const [pendingQuestions, setPendingQuestions] = useState<RuntimeQuestion[]>([]);
+  const [submittingQuestionId, setSubmittingQuestionId] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSetting[]>([]);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [modelDraft, setModelDraft] = useState<ModelDraft>(emptyModelDraft);
@@ -1538,8 +1543,9 @@ export default function App() {
     const modelSettingsPromise = listModelSettings(servicePort);
     const runtimeModelsPromise = listAvailableModels(servicePort);
     const approvalsPromise = listRuntimeApprovals(servicePort);
+    const skillsPromise = listExtensionSkills(servicePort);
     const primaryLoad = Promise.allSettled([sessionsPromise, projectsPromise]);
-    const secondaryLoad = Promise.allSettled([modelSettingsPromise, runtimeModelsPromise, approvalsPromise]);
+    const secondaryLoad = Promise.allSettled([modelSettingsPromise, runtimeModelsPromise, approvalsPromise, skillsPromise]);
 
     // 会话/项目决定左侧列表首屏，优先落状态；模型和审批等相对慢的接口随后再补齐。
     const [sessionsResult, projectsResult] = await primaryLoad;
@@ -1587,7 +1593,7 @@ export default function App() {
         current && !latestProjects.some((project) => project.path === current) ? "" : current
       ));
     }
-    const [modelSettingsResult, runtimeModelsResult, approvalsResult] = await secondaryLoad;
+    const [modelSettingsResult, runtimeModelsResult, approvalsResult, skillsResult] = await secondaryLoad;
     const loadedModels = modelSettingsResult.status === "fulfilled" ? modelSettingsResult.value : [];
     const loadedRuntimeModels = runtimeModelsResult.status === "fulfilled" ? runtimeModelsResult.value : [];
     setModelSettings(loadedModels);
@@ -1595,6 +1601,7 @@ export default function App() {
     if (approvalsResult.status === "fulfilled") setApprovals(approvalsResult.value.filter(
       (approval) => !approval.sessionId || approval.sessionId === activeSessionRef.current,
     ));
+    if (skillsResult.status === "fulfilled") setExtensionSkills(skillsResult.value);
 
     if (focusModelsIfEmpty && loadedModels.length === 0) {
       setActiveView("settings");
@@ -1865,6 +1872,46 @@ export default function App() {
       window.clearInterval(timer);
     };
   }, [port, anyStreaming]);
+
+  // ask_user_question 挂起等待：流式期间轮询待回答问题，渲染问答卡；
+  // 非流式时清空（问题要么已被回答，要么已在服务端超时）
+  useEffect(() => {
+    if (!port || !anyStreaming) {
+      setPendingQuestions((current) => (current.length > 0 ? [] : current));
+      return;
+    }
+    let cancelled = false;
+    const loadQuestions = async () => {
+      try {
+        const items = await listPendingUserQuestions(port);
+        if (!cancelled) setPendingQuestions(items);
+      } catch {
+        return;
+      }
+    };
+    void loadQuestions();
+    const timer = window.setInterval(() => void loadQuestions(), 1_200);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [port, anyStreaming]);
+
+  const answerQuestion = useCallback(async (questionId: string, answers: UserAnswerSubmission) => {
+    if (!port || submittingQuestionId) return;
+    setSubmittingQuestionId(questionId);
+    try {
+      const result = await submitUserAnswer(port, questionId, answers);
+      if (!result.submitted) {
+        setError(result.error || "回答提交失败，问题可能已超时");
+      }
+      setPendingQuestions((current) => current.filter((item) => item.questionId !== questionId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setSubmittingQuestionId((current) => (current === questionId ? "" : current));
+    }
+  }, [port, submittingQuestionId]);
 
   const aliasesForSession = useCallback((sessionId: string): string[] => {
     const run = sessionRunsRef.current[sessionId];
@@ -2250,6 +2297,16 @@ export default function App() {
     });
   }, [addDraftResource]);
 
+  /** 选择已安装的 Skills 技能作为资源注入对话：Agent 会按技能目录里的 SKILL.md 执行 */
+  const addResourceSkill = useCallback((skill: ExtensionSkillSummary) => {
+    addDraftResource({
+      id: `skill:${skill.name}`,
+      kind: "skill",
+      name: skill.name,
+      path: skill.path,
+    });
+  }, [addDraftResource]);
+
   const resourceRoots = useMemo(() => draftResources
     .filter((resource) => resource.path && (resource.kind === "folder" || resource.kind === "project" || resource.kind === "file"))
     .map((resource) => (resource.kind === "file" ? parentDir(resource.path as string) : resource.path as string)), [draftResources]);
@@ -2427,6 +2484,7 @@ export default function App() {
     setError("");
     setDraft("");
     setApprovals([]);
+    setPendingQuestions([]);
     // 会话归属以其创建时记录的项目为准（sessionProjectMap），而不是发送瞬间的激活项目，
     // 否则切过项目下拉框后发消息会把服务端 workspaceId 写错，loadWorkspaceData 回填时会话被挪走
     const sessionProjectPath = projectPathFromMap(sessionProjectMapRef.current, originSessionId, activeProjectPath);
@@ -2606,6 +2664,15 @@ export default function App() {
             const payload = payloadRecord(event.payload);
             const sessionId = payloadString(payload, "sessionId");
             if (sessionId) resolvedSessionId = sessionId;
+            // 服务端回合异常收口（驱动线程死亡等）：done 携带 error 字段，
+            // 在保留已收集消息的同时显示错误提示，避免"没回复完就安静结束"
+            const runError = payloadString(payload, "error");
+            if (runError && (
+              activeSessionRef.current === originSessionId
+              || activeSessionRef.current === resolvedSessionId
+            )) {
+              setError(runError);
+            }
             const normalized = messagesFromPayload(event.payload);
             if (normalized && normalized.length > 0) {
               updateMessagesForAliases(aliases, (current) => {
@@ -3733,6 +3800,9 @@ export default function App() {
               !approval.sessionId || approval.sessionId === activeSessionId)}
             resolvingApprovalId={resolvingApprovalId}
             onResolveApproval={(approvalId, verdict) => void resolveApproval(approvalId, verdict)}
+            pendingQuestions={pendingQuestions}
+            submittingQuestionId={submittingQuestionId}
+            onAnswerQuestion={(questionId, answers) => void answerQuestion(questionId, answers)}
             room={room}
             // 传全量目录：消息归属头像的信息卡需要按 id 查完整档案，
             // 只传项目子集会导致全局/其他项目数字人显示「角色详情不可用」
@@ -3768,6 +3838,8 @@ export default function App() {
             onDropTreeResources={(items) => void addDroppedTreeResources(items)}
 	            onAddResourceProject={addResourceProject}
 	            onAddResourcePlugin={addResourcePlugin}
+	            skills={extensionSkills}
+	            onAddResourceSkill={addResourceSkill}
 	          />
         ) : null}
         </div>

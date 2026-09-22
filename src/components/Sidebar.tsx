@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import type { DigitalHuman, SessionSummary, WorkspaceEntry } from "../types";
-import { sanitizeDisplayName, truncateSessionTitle } from "../lib/text";
+import { sanitizeDisplayName, stripHiddenContext, truncateSessionTitle, visibleUserMessage } from "../lib/text";
 import { ProjectHumanAssignPopover, ProjectHumanStack, ProjectRowMenu } from "./ProjectRowMenu";
 import UpdateStatusBadge from "./UpdateStatusBadge";
 import {
@@ -102,11 +102,9 @@ function sessionTitle(session: SessionSummary, customTitles?: Record<string, str
   // 用户手动改过的标题原样展示；否则把 title/lastMessage 压成缩略信息
   if (customTitle && customTitle.trim()) return customTitle.trim();
   const raw = session.title || session.lastMessage || "";
-  const summarized = truncateSessionTitle(
-    raw
-      .replace(/<hidden-context>[\s\S]*?<\/hidden-context>/gi, "")
-      .replace(/\n?\[当前选择的工程\][\s\S]*$/i, ""),
-  );
+  // 还原 harness 包装消息（「请先使用可用工具…用户原始请求：…」）与隐藏上下文注入
+  const visible = visibleUserMessage(stripHiddenContext(raw));
+  const summarized = truncateSessionTitle(visible);
   return summarized || session.agentId || session.sessionId || "新对话";
 }
 

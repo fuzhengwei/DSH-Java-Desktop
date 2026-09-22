@@ -10,6 +10,7 @@ import type {
   PluginCandidate,
   PluginConfigItem,
   RuntimeApproval,
+  RuntimeQuestion,
   WorkspaceEntry,
 } from "../types";
 
@@ -163,6 +164,28 @@ export async function resolveRuntimeApproval(
     method: "POST",
     body: JSON.stringify({ verdict }),
   });
+}
+
+/** ask_user_question 挂起的待回答问题列表（前端流式期间轮询） */
+export async function listPendingUserQuestions(port: number): Promise<RuntimeQuestion[]> {
+  const result = await request<RuntimeQuestion[]>(port, "/api/harness/questions/runtime/pending");
+  return Array.isArray(result) ? result : [];
+}
+
+/** 提交用户回答，唤醒挂起等待的 agent */
+export async function submitUserAnswer(
+  port: number,
+  questionId: string,
+  answers: Array<{ id: string; selected: string[]; custom?: string }>,
+): Promise<{ submitted: boolean; error?: string }> {
+  return request<{ submitted: boolean; error?: string }>(
+    port,
+    `/api/harness/questions/runtime/${encodeURIComponent(questionId)}/answer`,
+    {
+      method: "POST",
+      body: JSON.stringify({ answers }),
+    },
+  );
 }
 
 export async function listModelSettings(port: number): Promise<ModelSetting[]> {

@@ -1,4 +1,4 @@
-import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, WorkspaceEntry } from "../types";
+import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, RuntimeQuestion, WorkspaceEntry } from "../types";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SyntheticEvent } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfmCompatible from "../lib/remark-gfm-compatible";
@@ -10,8 +10,10 @@ import { AttributionAvatar } from "./AttributionAvatar";
 import { InlineFileCards, localFilePathFromHref } from "./FilePreview";
 import { FileActionsArea } from "./FileActionsMenu";
 import { fileTypeMeta, pathBasename, pathDirname, type LocalPathKind } from "../lib/fileType";
+import type { ExtensionSkillSummary } from "../lib/agent-client";
 import { EChartBlock } from "./EChartBlock";
 import { ApprovalCard } from "./ApprovalCard";
+import { QuestionCard, type UserAnswerSubmission } from "./QuestionCard";
 
 /** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
 function extractText(node: unknown): string {
@@ -62,6 +64,10 @@ type ConversationViewProps = {
   approvals: RuntimeApproval[];
   resolvingApprovalId: string;
   onResolveApproval: (approvalId: string, verdict: "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY") => void;
+  /** ask_user_question 挂起的待回答问题（流式期间轮询得到） */
+  pendingQuestions: RuntimeQuestion[];
+  submittingQuestionId: string;
+  onAnswerQuestion: (questionId: string, answers: UserAnswerSubmission) => void;
   /** 数字人协作：房间投影、目录、邀请与移出 */
   room?: RoomProjection | null;
   digitalHumans?: DigitalHuman[];
@@ -91,6 +97,9 @@ type ConversationViewProps = {
   onDropTreeResources?: (items: Array<{ path: string; name: string; displayName?: string; isDir: boolean }>) => void;
   onAddResourceProject: (project: WorkspaceEntry) => void;
   onAddResourcePlugin: (kind: ComposerResource["pluginKind"]) => void;
+  /** 已安装且启用的 Skills 技能：+ 菜单里可选注入对话 */
+  skills?: ExtensionSkillSummary[];
+  onAddResourceSkill?: (skill: ExtensionSkillSummary) => void;
 };
 
 const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
@@ -100,6 +109,9 @@ const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>
   echart: "EChart",
   drawio: "Draw.io",
 };
+
+/** 可 @ / 可加资源的插件类型清单（+ 菜单与 @ 弹层共用） */
+const PLUGIN_KINDS = ["word", "excel", "md", "echart", "drawio"] as const;
 
 /** 粘贴文本折叠为资源标签的阈值：超过字符数或行数即不再直接插入输入框 */
 const PASTE_TEXT_CHIP_CHARS = 1000;
@@ -133,6 +145,7 @@ function resourceKindLabel(resource: ComposerResource): string {
     return "文件";
   }
   if (resource.kind === "project") return "项目";
+  if (resource.kind === "skill") return "技能";
   return "插件";
 }
 
@@ -276,6 +289,25 @@ function formatDuration(value: number): string {
   const hours = Math.floor(minutes / 60);
   const minuteRemainder = minutes % 60;
   return minuteRemainder ? `${hours} 小时 ${minuteRemainder} 分` : `${hours} 小时`;
+}
+
+/** 进行中耗时的渐进展示：不足 1 秒显示毫秒，1 分钟内显示秒，之后转分/小时（复用 formatDuration） */
+function formatLiveElapsed(ms: number): string {
+  if (ms < 1_000) return `${Math.floor(ms / 100) * 100}ms`;
+  const seconds = Math.floor(ms / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  return formatDuration(ms);
+}
+
+/** 流式/协作耗时标签：独立组件自刷新（200ms 精度），避免整棵会话树跟着每秒重渲染 */
+function ElapsedLabel({ startedAt }: { startedAt: number }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((value) => value + 1), 200);
+    return () => window.clearInterval(timer);
+  }, []);
+  const elapsedMs = Math.max(0, Date.now() - startedAt);
+  return <span> · {formatLiveElapsed(elapsedMs)}</span>;
 }
 
 function activitySummary(messages: ConversationMessage[]): string {
@@ -475,6 +507,9 @@ export default function ConversationView({
   approvals,
   resolvingApprovalId,
   onResolveApproval,
+  pendingQuestions,
+  submittingQuestionId,
+  onAnswerQuestion,
   room = null,
   digitalHumans = [],
   projectHumans = [],
@@ -494,6 +529,8 @@ export default function ConversationView({
   onDropTreeResources,
   onAddResourceProject,
   onAddResourcePlugin,
+  skills = [],
+  onAddResourceSkill,
 }: ConversationViewProps) {
   // 目录树条目拖入输入框时的高亮
   const [treeDragOver, setTreeDragOver] = useState(false);
@@ -506,7 +543,6 @@ export default function ConversationView({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [canJumpLatest, setCanJumpLatest] = useState(false);
   const [roomStatusStartedAt, setRoomStatusStartedAt] = useState<number | null>(null);
-  const [now, setNow] = useState(() => Date.now());
   // 项目没有任何数字人时，历史消息里残留的归属信息也一并隐藏
   const showAttribution = digitalHumans.length > 0;
   // 输入历史：historyCursor 指向 sentHistory 下标，history.length 表示未进入浏览状态
@@ -641,12 +677,33 @@ export default function ConversationView({
     ));
   }, [humanMentionCandidates, humanMentions, mentionTrigger]);
 
-  const mentionTotalCount = humanMentionResults.length + mentionResults.length;
+  // 可 @ 的插件：固定五类交付插件，已加入资源标签的不重复列出
+  const pluginMentionResults = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const query = mentionTrigger.query.trim().toLowerCase();
+    return PLUGIN_KINDS.filter((kind) => (
+      !resources.some((resource) => resource.kind === "plugin" && resource.pluginKind === kind)
+      && (!query || PLUGIN_RESOURCE_LABELS[kind].toLowerCase().includes(query) || kind.includes(query))
+    ));
+  }, [resources, mentionTrigger]);
 
-  // 候选为空（项目未挂载工程且房间无数字人 / 默认工作区）时不弹层，@ 视为普通字符，避免"弹个空框"
+  // 可 @ 的技能：已安装且启用的 Skills，已加入资源标签的不重复列出
+  const skillMentionResults = useMemo(() => {
+    if (!mentionTrigger) return [];
+    const query = mentionTrigger.query.trim().toLowerCase();
+    return skills.filter((skill) => (
+      skill.enabled
+      && !resources.some((resource) => resource.kind === "skill" && resource.name === skill.name)
+      && (!query || skill.name.toLowerCase().includes(query) || (skill.description || "").toLowerCase().includes(query))
+    ));
+  }, [skills, resources, mentionTrigger]);
+
+  const mentionTotalCount = humanMentionResults.length + mentionResults.length
+    + pluginMentionResults.length + skillMentionResults.length;
+
+  // 插件/技能始终可用，@ 有匹配结果即弹层，避免"弹个空框"
   const mentionOpen = Boolean(
     mentionTrigger && !mentionDismissed && !streaming
-    && (mentionCandidates.length > 0 || humanMentionCandidates.length > 0)
     && mentionTotalCount > 0,
   );
   const mentionOpenRef = useRef(mentionOpen);
@@ -682,55 +739,66 @@ export default function ConversationView({
 
   const closeMention = () => setMentionTrigger(null);
 
-  /** 从弹层确认一个工程：把触发词 @xxx 从输入框移除（标签体现在上方横条里），登记标签，光标归位 */
-  const confirmMention = (project: WorkspaceEntry) => {
+  /** 删除输入框里的 "@query" 触发词（标签体现在上方横条里），返回改写后的草稿与光标位置 */
+  const removeMentionTriggerWord = (): { next: string; caretAfter: number } | null => {
     const trigger = mentionTriggerRef.current;
     const textarea = textareaRef.current;
-    if (!trigger) return;
+    if (!trigger) return null;
     const value = draftRef.current;
     const caret = textarea ? textarea.selectionStart : value.length;
-    // 删掉 "@query" 触发词，输入框只留用户真正要发的正文
     const next = (value.slice(0, trigger.start) + value.slice(caret)).replace(/ {2,}/g, " ");
-    const caretAfter = Math.min(trigger.start, next.length);
-    setMentionChips((current) => (
-      current.some((chip) => chip.path === project.path) ? current : [...current, project]
-    ));
+    return { next, caretAfter: Math.min(trigger.start, next.length) };
+  };
+
+  /** 触发词删除后的收尾：关弹层、提交草稿、焦点与光标归位 */
+  const finishMentionPick = (removed: { next: string; caretAfter: number }) => {
     setMentionTrigger(null);
     setMentionDismissed(false);
-    commitDraft(next);
+    commitDraft(removed.next);
     requestAnimationFrame(() => {
       const target = textareaRef.current;
       if (target) {
         target.focus();
-        target.selectionStart = caretAfter;
-        target.selectionEnd = caretAfter;
+        target.selectionStart = removed.caretAfter;
+        target.selectionEnd = removed.caretAfter;
       }
     });
   };
 
+  /** 从弹层确认一个工程：把触发词 @xxx 从输入框移除（标签体现在上方横条里），登记标签，光标归位 */
+  const confirmMention = (project: WorkspaceEntry) => {
+    const removed = removeMentionTriggerWord();
+    if (!removed) return;
+    setMentionChips((current) => (
+      current.some((chip) => chip.path === project.path) ? current : [...current, project]
+    ));
+    finishMentionPick(removed);
+  };
+
   /** 从弹层确认一个数字人：触发词同样从输入框移除，chips 交给 App 侧管理 */
   const confirmHumanMention = (human: DigitalHuman) => {
-    const trigger = mentionTriggerRef.current;
-    const textarea = textareaRef.current;
-    if (!trigger) return;
-    const value = draftRef.current;
-    const caret = textarea ? textarea.selectionStart : value.length;
-    const next = (value.slice(0, trigger.start) + value.slice(caret)).replace(/ {2,}/g, " ");
-    const caretAfter = Math.min(trigger.start, next.length);
+    const removed = removeMentionTriggerWord();
+    if (!removed) return;
     if (!humanMentions.some((item) => item.id === human.id)) {
       onHumanMentionsChange?.([...humanMentions, human]);
     }
-    setMentionTrigger(null);
-    setMentionDismissed(false);
-    commitDraft(next);
-    requestAnimationFrame(() => {
-      const target = textareaRef.current;
-      if (target) {
-        target.focus();
-        target.selectionStart = caretAfter;
-        target.selectionEnd = caretAfter;
-      }
-    });
+    finishMentionPick(removed);
+  };
+
+  /** 从弹层确认一个插件：触发词移除，插件作为资源标签交给 App 侧 */
+  const confirmPluginMention = (kind: NonNullable<ComposerResource["pluginKind"]>) => {
+    const removed = removeMentionTriggerWord();
+    if (!removed) return;
+    onAddResourcePlugin(kind);
+    finishMentionPick(removed);
+  };
+
+  /** 从弹层确认一个技能：触发词移除，技能作为资源标签交给 App 侧 */
+  const confirmSkillMention = (skill: ExtensionSkillSummary) => {
+    const removed = removeMentionTriggerWord();
+    if (!removed) return;
+    onAddResourceSkill?.(skill);
+    finishMentionPick(removed);
   };
 
   const removeMentionChip = (project: WorkspaceEntry) => {
@@ -868,13 +936,6 @@ export default function ConversationView({
       : `${roomStatusHumans.slice(0, 2).map((human) => human.displayName).join("、")}${roomStatusHumans.length > 2 ? ` 等 ${roomStatusHumans.length} 位` : ""} · 协作中`;
 
   useEffect(() => {
-    if (!streaming && !roomStreaming) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [roomStreaming, streaming]);
-
-  useEffect(() => {
     if (roomStreaming) {
       setRoomStatusStartedAt((current) => current || Date.now());
       return;
@@ -882,12 +943,6 @@ export default function ConversationView({
     setRoomStatusStartedAt(null);
   }, [roomStreaming]);
 
-  const elapsedSeconds = streaming && streamStartedAt
-    ? Math.max(0, Math.floor((now - streamStartedAt) / 1_000))
-    : 0;
-  const roomElapsedSeconds = roomStreaming && roomStatusStartedAt
-    ? Math.max(0, Math.floor((now - roomStatusStartedAt) / 1_000))
-    : 0;
   const usedTokens = messages.reduce((sum, message) => sum + messageTokenCount(message), 0);
   const contextLimit = 128_000;
   const contextPercent = Math.min(100, (usedTokens / contextLimit) * 100);
@@ -982,8 +1037,8 @@ export default function ConversationView({
             {streaming
               ? (activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel)
               : `${roomStatusHumanLabel} · 等待调度`}
-            {streaming && elapsedSeconds > 0 ? ` · ${elapsedSeconds}s` : ""}
-            {!streaming && roomElapsedSeconds > 0 ? ` · ${roomElapsedSeconds}s` : ""}
+            {streaming && streamStartedAt ? <ElapsedLabel startedAt={streamStartedAt} /> : ""}
+            {!streaming && roomStreaming && roomStatusStartedAt ? <ElapsedLabel startedAt={roomStatusStartedAt} /> : ""}
           </span>
         </div>
       ) : null}
@@ -1000,6 +1055,18 @@ export default function ConversationView({
                   {activeHuman.avatarRef}
                 </span>
               ) : null}
+            />
+          ))}
+        </div>
+      ) : null}
+      {pendingQuestions.length > 0 ? (
+        <div className="runtime-approval" aria-live="polite">
+          {pendingQuestions.map((question) => (
+            <QuestionCard
+              key={question.questionId}
+              question={question}
+              submitting={submittingQuestionId === question.questionId}
+              onSubmit={onAnswerQuestion}
             />
           ))}
         </div>
@@ -1053,7 +1120,7 @@ export default function ConversationView({
         <div className="resource-banner" aria-label="已添加资源">
           {resources.map((resource) => (
             <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resourceTooltip(resource)}>
-              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
+              {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : resource.kind === "skill" ? <ToolIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
               <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
               <span className="resource-chip-name">{resourceLabel(resource)}</span>
               <button
@@ -1117,13 +1184,11 @@ export default function ConversationView({
             value={localDraft}
             placeholder={historyBrowsing
               ? `历史消息 ${historyCursor + 1}/${sentHistory.length} · ↑↓ 切换 · Esc 返回草稿`
-              : mentionCandidates.length > 0
-                ? "描述任务，输入 @ 可选择数字人或引用当前项目下的工程（↑ 键调出历史消息）"
-                : roomStreaming
-                  ? "数字人协作中… 可先整理思路，任务完成后回车发送"
-                  : streaming
-                    ? "生成中… 可先输入下一条消息，完成后回车发送"
-                    : "描述任务，或粘贴需求上下文（↑ 键可调出历史消息）"}
+              : roomStreaming
+                ? "数字人协作中… 可先整理思路，任务完成后回车发送"
+                : streaming
+                  ? "生成中… 可先输入下一条消息，完成后回车发送"
+                  : "描述任务，输入 @ 可选择数字人、工程、插件或技能（↑ 键调出历史消息）"}
             onChange={(event) => {
               exitHistoryBrowsing();
               const value = event.target.value;
@@ -1180,12 +1245,23 @@ export default function ConversationView({
                 }
                 if (event.key === "Enter" || event.key === "Tab") {
                   event.preventDefault();
-                  if (mentionActiveIndex < humanMentionResults.length) {
-                    const human = humanMentionResults[mentionActiveIndex];
+                  // 扁平索引分组：数字人 → 工程 → 插件 → 技能
+                  const projectOffset = humanMentionResults.length;
+                  const pluginOffset = projectOffset + mentionResults.length;
+                  const skillOffset = pluginOffset + pluginMentionResults.length;
+                  const index = mentionActiveIndex;
+                  if (index < projectOffset) {
+                    const human = humanMentionResults[index];
                     if (human) confirmHumanMention(human);
-                  } else {
-                    const target = mentionResults[mentionActiveIndex - humanMentionResults.length] || mentionResults[0];
+                  } else if (index < pluginOffset) {
+                    const target = mentionResults[index - projectOffset] || mentionResults[0];
                     if (target) confirmMention(target);
+                  } else if (index < skillOffset) {
+                    const kind = pluginMentionResults[index - pluginOffset] || pluginMentionResults[0];
+                    if (kind) confirmPluginMention(kind);
+                  } else {
+                    const skill = skillMentionResults[index - skillOffset] || skillMentionResults[0];
+                    if (skill) confirmSkillMention(skill);
                   }
                   return;
                 }
@@ -1216,7 +1292,7 @@ export default function ConversationView({
             }}
           />
           {mentionOpen ? (
-            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择数字人或工程">
+            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择数字人、工程、插件或技能">
               {humanMentionResults.length > 0 ? <div className="mention-popup-title">指派给数字人</div> : null}
               {humanMentionResults.map((human, index) => (
                 <button
@@ -1236,8 +1312,8 @@ export default function ConversationView({
                   <span className="mention-item-path" title={human.purpose}>{human.purpose}</span>
                 </button>
               ))}
-              {mentionResults.length > 0 ? <div className="mention-popup-title">引用工程</div> : null}
-              {mentionResults.length === 0 && humanMentionResults.length === 0 ? (
+              {mentionResults.length > 0 ? <div className="mention-popup-title">工程</div> : null}
+              {mentionTotalCount === 0 ? (
                 <div className="mention-empty">没有匹配项</div>
               ) : null}
               {mentionResults.map((project, projectIndex) => {
@@ -1258,6 +1334,52 @@ export default function ConversationView({
                     <FolderIcon className="icon-14" />
                     <span className="mention-item-name">{project.name}</span>
                     <span className="mention-item-path" title={project.path}>{project.path}</span>
+                  </button>
+                );
+              })}
+              {pluginMentionResults.length > 0 ? <div className="mention-popup-title">插件</div> : null}
+              {pluginMentionResults.map((kind, pluginIndex) => {
+                const index = humanMentionResults.length + mentionResults.length + pluginIndex;
+                return (
+                  <button
+                    key={`plugin-${kind}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === mentionActiveIndex}
+                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      confirmPluginMention(kind);
+                    }}
+                    onMouseEnter={() => setMentionActiveIndex(index)}
+                  >
+                    <PluginIcon kind={kind} className="icon-14" />
+                    <span className="mention-item-name">{PLUGIN_RESOURCE_LABELS[kind]}</span>
+                    <span className="mention-item-path">以 {PLUGIN_RESOURCE_LABELS[kind]} 插件交付</span>
+                  </button>
+                );
+              })}
+              {skillMentionResults.length > 0 ? <div className="mention-popup-title">技能</div> : null}
+              {skillMentionResults.map((skill, skillIndex) => {
+                const index = humanMentionResults.length + mentionResults.length
+                  + pluginMentionResults.length + skillIndex;
+                return (
+                  <button
+                    key={`skill-${skill.name}`}
+                    type="button"
+                    role="option"
+                    aria-selected={index === mentionActiveIndex}
+                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
+                    title={skill.description ? `${skill.description}\n${skill.path}` : skill.path}
+                    onMouseDown={(event) => {
+                      event.preventDefault();
+                      confirmSkillMention(skill);
+                    }}
+                    onMouseEnter={() => setMentionActiveIndex(index)}
+                  >
+                    <ToolIcon className="icon-14" />
+                    <span className="mention-item-name">{skill.name}</span>
+                    <span className="mention-item-path">{skill.description || skill.path}</span>
                   </button>
                 );
               })}
@@ -1305,12 +1427,37 @@ export default function ConversationView({
                     ))}
                     <div className="resource-menu-divider" />
                     <div className="resource-menu-title">插件</div>
-                    {(["word", "excel", "md", "echart", "drawio"] as const).map((kind) => (
+                    {PLUGIN_KINDS.map((kind) => (
                       <button key={kind} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourcePlugin(kind))}>
                         <PluginIcon kind={kind} className="icon-14" />
                         {PLUGIN_RESOURCE_LABELS[kind]}
                       </button>
                     ))}
+                    {onAddResourceSkill ? (
+                      <>
+                        <div className="resource-menu-divider" />
+                        <div className="resource-menu-title">技能</div>
+                        {skills.filter((skill) => skill.enabled).map((skill) => (
+                          <button
+                            key={skill.name}
+                            type="button"
+                            role="menuitem"
+                            className="resource-menu-item"
+                            title={skill.description ? `${skill.description}\n${skill.path}` : skill.path}
+                            onClick={() => runResourceAction(() => onAddResourceSkill(skill))}
+                          >
+                            <ToolIcon className="icon-14" />
+                            <span className="resource-menu-name">{skill.name}</span>
+                          </button>
+                        ))}
+                        {skills.filter((skill) => skill.enabled).length === 0 ? (
+                          <button type="button" role="menuitem" className="resource-menu-item resource-menu-hint" onClick={() => runResourceAction(onOpenSettings)}>
+                            <ToolIcon className="icon-14" />
+                            <span className="resource-menu-name">暂无技能，去设置安装</span>
+                          </button>
+                        ) : null}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -1800,7 +1947,7 @@ const MessageItem = memo(function MessageItem({
               <div className="message-mentions">
                 {message.resources.map((resource) => (
                   <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resourceTooltip(resource)}>
-                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
+                    {resource.kind === "folder" || resource.kind === "project" ? <FolderIcon className="icon-12" /> : resource.kind === "file" ? <FileIcon className="icon-12" /> : resource.kind === "skill" ? <ToolIcon className="icon-12" /> : <PluginIcon kind={resource.pluginKind!} className="icon-12" />}
                     <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
                     <span className="resource-chip-name">{resourceLabel(resource)}</span>
                   </span>

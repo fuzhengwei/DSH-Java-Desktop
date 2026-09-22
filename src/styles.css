@@ -2137,6 +2137,11 @@ select:focus-visible {
   gap: 8px;
   width: min(820px, calc(100% - 58px));
   margin: 0 auto 10px;
+  /* 问答/审批卡超过一屏时内部滚动，composer-dock 不被撑高，输入框始终可见 */
+  max-height: min(46vh, 440px);
+  overflow-y: auto;
+  /* 给滚动条留出空间，避免卡片内容贴边 */
+  padding-right: 2px;
 }
 
 .composer-dock {
@@ -2340,7 +2345,7 @@ select:focus-visible {
   bottom: calc(100% + 6px);
   z-index: 30;
   width: min(360px, calc(100% - 24px));
-  max-height: 260px;
+  max-height: 340px;
   overflow-y: auto;
   padding: 6px;
   border-radius: 14px;
@@ -2349,6 +2354,11 @@ select:focus-visible {
 }
 
 .mention-popup-title {
+  /* 分组标题滚动时吸附顶部：弹层超高滚动时也能看到当前条目所属分类 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
   padding: 6px 8px 4px;
   color: var(--text-subtle);
   font-size: 11px;
@@ -2507,6 +2517,11 @@ select:focus-visible {
 
 .resource-menu-item:hover {
   background: var(--surface-2);
+}
+
+/* 技能分组为空时的引导项：弱化展示，点击跳转设置安装 */
+.resource-menu-item.resource-menu-hint {
+  color: var(--text-muted);
 }
 
 .resource-menu-name {
@@ -5859,6 +5874,37 @@ select:focus-visible {
 }
 .room-approval-actions { display: flex; gap: 8px; }
 .room-tool-state.error { background: rgba(197,48,48,.1); color: var(--danger); }
+
+/* 运行时问答卡（ask_user_question）：复用 room-approval 底色，附加问题/选项样式 */
+.runtime-question .question-list { display: flex; flex-direction: column; gap: 12px; margin: 10px 0; }
+.runtime-question .question-item { display: flex; flex-direction: column; gap: 7px; }
+.runtime-question .question-header {
+  font-size: 11px; font-weight: 700; letter-spacing: .04em;
+  color: #8a5a10; text-transform: uppercase;
+}
+.runtime-question .question-text { font-size: 13.5px; font-weight: 600; color: var(--text); line-height: 1.45; }
+.runtime-question .question-options { display: flex; flex-direction: column; gap: 6px; }
+.runtime-question .question-option {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  border: 1px solid rgba(183,121,31,.28); border-radius: 9px;
+  background: rgba(255,255,255,.75); padding: 8px 11px;
+  cursor: pointer; transition: background .15s, border-color .15s;
+  font: inherit;
+}
+.runtime-question .question-option:hover { background: #fff; border-color: rgba(183,121,31,.55); }
+.runtime-question .question-option.active {
+  background: #fff7e0; border-color: rgba(183,121,31,.75);
+  box-shadow: inset 0 0 0 1px rgba(183,121,31,.4);
+}
+.runtime-question .question-option:disabled { opacity: .6; cursor: default; }
+.runtime-question .question-option-label { font-size: 13px; font-weight: 600; color: var(--text); }
+.runtime-question .question-option-desc { font-size: 12px; color: var(--text-subtle); line-height: 1.4; }
+.runtime-question .question-custom {
+  border: 1px solid rgba(183,121,31,.22); border-radius: 8px;
+  background: rgba(255,255,255,.8); padding: 7px 10px;
+  font-size: 12.5px; color: var(--text); outline: none;
+}
+.runtime-question .question-custom:focus { border-color: rgba(183,121,31,.6); }
 
 .home-hero { text-align: center; }
 

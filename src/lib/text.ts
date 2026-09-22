@@ -44,6 +44,22 @@ export function stripHiddenContext(value: string): string {
   return text.replace(/\n?\[当前选择的工程\][\s\S]*$/, "").trim();
 }
 
+/**
+ * 还原被 harness 包装过的用户消息。
+ * 后端给模型下发指令时会包装首条消息：
+ *   「请先使用可用工具完成下面的任务，……\n\n用户原始请求：<原始消息>」
+ * 会话标题、聊天气泡等展示处都应取「用户原始请求」之后的原始消息，
+ * 否则所有会话标题都变成同一段包装文案。
+ */
+export function visibleUserMessage(value: string): string {
+  const marker = "用户原始请求：";
+  const instructionPrefix = "请先使用可用工具完成下面的任务，";
+  if (value.startsWith(instructionPrefix) && value.includes(marker)) {
+    return value.slice(value.indexOf(marker) + marker.length).trim();
+  }
+  return value;
+}
+
 /** 会话标题缩略展示的最大长度，超出部分以省略号截断 */
 export const SESSION_TITLE_MAX_LENGTH = 24;
 
