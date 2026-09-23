@@ -14,7 +14,13 @@
 >
 > 桌面端只做壳，能力由服务端承载：**TypeScript + React** 构建界面，**Tauri 2** 负责窗口、进程托管与本机能力，智能体能力由 `deepseek-harness-java` 实现，由桌面壳启动内嵌 Spring Boot JAR，经本机 `127.0.0.1` HTTP/SSE API 调用（这个方式也是让壳可以快速接入远程 Agent 的最佳方式）。
 
-👬🏻 此产品 DSH Java Desktop 是 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 的衍生品，支持二开发布，也接受 PR 贡献（合并到最新分支）。加入小傅哥的社群即可获得 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 源码（其实也就相当个token费用，只不过我有更多的架构经验，帮你把最核心的东西做下来😄，感谢支持🙏🏻）。这样我们都能走的更远 👣。
+**我说3句话；**
+
+1. 👬🏻 此产品 DSH Java Desktop 是 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 的衍生品，支持二开发布，也接受 PR 贡献（合并记得提交到最新分支，不要提主分支）。
+
+2. 👣 加入小傅哥的社群即可获得 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 源码（其实也就相当个token费用，只不过我有更多的架构经验，帮你把最核心的东西做下来😄，感谢支持🙏🏻）。这样我们都能走的更远。
+
+3. 💐 此外，我预计要提供100个基于 deepseek-harness-java 的场景案例，为大家提供智能体场景思路。案例地址；[https://github.com/deepseek-harness-java](https://github.com/deepseek-harness-java)
 
 ---
 
