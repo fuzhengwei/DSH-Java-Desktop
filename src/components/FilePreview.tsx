@@ -212,6 +212,22 @@ function formatFileSize(size: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** 按扩展名推导图片 MIME 类型。WebView 对 data URL 要求子类型正确：
+ *  特别是 SVG 必须用 image/svg+xml，写成裸 image 无法渲染。 */
+function imageMimeOf(name: string): string {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  switch (ext) {
+    case "svg": return "image/svg+xml";
+    case "png": return "image/png";
+    case "jpg": case "jpeg": return "image/jpeg";
+    case "gif": return "image/gif";
+    case "webp": return "image/webp";
+    case "bmp": return "image/bmp";
+    case "ico": return "image/x-icon";
+    default: return "image/png";
+  }
+}
+
 // ── 统一文件卡片 ─────────────────────────────────────────────
 // 对话内嵌文件、数字人房间产物、群聊交付物共用同一套卡片视觉：
 // 类型色块图标（代码类显示大写扩展名）+ 文件名 + 类型/大小元信息 + 动作文案。
@@ -468,7 +484,7 @@ function FilePreviewBody({ path, name, onClose, onCollapse, onToggleMaximize, ma
       ) : kind === "xlsx" ? (
         <SheetPreview base64={binary} name={displayName} />
       ) : kind === "image" ? (
-        <img className="file-preview-image" alt={displayName} src={`data:image;base64,${binary}`} />
+        <img className="file-preview-image" alt={displayName} src={`data:${imageMimeOf(displayName)};base64,${binary}`} />
       ) : kind === "pdf" ? (
         <iframe className="file-preview-frame" title={displayName} src={`data:application/pdf;base64,${binary}`} />
       ) : kind === "html" ? (
