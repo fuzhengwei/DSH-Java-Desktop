@@ -187,6 +187,38 @@ export function useFileDiff(basePath: string, filePath: string) {
   const [diff, setDiff] = useState<FileDiffResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // 轮询文件指纹（mtime + size）：Agent 改写文件后自动重算 diff，
+  // 否则「源码 / Diff」切换只反映打开瞬间的状态，改完文件也看不到差异入口。
+  useEffect(() => {
+    if (!filePath) return;
+    let cancelled = false;
+    let last = "";
+    const poll = () => {
+      void invoke<{ mtimeMs: number; size: number } | null>("local_file_stamp", { path: filePath })
+        .then((stamp) => {
+          if (cancelled || !stamp) return;
+          const key = `${stamp.mtimeMs}:${stamp.size}`;
+          if (key !== last) {
+            const first = last === "";
+            last = key;
+            // 首次只记录基线指纹；后续变化才触发重算
+            if (!first) setDiffVersion((value) => value + 1);
+          }
+        })
+        .catch(() => { /* 文件暂不可访问：忽略，等下一轮 */ });
+    };
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [filePath]);
+
+  // diff 结果版本号：文件指纹变化时 +1，驱动下方 effect 重新拉取
+  const [diffVersion, setDiffVersion] = useState(0);
+
   useEffect(() => {
     if (!basePath || !filePath) return;
     let cancelled = false;
@@ -205,7 +237,7 @@ export function useFileDiff(basePath: string, filePath: string) {
     return () => {
       cancelled = true;
     };
-  }, [basePath, filePath]);
+  }, [basePath, filePath, diffVersion]);
   return { diff, loading, error };
 }
 

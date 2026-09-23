@@ -7327,7 +7327,12 @@ select:focus-visible {
   color: var(--text-subtle);
   border-bottom: 1px dashed var(--border);
 }
-.code-view { display: flex; align-items: flex-start; overflow: auto; }
+/* 可滚动但隐藏滚动条（触控板/滚轮仍可左右、上下滑动） */
+.code-view {
+  display: flex; align-items: flex-start; overflow: auto;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.code-view::-webkit-scrollbar { display: none; width: 0; height: 0; }
 .code-view-gutter {
   margin: 0;
   padding: 12px 10px 12px 14px;

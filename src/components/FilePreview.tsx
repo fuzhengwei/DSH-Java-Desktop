@@ -350,6 +350,43 @@ function FilePreviewBody({ path, name, onClose, onCollapse, onToggleMaximize, ma
   const { diff } = useFileDiff(diffable ? (basePath as string) : "", path);
   const hasDiff = Boolean(diff?.available && !diff.isBinary);
 
+  // 文件被外部（Agent / 其他进程）改写后自动刷新：
+  // 轮询 mtime+size 指纹，变化则 bump 版本号触发下方读取 effect 重跑。
+  const [contentVersion, setContentVersion] = useState(0);
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    let last = "";
+    const poll = () => {
+      void invoke<{ mtimeMs: number; size: number } | null>("local_file_stamp", { path })
+        .then((stamp) => {
+          if (cancelled || !stamp) return;
+          const key = `${stamp.mtimeMs}:${stamp.size}`;
+          if (key !== last) {
+            const first = last === "";
+            last = key;
+            if (!first) setContentVersion((value) => value + 1);
+          }
+        })
+        .catch(() => { /* 文件暂不可访问：忽略 */ });
+    };
+    poll();
+    const timer = window.setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [path]);
+
+  // Agent 改动使 Diff 首次出现时自动切到 Diff 视图（改动消失则回到源码）
+  const hasDiffRef = useRef(hasDiff);
+  useEffect(() => {
+    if (hasDiffRef.current !== hasDiff) {
+      hasDiffRef.current = hasDiff;
+      if (diffable) setView(hasDiff ? "diff" : "source");
+    }
+  }, [hasDiff, diffable]);
+
   useEffect(() => {
     // 文件切换时重置视图，避免在新文件上停留在失效的 Diff
     setView("source");
@@ -388,7 +425,7 @@ function FilePreviewBody({ path, name, onClose, onCollapse, onToggleMaximize, ma
       }
     })();
     return () => { cancelled = true; };
-  }, [path, kind]);
+  }, [path, kind, contentVersion]);
 
   const header = (
     <FileActionsArea path={path}>

@@ -1222,6 +1222,30 @@ fn read_local_file_base64(path: String) -> Result<String, String> {
     Ok(base64_encode(&buffer))
 }
 
+/// 文件变更指纹：修改时间（毫秒）+ 大小（字节），用于前端轮询检测文件被外部修改。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalFileStamp {
+    mtime_ms: u64,
+    size: u64,
+}
+
+/// 读取文件修改时间与大小；不存在或不可访问返回 null。
+/// 前端文件预览定时轮询该命令，指纹变化即重新读取内容并重算 Git diff，
+/// 实现「Agent 改完文件后右侧已打开的预览自动刷新」。
+#[tauri::command]
+fn local_file_stamp(path: String) -> Option<LocalFileStamp> {
+    let file = resolve_preview_file(&path);
+    let meta = fs::metadata(&file).ok()?;
+    let mtime_ms = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_millis() as u64;
+    Some(LocalFileStamp { mtime_ms, size: meta.len() })
+}
+
 /// 批量检查本地文件是否仍然存在，用于过滤对话历史里已失效的临时文件路径。
 #[tauri::command]
 fn existing_local_files(paths: Vec<String>) -> Vec<String> {
@@ -1675,7 +1699,7 @@ pub fn run() {
                 let _ = window.hide();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, project_file_diff, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds, list_directory])
+        .invoke_handler(tauri::generate_handler![start_agent, stop_agent, agent_status, project_git_branch, project_git_branches, switch_project_git_branch, project_git_changes, project_file_diff, pick_local_directory, pick_local_file, send_notification, open_external, open_local_file, reveal_local_file, save_local_file_as, save_credential, read_credential, delete_credential, read_local_text_file, write_local_text_file, read_local_file_base64, existing_local_files, local_file_metas, local_path_kinds, list_directory, local_file_stamp])
         .build(tauri::generate_context!())
         .expect("error while running tauri application");
 
