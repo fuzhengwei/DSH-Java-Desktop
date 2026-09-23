@@ -5,7 +5,7 @@ import remarkGfmCompatible from "../lib/remark-gfm-compatible";
 import { rehypeHighlight } from "../lib/markdown-plugins";
 import type { ServerRoomView } from "../lib/digital-human-client";
 import { EChartBlock } from "./EChartBlock";
-import { FilePreview, extractFilePaths, localFilePathFromHref } from "./FilePreview";
+import { FilePreview, extractFilePaths, localFilePathFromHref, type CodeSnippet } from "./FilePreview";
 import { FileActionsArea } from "./FileActionsMenu";
 import { XIcon } from "./icons";
 
@@ -14,6 +14,8 @@ type Props = {
   room: ServerRoomView | null;
   onClose: () => void;
   onOpenFile?: (path: string) => void;
+  /** 内嵌代码预览选中片段 → 加入对话 */
+  onAddCodeSnippet?: (snippet: CodeSnippet) => void;
 };
 
 function extractText(node: unknown): string {
@@ -58,7 +60,7 @@ function parseEchartsOption(content: string): string | null {
 }
 
 /** 产物右侧滑出预览（workbuddy 式侧滑面板） */
-const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose, onOpenFile }: Props) {
+const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose, onOpenFile, onAddCodeSnippet }: Props) {
   // 从房间产物里按标题找完整内容
   const full = (room?.artifacts || []).find((a) => (
     artifact.artifactId ? a.artifactId === artifact.artifactId : a.title === artifact.title
@@ -162,7 +164,7 @@ const ArtifactPreview = memo(function ArtifactPreview({ artifact, room, onClose,
           {echartOption ? <EChartBlock code={echartOption} /> : null}
           <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>{markdownContent}</ReactMarkdown>
           {filePaths.filter((filePath) => existingFilePaths?.has(filePath)).slice(0, 2).map((filePath) => (
-            <FilePreview key={filePath} path={filePath} compact />
+            <FilePreview key={filePath} path={filePath} compact onAddCodeSnippet={onAddCodeSnippet} />
           ))}
           {existingFilePaths && filePaths.length > 0 && filePaths.every((filePath) => !existingFilePaths.has(filePath)) ? (
             <div className="file-preview-error">关联文件已不存在，无法预览。</div>

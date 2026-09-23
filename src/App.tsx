@@ -3935,6 +3935,7 @@ export default function App() {
 	            onAddResourcePlugin={addResourcePlugin}
 	            skills={extensionSkills}
 	            onAddResourceSkill={addResourceSkill}
+	            onAddCodeSnippet={addCodeSnippetResource}
 	          />
         ) : null}
         </div>
@@ -4013,6 +4014,7 @@ export default function App() {
                 room={serverRoom}
                 onClose={() => closeArtifactTab(activeDockTab)}
                 onOpenFile={openFileTab}
+                onAddCodeSnippet={addCodeSnippetResource}
               />
             ) : activeDockTab.startsWith("file:") ? (
               <div
