@@ -18,7 +18,7 @@
 
 1. 👬🏻 此产品 DSH Java Desktop 是 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 的衍生品，支持二开发布，也接受 PR 贡献（合并记得提交到最新分支，不要提主分支）。
 
-2. 👣 加入小傅哥的社群即可获得 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 源码（其实也就相当个token费用，只不过我有更多的架构经验，帮你把最核心的东西做下来😄，感谢支持🙏🏻）。这样我们都能走的更远。
+2. 👣 加入小傅哥的社群即可获得 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 源码（其实也就相当个token费用，只不过我有更多的架构经验 `13年+老架构师`，帮你把最核心的东西做下来😄，替你节省时间。感谢支持🙏🏻）。这样我们都能走的更远。
 
 3. 💐 此外，我预计要提供100个基于 deepseek-harness-java 的场景案例，为大家提供智能体场景思路。案例地址；[https://github.com/deepseek-harness-java](https://github.com/deepseek-harness-java)
 
