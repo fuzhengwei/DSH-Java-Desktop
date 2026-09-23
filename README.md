@@ -53,6 +53,8 @@
 | Windows | x64 |
 | Linux | x64 |
 
+> 功能介绍：[https://mp.weixin.qq.com/s/1PVow3-HvItfUvSReGt6wQ](https://mp.weixin.qq.com/s/1PVow3-HvItfUvSReGt6wQ) - 最新版在持续迭代，更多的可以下载体验。
+
 #### 2. 启动即用
 
 应用启动即自动拉起内置智能体服务（无需装 JDK / 数据库，发布版内置 Temurin JRE 17 与本地 H2，数据落在应用数据目录）。
