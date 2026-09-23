@@ -12,9 +12,9 @@
 
 > [**DSH Java Desktop**](https://mp.weixin.qq.com/s/1PVow3-HvItfUvSReGt6wQ) 是 [deepseek-harness-java](https://t.zsxq.com/kYcVt)（Agent Runtime 服务端）的桌面工作台。它是一款开箱即用的「数字人」AI 智能体桌面端 —— 内置 DSH Java Agent Runtime，零依赖装完即用；单个数字人胜任编码、绘图、文档等多场景工作，多个数字人经 dsh.v1 / A2A 跨端组建协作团队，插件 / Skills / MCP / CLI 随需扩展。
 >
-> 桌面端只做壳，能力由服务端承载：**TypeScript + React** 构建界面，**Tauri 2** 负责窗口、进程托管与本机能力，智能体能力由 `deepseek-harness-java` 实现，由桌面壳启动内嵌 Spring Boot JAR，经本机 `127.0.0.1` HTTP/SSE API 调用（这个方式也是让壳可以快速接入远程 Agent 的最佳方式）。
+> 桌面端只做壳，能力由服务端承载：**TypeScript + React** 构建界面，**Tauri 2** 负责窗口、进程托管与本机能力，智能体能力由 `deepseek-harness-java` 实现，由桌面壳启动内嵌 Spring Boot JAR，经本机 `127.0.0.1` HTTP/SSE API 调用（这个方式也是让壳可以快速接入远程 Agent 的最佳方式）。🤝 加作者好友；[https://wx.xiaofuge.cn/](https://wx.xiaofuge.cn/)
 
-**我说3句话；**
+**3句话 😄；**
 
 1. 👬🏻 此产品 DSH Java Desktop 是 [deepseek-harness-java](https://t.zsxq.com/kYcVt) 的衍生品，支持二开发布，也接受 PR 贡献（合并记得提交到最新分支，不要提主分支）。
 
