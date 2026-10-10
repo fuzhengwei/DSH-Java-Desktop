@@ -343,9 +343,29 @@ fn running_state(runtime: &AgentRuntime, message: String) -> ServiceState {
     }
 }
 
+/// Windows 下 Tauri 的 resource_dir()/app_data_dir() 可能返回带 `\\?\` verbatim
+/// 前缀的路径；JVM 的 `java -jar` 与 H2 的 JDBC URL 都无法识别该前缀，导致启动失败。
+/// 这里统一剥掉前缀转回普通路径（UNC 网络路径还原为 \\server\share 形式）。
+#[cfg(windows)]
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let text = path.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn normalize_path(path: PathBuf) -> PathBuf {
+    path
+}
+
 fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     if let Ok(path) = std::env::var("DSH_AGENT_JAR") {
-        let path = PathBuf::from(path);
+        let path = normalize_path(PathBuf::from(path));
         if path.exists() {
             return Ok(path);
         }
@@ -353,7 +373,7 @@ fn locate_agent_jar(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     }
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let path = resource_dir.join("agent/deepseek-harness-java-app.jar");
+        let path = normalize_path(resource_dir).join("agent/deepseek-harness-java-app.jar");
         if path.exists() {
             return Ok(path);
         }
@@ -378,7 +398,9 @@ fn runtime_java_name() -> &'static str {
 
 fn bundled_java_path(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let path = resource_dir.join("agent/runtime/bin").join(runtime_java_name());
+        let path = normalize_path(resource_dir)
+            .join("agent/runtime/bin")
+            .join(runtime_java_name());
         if path.is_file() {
             return Some(path);
         }
@@ -508,7 +530,7 @@ fn inspect_java(path: PathBuf, source: &str) -> RuntimeCheck {
 
 fn inspect_java_runtime(app: &tauri::AppHandle) -> RuntimeCheck {
     if let Ok(path) = std::env::var("DSH_AGENT_JAVA") {
-        return inspect_java(PathBuf::from(path), "custom");
+        return inspect_java(normalize_path(PathBuf::from(path)), "custom");
     }
 
     if let Some(path) = bundled_java_path(app) {
@@ -618,10 +640,11 @@ fn start_agent(
         .ok_or_else(|| runtime_check.message.clone())?;
     let jar_path = locate_agent_jar(&app)?;
     let port = find_free_port()?;
-    let data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    let data_dir = normalize_path(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| format!("无法定位应用数据目录：{error}"))?,
+    );
     std::fs::create_dir_all(&data_dir).map_err(|error| format!("创建数据目录失败：{error}"))?;
     let runtime_path = data_dir.join("agent-runtime.json");
     cleanup_stale_runtime(&runtime_path)?;
@@ -1515,10 +1538,11 @@ fn save_local_file_as(path: String) -> Result<Option<String>, String> {
 // 业务表/事件流/日志里只出现 credentialRef，永不出现明文。
 
 fn credentials_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+    let dir = normalize_path(
+        app.path()
+            .app_data_dir()
+            .map_err(|error| format!("无法定位应用数据目录：{error}"))?,
+    );
     fs::create_dir_all(&dir).map_err(|error| format!("创建数据目录失败：{error}"))?;
     Ok(dir.join("digital-human-credentials.json"))
 }
