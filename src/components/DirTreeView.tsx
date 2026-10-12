@@ -1,31 +1,21 @@
+import i18n from "../i18n";
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import {
-  ChevronIcon,
-  FileIcon,
-  FilterIcon,
-  FolderIcon,
-  PanelCollapseIcon,
-  RefreshIcon,
-  SearchIcon,
-  XIcon,
-} from "./icons";
+import { ChevronIcon, FileIcon, FilterIcon, FolderIcon, PanelCollapseIcon, RefreshIcon, SearchIcon, XIcon } from "./icons";
 import { fileKindOf } from "./FilePreview";
 import { fileTypeMeta } from "../lib/fileType";
-
+const t = i18n.t.bind(i18n);
 type DirEntryItem = {
   name: string;
   path: string;
   is_dir: boolean;
   size: number;
 };
-
 type DirListing = {
   entries: DirEntryItem[];
   truncated: boolean;
   total: number;
 };
-
 type DirTreeViewProps = {
   rootPath: string;
   /** 点击文件时回调（在右侧 Dock 打开内容预览） */
@@ -40,7 +30,6 @@ function sizeLabel(size: number): string {
   if (size < 1024 * 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)}MB`;
   return `${(size / 1024 / 1024 / 1024).toFixed(1)}GB`;
 }
-
 const MAX_DEPTH = 8;
 /**
  * Java 工程结构目录：不参与路径压缩（对齐 IntelliJ IDEA 观感——
@@ -61,17 +50,31 @@ const SEARCH_MAX_DEPTH = 8;
 
 /** 类型筛选档位（目录始终保留以维持层级；档位只过滤文件行） */
 type TreeFilter = "all" | "dirs" | "docs" | "code" | "sheets" | "images" | "other";
-
-const TREE_FILTERS: Array<{ id: TreeFilter; label: string }> = [
-  { id: "all", label: "全部类型" },
-  { id: "dirs", label: "仅文件夹" },
-  { id: "docs", label: "文档（md/pdf/docx…）" },
-  { id: "code", label: "代码与配置" },
-  { id: "sheets", label: "表格" },
-  { id: "images", label: "图片" },
-  { id: "other", label: "其他文件" },
-];
-
+const TREE_FILTERS: Array<{
+  id: TreeFilter;
+  label: string;
+}> = [{
+  id: "all",
+  label: t("DirTreeView.0")
+}, {
+  id: "dirs",
+  label: t("DirTreeView.1")
+}, {
+  id: "docs",
+  label: t("DirTreeView.2")
+}, {
+  id: "code",
+  label: t("DirTreeView.3")
+}, {
+  id: "sheets",
+  label: t("DirTreeView.4")
+}, {
+  id: "images",
+  label: t("DirTreeView.5")
+}, {
+  id: "other",
+  label: t("DirTreeView.6")
+}];
 function fileMatchesFilter(name: string, filter: TreeFilter): boolean {
   if (filter === "all") return true;
   const kind = fileKindOf(name);
@@ -96,7 +99,9 @@ function fileMatchesFilter(name: string, filter: TreeFilter): boolean {
  * 链上任何一段是 Java 结构目录（src/main/java/…）即停止压缩。
  * 返回压缩后的条目：name 为合并路径，path 为链末端目录（展开时按末端读层）。
  */
-async function compressChain(entry: DirEntryItem, showHidden: boolean, budget: { reads: number }): Promise<DirEntryItem> {
+async function compressChain(entry: DirEntryItem, showHidden: boolean, budget: {
+  reads: number;
+}): Promise<DirEntryItem> {
   if (!entry.is_dir || JAVA_STRUCT_DIRS.has(entry.name)) return entry;
   let current = entry;
   let name = entry.name;
@@ -105,7 +110,10 @@ async function compressChain(entry: DirEntryItem, showHidden: boolean, budget: {
     budget.reads += 1;
     let listing: DirListing;
     try {
-      listing = await invoke<DirListing>("list_directory", { path: current.path, showHidden });
+      listing = await invoke<DirListing>("list_directory", {
+        path: current.path,
+        showHidden
+      });
     } catch {
       break;
     }
@@ -113,9 +121,16 @@ async function compressChain(entry: DirEntryItem, showHidden: boolean, budget: {
     const child = listing.entries[0];
     if (JAVA_STRUCT_DIRS.has(child.name)) break;
     name = `${name}/${child.name}`;
-    current = { ...child, name };
+    current = {
+      ...child,
+      name
+    };
   }
-  return { ...current, name, is_dir: true };
+  return {
+    ...current,
+    name,
+    is_dir: true
+  };
 }
 
 /**
@@ -124,10 +139,17 @@ async function compressChain(entry: DirEntryItem, showHidden: boolean, budget: {
  * 单子目录链在加载层时顺带压缩（链上每段是一次廉价 readdir，有预算上限）。
  * 工具栏：收回面板 / 搜索（递归扫描 + 点击回跳定位）/ 类型筛选（含显示 . 文件）。
  */
-const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse }: DirTreeViewProps) {
+const DirTreeView = memo(function DirTreeView({
+  rootPath,
+  onOpenFile,
+  onCollapse
+}: DirTreeViewProps) {
   // childrenCache: path -> 已加载的该层条目（目录条目已做链压缩，跨折叠保留）
   const childrenCacheRef = useRef<Map<string, DirEntryItem[]>>(new Map());
-  const metaCacheRef = useRef<Map<string, { truncated: boolean; total: number }>>(new Map());
+  const metaCacheRef = useRef<Map<string, {
+    truncated: boolean;
+    total: number;
+  }>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([rootPath]));
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [errors, setErrors] = useState<Map<string, string>>(new Map());
@@ -149,41 +171,42 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
   const [filter, setFilter] = useState<TreeFilter>("all");
   const [filterOpen, setFilterOpen] = useState(false);
   const filterRef = useRef<HTMLDivElement | null>(null);
-
   const loadDir = useCallback(async (dirPath: string) => {
     if (childrenCacheRef.current.has(dirPath)) return;
-    setLoading((prev) => new Set(prev).add(dirPath));
+    setLoading(prev => new Set(prev).add(dirPath));
     try {
       const listing = await invoke<DirListing>("list_directory", {
         path: dirPath,
-        showHidden: hiddenFlagRef.current,
+        showHidden: hiddenFlagRef.current
       });
-      const budget = { reads: 0 };
-      const entries = await Promise.all(listing.entries.map((entry) => (
-        entry.is_dir ? compressChain(entry, hiddenFlagRef.current, budget) : Promise.resolve(entry)
-      )));
+      const budget = {
+        reads: 0
+      };
+      const entries = await Promise.all(listing.entries.map(entry => entry.is_dir ? compressChain(entry, hiddenFlagRef.current, budget) : Promise.resolve(entry)));
       childrenCacheRef.current.set(dirPath, entries);
-      metaCacheRef.current.set(dirPath, { truncated: listing.truncated, total: listing.total });
-      setErrors((prev) => {
+      metaCacheRef.current.set(dirPath, {
+        truncated: listing.truncated,
+        total: listing.total
+      });
+      setErrors(prev => {
         if (!prev.has(dirPath)) return prev;
         const next = new Map(prev);
         next.delete(dirPath);
         return next;
       });
     } catch (caught) {
-      setErrors((prev) => new Map(prev).set(dirPath, caught instanceof Error ? caught.message : String(caught)));
+      setErrors(prev => new Map(prev).set(dirPath, caught instanceof Error ? caught.message : String(caught)));
     } finally {
-      setLoading((prev) => {
+      setLoading(prev => {
         const next = new Set(prev);
         next.delete(dirPath);
         return next;
       });
-      setTick((value) => value + 1);
+      setTick(value => value + 1);
     }
   }, []);
-
   const toggleDir = useCallback((dirPath: string) => {
-    setExpanded((prev) => {
+    setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(dirPath)) {
         next.delete(dirPath); // 折叠：子树从 DOM 卸载，缓存保留
@@ -199,18 +222,16 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
   useEffect(() => {
     void loadDir(rootPath);
   }, [rootPath, loadDir]);
-
   const refresh = useCallback(() => {
     childrenCacheRef.current.clear();
     metaCacheRef.current.clear();
     setErrors(new Map());
     hiddenFlagRef.current = showHidden;
-    setTick((value) => value + 1);
+    setTick(value => value + 1);
     // 重新加载当前已展开的各层
     for (const path of expanded) void loadDir(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expanded, showHidden, loadDir]);
-
   const toggleHidden = useCallback(() => {
     const next = !showHidden;
     setShowHidden(next);
@@ -218,24 +239,27 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
     metaCacheRef.current.clear();
     hiddenFlagRef.current = next;
     setErrors(new Map());
-    setTick((value) => value + 1);
+    setTick(value => value + 1);
     // expanded 状态保留；空数组缓存清掉后需要重新拉取已展开层
     // loadDir 以 childrenCacheRef.has 为闸门，清空后再次调用会真正请求
     for (const path of expanded) void loadDir(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showHidden, expanded, loadDir]);
-
   const revealFile = useCallback((path: string) => {
-    void invoke("reveal_local_file", { path })
-      .then(() => {
-        setRevealedPath(path);
-        window.setTimeout(() => setRevealedPath(""), 1200);
-      })
-      .catch(() => undefined);
+    void invoke("reveal_local_file", {
+      path
+    }).then(() => {
+      setRevealedPath(path);
+      window.setTimeout(() => setRevealedPath(""), 1200);
+    }).catch(() => undefined);
   }, []);
-
   const startDrag = useCallback((event: React.DragEvent, entry: DirEntryItem) => {
-    const payload = JSON.stringify({ path: entry.path, name: entry.name.split("/").pop() || entry.name, displayName: entry.name, isDir: entry.is_dir });
+    const payload = JSON.stringify({
+      path: entry.path,
+      name: entry.name.split("/").pop() || entry.name,
+      displayName: entry.name,
+      isDir: entry.is_dir
+    });
     event.dataTransfer.setData(TREE_RESOURCE_MIME, payload);
     event.dataTransfer.setData("text/plain", entry.path);
     event.dataTransfer.effectAllowed = "copy";
@@ -254,7 +278,13 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
     const timer = window.setTimeout(() => {
       void (async () => {
         const hits: DirEntryItem[] = [];
-        const queue: Array<{ path: string; depth: number }> = [{ path: rootPath, depth: 0 }];
+        const queue: Array<{
+          path: string;
+          depth: number;
+        }> = [{
+          path: rootPath,
+          depth: 0
+        }];
         let reads = 0;
         while (queue.length > 0 && hits.length < SEARCH_HIT_LIMIT && reads < SEARCH_READ_BUDGET) {
           const next = queue.shift()!;
@@ -262,20 +292,21 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
           try {
             listing = await invoke<DirListing>("list_directory", {
               path: next.path,
-              showHidden: hiddenFlagRef.current,
+              showHidden: hiddenFlagRef.current
             });
           } catch {
             continue; // 无权限/已删除的目录跳过
           }
           reads += 1;
           for (const entry of listing.entries) {
-            if (hits.length < SEARCH_HIT_LIMIT
-              && entry.name.toLowerCase().includes(trimmed)
-              && fileMatchesFilter(entry.name, filter)) {
+            if (hits.length < SEARCH_HIT_LIMIT && entry.name.toLowerCase().includes(trimmed) && fileMatchesFilter(entry.name, filter)) {
               hits.push(entry);
             }
             if (entry.is_dir && next.depth + 1 <= SEARCH_MAX_DEPTH) {
-              queue.push({ path: entry.path, depth: next.depth + 1 });
+              queue.push({
+                path: entry.path,
+                depth: next.depth + 1
+              });
             }
           }
         }
@@ -319,7 +350,7 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
       chain.push(current);
     }
     const dirsToExpand = isDir ? chain : chain.slice(0, -1);
-    setExpanded((prev) => {
+    setExpanded(prev => {
       const next = new Set(prev);
       for (const dir of dirsToExpand) next.add(dir);
       return next;
@@ -331,43 +362,32 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
         const container = searchScrollRef.current;
         const el = container?.querySelector(`[data-path="${CSS.escape(targetPath)}"]`);
         if (el) {
-          el.scrollIntoView({ block: "center" });
+          el.scrollIntoView({
+            block: "center"
+          });
           setLocatedPath(targetPath);
           window.setTimeout(() => setLocatedPath(""), 1600);
         }
       }, delay);
     }
   }, [rootPath, loadDir]);
-
   const renderSearchHits = () => {
-    if (searching) return <div className="dir-tree-hint">搜索中…</div>;
-    if (searchResults.length === 0) return <div className="dir-tree-hint">无匹配文件或文件夹</div>;
-    return searchResults.map((hit) => {
+    if (searching) return <div className="dir-tree-hint">{t("DirTreeView.7")}</div>;
+    if (searchResults.length === 0) return <div className="dir-tree-hint">{t("DirTreeView.8")}</div>;
+    return searchResults.map(hit => {
       const relative = hit.path.startsWith(`${rootPath}/`) ? hit.path.slice(rootPath.length + 1) : hit.path;
       const parentDir = relative.includes("/") ? relative.slice(0, relative.lastIndexOf("/")) : "";
       const fileMeta = fileTypeMeta(hit.path);
-      return (
-        <div
-          key={hit.path}
-          className="dir-tree-row file search-hit"
-          data-path={hit.path}
-          title={`${hit.path}\n${hit.is_dir ? "点击在目录树中定位" : "点击预览"}`}
-          role="treeitem"
-          onClick={() => (hit.is_dir ? locateInTree(hit.path, true) : onOpenFile?.(hit.path))}
-        >
-          {fileMeta.badge ? (
-            <span className="dir-tree-file-badge" style={{ color: fileMeta.color }}>{fileMeta.badge}</span>
-          ) : (
-            <FileIcon className="dir-tree-icon" />
-          )}
+      return <div key={hit.path} className="dir-tree-row file search-hit" data-path={hit.path} title={`${hit.path}\n${hit.is_dir ? t("DirTreeView.9") : t("DirTreeView.10")}`} role="treeitem" onClick={() => hit.is_dir ? locateInTree(hit.path, true) : onOpenFile?.(hit.path)}>
+          {fileMeta.badge ? <span className="dir-tree-file-badge" style={{
+          color: fileMeta.color
+        }}>{fileMeta.badge}</span> : <FileIcon className="dir-tree-icon" />}
           <span className="dir-tree-name" title={hit.name}>{hit.name}</span>
           {parentDir ? <span className="dir-tree-hit-dir">{parentDir}</span> : null}
           {sizeLabel(hit.size) ? <span className="dir-tree-size">{sizeLabel(hit.size)}</span> : null}
-        </div>
-      );
+        </div>;
     });
   };
-
   const renderEntries = (entries: DirEntryItem[], depth: number, dirPath: string) => {
     const meta = metaCacheRef.current.get(dirPath);
     const rows: React.ReactNode[] = [];
@@ -377,233 +397,126 @@ const DirTreeView = memo(function DirTreeView({ rootPath, onOpenFile, onCollapse
       const dragProps = {
         draggable: true,
         onDragStart: (event: React.DragEvent) => startDrag(event, entry),
-        title: `${entry.path}\n${entry.is_dir ? "点击展开 · 拖到输入框引用" : "点击预览 · 拖到输入框引用"}`,
+        title: `${entry.path}\n${entry.is_dir ? t("DirTreeView.11") : t("DirTreeView.12")}`
       };
       if (entry.is_dir) {
         const isOpen = expanded.has(entry.path);
-        rows.push(
-          <div
-            key={entry.path}
-            className={`dir-tree-row dir${isOpen ? " open" : ""}`}
-            style={{ paddingLeft: 10 + depth * 14 }}
-            role="treeitem"
-            aria-expanded={isOpen}
-            data-path={entry.path}
-            onClick={() => toggleDir(entry.path)}
-            {...dragProps}
-          >
+        rows.push(<div key={entry.path} className={`dir-tree-row dir${isOpen ? " open" : ""}`} style={{
+          paddingLeft: 10 + depth * 14
+        }} role="treeitem" aria-expanded={isOpen} data-path={entry.path} onClick={() => toggleDir(entry.path)} {...dragProps}>
             <ChevronIcon className="dir-tree-chevron" />
             <FolderIcon className="dir-tree-icon" />
             <span className="dir-tree-name" title={entry.name}>{entry.name}</span>
-          </div>,
-        );
+          </div>);
         if (isOpen && depth < MAX_DEPTH) {
           const children = childrenCacheRef.current.get(entry.path);
           const isLoading = loading.has(entry.path);
           const error = errors.get(entry.path);
-          rows.push(
-            <div key={`${entry.path}:children`} className="dir-tree-children" role="group">
-              {isLoading ? (
-                <div className="dir-tree-hint" style={{ paddingLeft: 10 + (depth + 1) * 14 }}>加载中…</div>
-              ) : error ? (
-                <div className="dir-tree-hint error" style={{ paddingLeft: 10 + (depth + 1) * 14 }}>{error}</div>
-              ) : children && children.length > 0 ? (
-                renderEntries(children, depth + 1, entry.path)
-              ) : (
-                <div className="dir-tree-hint" style={{ paddingLeft: 10 + (depth + 1) * 14 }}>空目录</div>
-              )}
-            </div>,
-          );
+          rows.push(<div key={`${entry.path}:children`} className="dir-tree-children" role="group">
+              {isLoading ? <div className="dir-tree-hint" style={{
+              paddingLeft: 10 + (depth + 1) * 14
+            }}>{t("DirTreeView.13")}</div> : error ? <div className="dir-tree-hint error" style={{
+              paddingLeft: 10 + (depth + 1) * 14
+            }}>{error}</div> : children && children.length > 0 ? renderEntries(children, depth + 1, entry.path) : <div className="dir-tree-hint" style={{
+              paddingLeft: 10 + (depth + 1) * 14
+            }}>{t("DirTreeView.14")}</div>}
+            </div>);
         }
       } else {
         // 语言徽标：按扩展名显示彩色短标（J / TS / PY …），无徽标类型回退通用文件图标
         const fileMeta = fileTypeMeta(entry.path);
-        rows.push(
-          <div
-            key={entry.path}
-            className={`dir-tree-row file${revealedPath === entry.path ? " revealed" : ""}${locatedPath === entry.path ? " located" : ""}`}
-            style={{ paddingLeft: 10 + depth * 14 }}
-            role="treeitem"
-            data-path={entry.path}
-            onClick={() => onOpenFile?.(entry.path)}
-            {...dragProps}
-          >
+        rows.push(<div key={entry.path} className={`dir-tree-row file${revealedPath === entry.path ? " revealed" : ""}${locatedPath === entry.path ? " located" : ""}`} style={{
+          paddingLeft: 10 + depth * 14
+        }} role="treeitem" data-path={entry.path} onClick={() => onOpenFile?.(entry.path)} {...dragProps}>
             <span className="dir-tree-chevron-spacer" aria-hidden="true" />
-            {fileMeta.badge ? (
-              <span className="dir-tree-file-badge" style={{ color: fileMeta.color }}>{fileMeta.badge}</span>
-            ) : (
-              <FileIcon className="dir-tree-icon" />
-            )}
+            {fileMeta.badge ? <span className="dir-tree-file-badge" style={{
+            color: fileMeta.color
+          }}>{fileMeta.badge}</span> : <FileIcon className="dir-tree-icon" />}
             <span className="dir-tree-name" title={entry.name}>{entry.name}</span>
-            <button
-              type="button"
-              className="dir-tree-reveal"
-              title="在 Finder 中显示"
-              aria-label="在 Finder 中显示"
-              onClick={(event) => {
-                event.stopPropagation();
-                revealFile(entry.path);
-              }}
-            >
+            <button type="button" className="dir-tree-reveal" title={t("DirTreeView.15")} aria-label={t("DirTreeView.16")} onClick={event => {
+            event.stopPropagation();
+            revealFile(entry.path);
+          }}>
               <ChevronIcon className="dir-tree-reveal-icon" />
             </button>
             {sizeLabel(entry.size) ? <span className="dir-tree-size">{sizeLabel(entry.size)}</span> : null}
-          </div>,
-        );
+          </div>);
       }
     }
     if (meta?.truncated) {
-      rows.push(
-        <div key={`${dirPath}:truncated`} className="dir-tree-hint" style={{ paddingLeft: 10 + (depth - 1) * 14 }}>
-          已显示前 {entries.length} 项（共 {meta.total} 项）
-        </div>,
-      );
+      rows.push(<div key={`${dirPath}:truncated`} className="dir-tree-hint" style={{
+        paddingLeft: 10 + (depth - 1) * 14
+      }}>{t("DirTreeView.17")}{entries.length}{t("DirTreeView.18")}{meta.total}{t("DirTreeView.19")}</div>);
     }
     return rows;
   };
-
   const rootEntries = childrenCacheRef.current.get(rootPath);
   const rootLoading = loading.has(rootPath);
   const rootError = errors.get(rootPath);
   const rootMeta = metaCacheRef.current.get(rootPath);
   const queryTrimmed = query.trim();
   const filterDirty = filter !== "all" || showHidden;
-
-  return (
-    <div className="dir-tree" role="tree" aria-label="工程目录" data-tick={tick}>
+  return <div className="dir-tree" role="tree" aria-label={t("DirTreeView.20")} data-tick={tick}>
       <div className="dir-tree-toolbar">
-        {onCollapse ? (
-          <button
-            type="button"
-            className="dir-tree-tool-btn"
-            onClick={onCollapse}
-            title="收回面板"
-            aria-label="收回面板"
-          >
+        {onCollapse ? <button type="button" className="dir-tree-tool-btn" onClick={onCollapse} title={t("DirTreeView.21")} aria-label={t("DirTreeView.22")}>
             <PanelCollapseIcon className="icon-14" />
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className={`dir-tree-tool-btn${searchOpen ? " on" : ""}`}
-          onClick={() => {
-            setSearchOpen((value) => !value);
-            if (searchOpen) setQuery("");
-          }}
-          title="搜索文件与文件夹"
-          aria-label="搜索文件与文件夹"
-        >
+          </button> : null}
+        <button type="button" className={`dir-tree-tool-btn${searchOpen ? " on" : ""}`} onClick={() => {
+        setSearchOpen(value => !value);
+        if (searchOpen) setQuery("");
+      }} title={t("DirTreeView.23")} aria-label={t("DirTreeView.24")}>
           <SearchIcon className="icon-14" />
         </button>
         <div className="dir-tree-filter" ref={filterRef}>
-          <button
-            type="button"
-            className={`dir-tree-tool-btn${filter !== "all" ? " on" : ""}`}
-            onClick={() => setFilterOpen((value) => !value)}
-            title="筛选"
-            aria-label="筛选"
-            aria-expanded={filterOpen}
-          >
+          <button type="button" className={`dir-tree-tool-btn${filter !== "all" ? " on" : ""}`} onClick={() => setFilterOpen(value => !value)} title={t("DirTreeView.25")} aria-label={t("DirTreeView.26")} aria-expanded={filterOpen}>
             <FilterIcon className="icon-14" />
           </button>
-          {filterOpen ? (
-            <div className="dir-tree-filter-menu" role="menu" aria-label="筛选目录">
-              <div className="dir-tree-filter-label">筛选类型</div>
-              {TREE_FILTERS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={filter === item.id}
-                  className={`dir-tree-filter-item${filter === item.id ? " active" : ""}`}
-                  onClick={() => {
-                    setFilter(item.id);
-                    setFilterOpen(false);
-                  }}
-                >
+          {filterOpen ? <div className="dir-tree-filter-menu" role="menu" aria-label={t("DirTreeView.27")}>
+              <div className="dir-tree-filter-label">{t("DirTreeView.28")}</div>
+              {TREE_FILTERS.map(item => <button key={item.id} type="button" role="menuitemradio" aria-checked={filter === item.id} className={`dir-tree-filter-item${filter === item.id ? " active" : ""}`} onClick={() => {
+            setFilter(item.id);
+            setFilterOpen(false);
+          }}>
                   <span>{item.label}</span>
                   {filter === item.id ? <span className="dir-tree-filter-check">✓</span> : null}
-                </button>
-              ))}
+                </button>)}
               <div className="dir-tree-filter-divider" />
-              <button
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={showHidden}
-                className={`dir-tree-filter-item${showHidden ? " active" : ""}`}
-                onClick={toggleHidden}
-              >
-                <span>显示 . 文件</span>
+              <button type="button" role="menuitemcheckbox" aria-checked={showHidden} className={`dir-tree-filter-item${showHidden ? " active" : ""}`} onClick={toggleHidden}>
+                <span>{t("DirTreeView.29")}</span>
                 {showHidden ? <span className="dir-tree-filter-check">✓</span> : null}
               </button>
               <div className="dir-tree-filter-divider" />
-              <button
-                type="button"
-                className="dir-tree-filter-item reset"
-                disabled={!filterDirty}
-                onClick={() => {
-                  setFilter("all");
-                  if (showHidden) toggleHidden();
-                  setFilterOpen(false);
-                }}
-              >
-                <span>重置筛选条件</span>
+              <button type="button" className="dir-tree-filter-item reset" disabled={!filterDirty} onClick={() => {
+            setFilter("all");
+            if (showHidden) toggleHidden();
+            setFilterOpen(false);
+          }}>
+                <span>{t("DirTreeView.30")}</span>
               </button>
-            </div>
-          ) : null}
+            </div> : null}
         </div>
         <span className="dir-tree-toolbar-spacer" />
-        <button type="button" className="dir-tree-tool-btn" onClick={refresh} title="刷新目录" aria-label="刷新目录">
+        <button type="button" className="dir-tree-tool-btn" onClick={refresh} title={t("DirTreeView.31")} aria-label={t("DirTreeView.32")}>
           <RefreshIcon className={`icon-14${rootLoading ? " spinning" : ""}`} />
         </button>
       </div>
-      {searchOpen ? (
-        <div className="dir-tree-search-row">
+      {searchOpen ? <div className="dir-tree-search-row">
           <SearchIcon className="icon-12 dir-tree-search-icon" />
-          <input
-            className="dir-tree-search-input"
-            value={query}
-            placeholder="搜索当前目录…"
-            autoFocus
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setQuery("");
-                setSearchOpen(false);
-              }
-            }}
-          />
-          {query ? (
-            <button
-              type="button"
-              className="dir-tree-search-clear"
-              aria-label="清空搜索"
-              onClick={() => setQuery("")}
-            >
+          <input className="dir-tree-search-input" value={query} placeholder={t("DirTreeView.33")} autoFocus onChange={event => setQuery(event.target.value)} onKeyDown={event => {
+        if (event.key === "Escape") {
+          setQuery("");
+          setSearchOpen(false);
+        }
+      }} />
+          {query ? <button type="button" className="dir-tree-search-clear" aria-label={t("DirTreeView.34")} onClick={() => setQuery("")}>
               <XIcon className="icon-10" />
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+            </button> : null}
+        </div> : null}
       <div className="dir-tree-scroll" ref={searchScrollRef}>
-        {queryTrimmed ? (
-          renderSearchHits()
-        ) : rootLoading && !rootEntries ? (
-          <div className="dir-tree-hint">加载中…</div>
-        ) : rootError ? (
-          <div className="dir-tree-hint error">{rootError}</div>
-        ) : rootEntries && rootEntries.length > 0 ? (
-          renderEntries(rootEntries, 0, rootPath)
-        ) : (
-          <div className="dir-tree-hint">空目录</div>
-        )}
-        {!queryTrimmed && rootMeta?.truncated ? (
-          <div className="dir-tree-hint">根目录已显示前 {rootEntries?.length ?? 0} 项（共 {rootMeta.total} 项）</div>
-        ) : null}
+        {queryTrimmed ? renderSearchHits() : rootLoading && !rootEntries ? <div className="dir-tree-hint">{t("DirTreeView.35")}</div> : rootError ? <div className="dir-tree-hint error">{rootError}</div> : rootEntries && rootEntries.length > 0 ? renderEntries(rootEntries, 0, rootPath) : <div className="dir-tree-hint">{t("DirTreeView.36")}</div>}
+        {!queryTrimmed && rootMeta?.truncated ? <div className="dir-tree-hint">{t("DirTreeView.37")}{rootEntries?.length ?? 0}{t("DirTreeView.38")}{rootMeta.total}{t("DirTreeView.39")}</div> : null}
       </div>
-      <div className="dir-tree-footer">{queryTrimmed ? "点击文件夹定位 · 点击文件预览" : "点击文件预览 · 点击文件夹展开 · 拖到输入框引用"}</div>
-    </div>
-  );
+      <div className="dir-tree-footer">{queryTrimmed ? t("DirTreeView.40") : t("DirTreeView.41")}</div>
+    </div>;
 });
-
 export default DirTreeView;

@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import type { ApprovalMode, AvailableModel, ComposerResource, ConversationMessage, DigitalHuman, ReasoningEffort, RoomProjection, RuntimeApproval, RuntimeQuestion, WorkspaceEntry } from "../types";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode, type SyntheticEvent } from "react";
 import ReactMarkdown from "react-markdown";
@@ -16,16 +17,20 @@ import { ApprovalCard } from "./ApprovalCard";
 import { QuestionCard, type UserAnswerSubmission } from "./QuestionCard";
 
 /** 从 React 节点树中递归提取文本（用于取 echarts 代码块源码） */
+const t = i18n.t.bind(i18n);
 function extractText(node: unknown): string {
   if (typeof node === "string") return node;
   if (typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(extractText).join("");
   if (node && typeof node === "object" && "props" in node) {
-    return extractText((node as { props?: { children?: unknown } }).props?.children);
+    return extractText((node as {
+      props?: {
+        children?: unknown;
+      };
+    }).props?.children);
   }
   return "";
 }
-
 type ConversationViewProps = {
   serviceReady: boolean;
   streaming: boolean;
@@ -94,7 +99,12 @@ type ConversationViewProps = {
   /** 粘贴超长文本：折叠为资源标签注入，而不是灌进输入框 */
   onPasteLongText?: (text: string) => void;
   /** 目录树拖入文件/文件夹：由 App 读取并转为输入框资源 */
-  onDropTreeResources?: (items: Array<{ path: string; name: string; displayName?: string; isDir: boolean }>) => void;
+  onDropTreeResources?: (items: Array<{
+    path: string;
+    name: string;
+    displayName?: string;
+    isDir: boolean;
+  }>) => void;
   onAddResourceProject: (project: WorkspaceEntry) => void;
   onAddResourcePlugin: (kind: ComposerResource["pluginKind"]) => void;
   /** 已安装且启用的 Skills 技能：+ 菜单里可选注入对话 */
@@ -103,13 +113,12 @@ type ConversationViewProps = {
   /** 代码预览选中片段 → 加入对话（转为代码片段资源标签） */
   onAddCodeSnippet?: (snippet: CodeSnippet) => void;
 };
-
 const PLUGIN_RESOURCE_LABELS: Record<NonNullable<ComposerResource["pluginKind"]>, string> = {
   word: "Word",
   excel: "Excel",
   md: "MD",
   echart: "EChart",
-  drawio: "Draw.io",
+  drawio: "Draw.io"
 };
 
 /** 可 @ / 可加资源的插件类型清单（+ 菜单与 @ 弹层共用） */
@@ -120,19 +129,25 @@ const PASTE_TEXT_CHIP_CHARS = 1000;
 const PASTE_TEXT_CHIP_LINES = 30;
 
 /** 插件专属图标：+ 菜单与资源胶囊共用，替代千篇一律的扳手 */
-const PLUGIN_RESOURCE_ICONS: Record<NonNullable<ComposerResource["pluginKind"]>, ComponentType<{ className?: string }>> = {
+const PLUGIN_RESOURCE_ICONS: Record<NonNullable<ComposerResource["pluginKind"]>, ComponentType<{
+  className?: string;
+}>> = {
   word: WordDocIcon,
   excel: ExcelSheetIcon,
   md: MarkdownIcon,
   echart: EChartIcon,
-  drawio: DrawIoIcon,
+  drawio: DrawIoIcon
 };
-
-function PluginIcon({ kind, className }: { kind: NonNullable<ComposerResource["pluginKind"]>; className?: string }) {
+function PluginIcon({
+  kind,
+  className
+}: {
+  kind: NonNullable<ComposerResource["pluginKind"]>;
+  className?: string;
+}) {
   const Icon = PLUGIN_RESOURCE_ICONS[kind] || ToolIcon;
   return <Icon className={className} />;
 }
-
 function resourceLabel(resource: ComposerResource): string {
   if (resource.kind === "plugin" && resource.pluginKind) return PLUGIN_RESOURCE_LABELS[resource.pluginKind];
   if (resource.kind === "code" && resource.startLine && resource.endLine) {
@@ -140,29 +155,35 @@ function resourceLabel(resource: ComposerResource): string {
   }
   return resource.name;
 }
-
 function resourceKindLabel(resource: ComposerResource): string {
-  if (resource.kind === "folder") return "文件夹";
-  if (resource.kind === "code") return "代码";
+  if (resource.kind === "folder") return t("ConversationView.0");
+  if (resource.kind === "code") return t("ConversationView.1");
   if (resource.kind === "file") {
-    if (resource.mimeType?.startsWith("image/")) return "图片";
+    if (resource.mimeType?.startsWith("image/")) return t("ConversationView.2");
     // 无本地路径的纯文本资源 = 粘贴的文本内容，折叠展示
-    if (!resource.path && resource.textContent) return "文本";
-    return "文件";
+    if (!resource.path && resource.textContent) return t("ConversationView.3");
+    return t("ConversationView.4");
   }
-  if (resource.kind === "project") return "项目";
-  if (resource.kind === "skill") return "技能";
-  return "插件";
+  if (resource.kind === "project") return t("ConversationView.5");
+  if (resource.kind === "skill") return t("ConversationView.6");
+  return t("ConversationView.7");
 }
 
 /** 资源标签悬浮提示：粘贴的文本/代码片段展示内容预览，其余展示本地路径 */
 function resourceTooltip(resource: ComposerResource): string {
   if (resource.kind === "file" && !resource.path && resource.textContent) {
     const preview = resource.textContent.slice(0, 300);
-    return `粘贴的文本 · ${resource.textContent.length} 字符\n\n${preview}${resource.textContent.length > 300 ? "\n…" : ""}`;
+    return t("ConversationView.117", {
+      v0: resource.textContent.length,
+      v1: preview,
+      v2: resource.textContent.length > 300 ? "\n…" : ""
+    });
   }
   if (resource.kind === "code" && resource.textContent) {
-    const range = resource.startLine && resource.endLine ? `第 ${resource.startLine}-${resource.endLine} 行` : "选中片段";
+    const range = resource.startLine && resource.endLine ? t("ConversationView.118", {
+      v0: resource.startLine,
+      v1: resource.endLine
+    }) : t("ConversationView.8");
     const preview = resource.textContent.slice(0, 300);
     return `${resource.name} · ${range}\n\n${preview}${resource.textContent.length > 300 ? "\n…" : ""}`;
   }
@@ -176,44 +197,68 @@ function resourceChipIcon(resource: ComposerResource) {
   if (resource.kind === "skill") return <ToolIcon className="icon-12" />;
   return <PluginIcon kind={resource.pluginKind!} className="icon-12" />;
 }
-
-type TimelineItem =
-  | { kind: "message"; key: string; message: ConversationMessage; asThought?: boolean }
-  | { kind: "activity"; key: string; messages: ConversationMessage[] };
-
+type TimelineItem = {
+  kind: "message";
+  key: string;
+  message: ConversationMessage;
+  asThought?: boolean;
+} | {
+  kind: "activity";
+  key: string;
+  messages: ConversationMessage[];
+};
 function activityLabel(messages: ConversationMessage[]): string {
-  const failed = messages.filter((message) => message.status === "error" || message.status === "failed").length;
-  const running = messages.filter((message) => message.status === "running").length;
-  if (running > 0) return `正在执行 ${messages.length} 步`;
-  if (failed > 0) return `执行过程 · ${messages.length} 步 · ${failed} 失败`;
-  return `执行过程 · ${messages.length} 步`;
+  const failed = messages.filter(message => message.status === "error" || message.status === "failed").length;
+  const running = messages.filter(message => message.status === "running").length;
+  if (running > 0) return t("ConversationView.119", {
+    v0: messages.length
+  });
+  if (failed > 0) return t("ConversationView.120", {
+    v0: messages.length,
+    v1: failed
+  });
+  return t("ConversationView.121", {
+    v0: messages.length
+  });
 }
-
 function toolTitle(message: ConversationMessage): string {
   const running = message.status === "running";
   const failed = message.status === "error" || message.status === "failed";
-  const prefix = failed ? "执行失败" : running ? "正在" : "已";
-
-  if (message.toolName === "fs_read") return `${prefix}读取文件`;
-  if (message.toolName === "fs_write") return `${prefix}修改文件`;
-  if (message.toolName === "fs_list" || message.toolName === "fs_tree") return `${prefix}查看目录`;
-  if (message.toolName === "shell_execute") return `${prefix}执行命令`;
-  if (message.toolName === "web_search") return `${prefix}搜索网络`;
-  if (message.toolName === "web_fetch") return `${prefix}读取网页`;
-  if (message.toolName === "ask_user_question") return failed ? "提问失败" : running ? "等待回答" : "已回答";
-  return `${prefix}执行 ${message.toolName || "工具"}`;
+  const prefix = failed ? t("ConversationView.9") : running ? t("ConversationView.10") : t("ConversationView.11");
+  if (message.toolName === "fs_read") return t("ConversationView.122", {
+    v0: prefix
+  });
+  if (message.toolName === "fs_write") return t("ConversationView.123", {
+    v0: prefix
+  });
+  if (message.toolName === "fs_list" || message.toolName === "fs_tree") return t("ConversationView.124", {
+    v0: prefix
+  });
+  if (message.toolName === "shell_execute") return t("ConversationView.125", {
+    v0: prefix
+  });
+  if (message.toolName === "web_search") return t("ConversationView.126", {
+    v0: prefix
+  });
+  if (message.toolName === "web_fetch") return t("ConversationView.127", {
+    v0: prefix
+  });
+  if (message.toolName === "ask_user_question") return failed ? t("ConversationView.12") : running ? t("ConversationView.13") : t("ConversationView.14");
+  return t("ConversationView.128", {
+    v0: prefix,
+    v1: message.toolName || t("ConversationView.15")
+  });
 }
-
 function toolDetail(message: ConversationMessage): string {
-  const argument = message.arguments?.path
-    ?? message.arguments?.command
-    ?? message.arguments?.query
-    ?? message.arguments?.url;
+  const argument = message.arguments?.path ?? message.arguments?.command ?? message.arguments?.query ?? message.arguments?.url;
   return typeof argument === "string" && argument.trim() ? argument.trim() : "";
 }
 
 /** 从消息参数中提取文件路径（兼容常见字段名），返回 { base, dir }。 */
-function toolFilePath(message: ConversationMessage): { base: string; dir: string } | null {
+function toolFilePath(message: ConversationMessage): {
+  base: string;
+  dir: string;
+} | null {
   const args = message.arguments || {};
   const raw = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
   if (typeof raw !== "string" || !raw.trim()) return null;
@@ -221,27 +266,37 @@ function toolFilePath(message: ConversationMessage): { base: string; dir: string
   const segments = normalized.split(/[\\/]/).filter(Boolean);
   const base = segments[segments.length - 1] || normalized;
   const dir = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
-  return { base, dir };
+  return {
+    base,
+    dir
+  };
 }
 
 /** 从工具结果中解析 diff 统计（形如 "+10 -19"、"lines added: 10" 等）。 */
-function toolDiffStats(message: ConversationMessage): { add: number; del: number } | null {
+function toolDiffStats(message: ConversationMessage): {
+  add: number;
+  del: number;
+} | null {
   const text = message.result || "";
   if (!text) return null;
   const plusMinus = text.match(/\+(\d+)\s*[-−]\s*(\d+)/);
-  if (plusMinus) return { add: Number(plusMinus[1]), del: Number(plusMinus[2]) };
+  if (plusMinus) return {
+    add: Number(plusMinus[1]),
+    del: Number(plusMinus[2])
+  };
   const added = text.match(/(?:added|新增|inserted)[^\d]*(\d+)/i);
   const removed = text.match(/(?:removed|deleted|删除)[^\d]*(\d+)/i);
   if (added || removed) {
-    return { add: added ? Number(added[1]) : 0, del: removed ? Number(removed[1]) : 0 };
+    return {
+      add: added ? Number(added[1]) : 0,
+      del: removed ? Number(removed[1]) : 0
+    };
   }
   return null;
 }
-
 function isEditTool(toolName?: string): boolean {
   return /^(fs_write|str_replace_editor|edit_file|write_file)$/i.test(toolName || "");
 }
-
 function toolIconName(message: ConversationMessage): "edit" | "read" | "command" | "search" | "web" | "list" | "tool" {
   const name = (message.toolName || "").toLowerCase();
   if (isEditTool(message.toolName)) return "edit";
@@ -252,62 +307,71 @@ function toolIconName(message: ConversationMessage): "edit" | "read" | "command"
   if (name === "web_fetch") return "web";
   return "tool";
 }
-
 function activityState(messages: ConversationMessage[]): "running" | "error" | "done" {
-  if (messages.some((message) => message.status === "running")) return "running";
-  if (messages.some((message) => message.status === "error" || message.status === "failed")) return "error";
+  if (messages.some(message => message.status === "running")) return "running";
+  if (messages.some(message => message.status === "error" || message.status === "failed")) return "error";
   return "done";
 }
-
 function activityKey(message: ConversationMessage, index: number): string {
   return message.callId || `${message.toolName || "tool"}-${index}`;
 }
-
 function estimateTokens(text: string): number {
   if (!text) return 0;
   return Math.ceil(text.length / 3);
 }
 
 /** 输入中的触发词：光标前最后一个 @ 开始的连续非空白片段（不含空格，支持中文） */
-function detectMentionTrigger(value: string, caret: number): { start: number; query: string } | null {
+function detectMentionTrigger(value: string, caret: number): {
+  start: number;
+  query: string;
+} | null {
   const beforeCaret = value.slice(0, caret);
   const atIndex = beforeCaret.lastIndexOf("@");
   if (atIndex < 0) return null;
   const query = beforeCaret.slice(atIndex + 1);
   if (/[\s@​]/.test(query)) return null;
-  return { start: atIndex, query };
+  return {
+    start: atIndex,
+    query
+  };
 }
-
 function messageTokenCount(message: ConversationMessage): number {
   const argumentText = message.arguments ? JSON.stringify(message.arguments) : "";
-  return estimateTokens([message.content, message.reasoning, message.result, argumentText]
-    .filter((value): value is string => typeof value === "string" && Boolean(value))
-    .join("\n"));
+  return estimateTokens([message.content, message.reasoning, message.result, argumentText].filter((value): value is string => typeof value === "string" && Boolean(value)).join("\n"));
 }
-
 function formatTokens(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return String(value);
 }
-
 function formatMessageTime(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-
 function formatDuration(value: number): string {
-  if (value < 1000) return "不到 1 秒";
+  if (value < 1000) return t("ConversationView.16");
   const seconds = Math.round(value / 1000);
-  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 60) return t("ConversationView.129", {
+    v0: seconds
+  });
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  if (minutes < 60) return remainder ? `${minutes} 分 ${remainder} 秒` : `${minutes} 分钟`;
+  if (minutes < 60) return remainder ? t("ConversationView.130", {
+    v0: minutes,
+    v1: remainder
+  }) : t("ConversationView.131", {
+    v0: minutes
+  });
   const hours = Math.floor(minutes / 60);
   const minuteRemainder = minutes % 60;
-  return minuteRemainder ? `${hours} 小时 ${minuteRemainder} 分` : `${hours} 小时`;
+  return minuteRemainder ? t("ConversationView.132", {
+    v0: hours,
+    v1: minuteRemainder
+  }) : t("ConversationView.133", {
+    v0: hours
+  });
 }
 
 /** 进行中耗时的渐进展示：不足 1 秒显示毫秒，1 分钟内显示秒，之后转分/小时（复用 formatDuration） */
@@ -319,87 +383,91 @@ function formatLiveElapsed(ms: number): string {
 }
 
 /** 流式/协作耗时标签：独立组件自刷新（200ms 精度），避免整棵会话树跟着每秒重渲染 */
-function ElapsedLabel({ startedAt }: { startedAt: number }) {
+function ElapsedLabel({
+  startedAt
+}: {
+  startedAt: number;
+}) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    const timer = window.setInterval(() => setTick((value) => value + 1), 200);
+    const timer = window.setInterval(() => setTick(value => value + 1), 200);
     return () => window.clearInterval(timer);
   }, []);
   const elapsedMs = Math.max(0, Date.now() - startedAt);
   return <span> · {formatLiveElapsed(elapsedMs)}</span>;
 }
-
 function activitySummary(messages: ConversationMessage[]): string {
   const counts = new Map<string, number>();
-  messages.forEach((message) => {
+  messages.forEach(message => {
     const key = message.toolName || "tool";
     counts.set(key, (counts.get(key) || 0) + 1);
   });
   return [...counts.entries()].map(([toolName, count]) => {
-    const label = toolTitle({ toolName, status: "success" } as ConversationMessage);
+    const label = toolTitle({
+      toolName,
+      status: "success"
+    } as ConversationMessage);
     return count > 1 ? `${label} ×${count}` : label;
   }).join(" · ");
 }
-
 function editedFiles(messages: ConversationMessage[]): string[] {
-  const files = messages
-    .filter((message) => message.role === "tool" && isEditTool(message.toolName))
-    .map((message) => {
-      const args = message.arguments || {};
-      const path = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
-      return typeof path === "string" && path.trim() ? path.trim() : "";
-    })
-    .filter(Boolean);
+  const files = messages.filter(message => message.role === "tool" && isEditTool(message.toolName)).map(message => {
+    const args = message.arguments || {};
+    const path = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
+    return typeof path === "string" && path.trim() ? path.trim() : "";
+  }).filter(Boolean);
   return [...new Set(files)];
 }
 
 /** 本轮文件产物标签列表：异步判定每个路径的真实类型（文件 / 文件夹 / 失效），按类型决定图标与点击行为。 */
-function RunSummaryFiles({ files, onOpenFile, basePath }: { files: string[]; onOpenFile?: (path: string) => void; basePath?: string }) {
+function RunSummaryFiles({
+  files,
+  onOpenFile,
+  basePath
+}: {
+  files: string[];
+  onOpenFile?: (path: string) => void;
+  basePath?: string;
+}) {
   const [kinds, setKinds] = useState<Record<string, LocalPathKind>>({});
   const [resolved, setResolved] = useState<Record<string, string>>({});
   const [attempt, setAttempt] = useState(0);
   const signature = files.join("\n");
-
   useEffect(() => {
     setAttempt(0);
   }, [signature]);
-
   useEffect(() => {
     const list = signature ? signature.split("\n") : [];
     if (list.length === 0) return;
     // 相对路径按会话项目根解析出候选绝对路径（与 Agent 实际写入 cwd 对齐），原路径兜底
-    const candidateLists = list.map((file) => (
-      file.startsWith("/") || file.startsWith("~")
-        ? [file]
-        : [`${(basePath || "").replace(/\/$/, "")}/${file}`, file].filter(Boolean)
-    ));
+    const candidateLists = list.map(file => file.startsWith("/") || file.startsWith("~") ? [file] : [`${(basePath || "").replace(/\/$/, "")}/${file}`, file].filter(Boolean));
     const allCandidates = [...new Set(candidateLists.flat())];
     let cancelled = false;
     let retryTimer: number | undefined;
-    invoke<(LocalPathKind | null)[]>("local_path_kinds", { paths: allCandidates })
-      .then((result) => {
-        if (cancelled) return;
-        const kindByPath: Record<string, LocalPathKind> = {};
-        const resolvedByPath: Record<string, string> = {};
-        allCandidates.forEach((candidate, index) => {
-          kindByPath[candidate] = result[index] ?? "missing";
-        });
-        const nextKinds: Record<string, LocalPathKind> = {};
-        list.forEach((file, index) => {
-          const hit = candidateLists[index].find((candidate) => kindByPath[candidate] && kindByPath[candidate] !== "missing");
-          const pick = hit || candidateLists[index][0];
-          nextKinds[file] = kindByPath[pick] ?? "missing";
-          resolvedByPath[file] = pick;
-        });
-        setKinds(nextKinds);
-        setResolved(resolvedByPath);
-        // Agent 收尾 flush 可能晚于 done：全部缺失时延迟复检两次，避免把晚到文件误标"不存在"
-        const allMissing = list.every((file) => nextKinds[file] === "missing");
-        if (allMissing && attempt < 2) {
-          retryTimer = window.setTimeout(() => setAttempt((value) => value + 1), 1500 * (attempt + 1));
-        }
-      })
-      .catch(() => {});
+    invoke<(LocalPathKind | null)[]>("local_path_kinds", {
+      paths: allCandidates
+    }).then(result => {
+      if (cancelled) return;
+      const kindByPath: Record<string, LocalPathKind> = {};
+      const resolvedByPath: Record<string, string> = {};
+      allCandidates.forEach((candidate, index) => {
+        kindByPath[candidate] = result[index] ?? "missing";
+      });
+      const nextKinds: Record<string, LocalPathKind> = {};
+      list.forEach((file, index) => {
+        const hit = candidateLists[index].find(candidate => kindByPath[candidate] && kindByPath[candidate] !== "missing");
+        const pick = hit || candidateLists[index][0];
+        nextKinds[file] = kindByPath[pick] ?? "missing";
+        resolvedByPath[file] = pick;
+      });
+      setKinds(nextKinds);
+      setResolved(resolvedByPath);
+      // Agent 收尾 flush 可能晚于 done：全部缺失时延迟复检两次，避免把晚到文件误标"不存在"
+      const allMissing = list.every(file => nextKinds[file] === "missing");
+      if (allMissing && attempt < 2) {
+        retryTimer = window.setTimeout(() => setAttempt(value => value + 1), 1500 * (attempt + 1));
+      }
+    }).catch(() => {});
     return () => {
       cancelled = true;
       if (retryTimer) window.clearTimeout(retryTimer);
@@ -407,66 +475,60 @@ function RunSummaryFiles({ files, onOpenFile, basePath }: { files: string[]; onO
   }, [signature, basePath, attempt]);
 
   // 目录若同时是其他产物的上级目录，视为过程性路径（如只写了 Desktop），不单独展示
-  const visible = files.filter((file) => {
+  const visible = files.filter(file => {
     if (kinds[file] !== "dir") return true;
     const prefix = file.endsWith("/") || file.endsWith("\\") ? file : `${file}/`;
-    return !files.some((other) => other !== file && other.startsWith(prefix));
+    return !files.some(other => other !== file && other.startsWith(prefix));
   });
-
-  return (
-    <ul className="run-summary-file-list">
-      {visible.map((file) => (
-        <RunFileChip key={file} file={resolved[file] || file} kind={kinds[file] ?? "file"} onOpenFile={onOpenFile} />
-      ))}
-    </ul>
-  );
+  return <ul className="run-summary-file-list">
+      {visible.map(file => <RunFileChip key={file} file={resolved[file] || file} kind={kinds[file] ?? "file"} onOpenFile={onOpenFile} />)}
+    </ul>;
 }
-
-function RunFileChip({ file, kind, onOpenFile }: { file: string; kind: LocalPathKind; onOpenFile?: (path: string) => void }) {
+function RunFileChip({
+  file,
+  kind,
+  onOpenFile
+}: {
+  file: string;
+  kind: LocalPathKind;
+  onOpenFile?: (path: string) => void;
+}) {
   const meta = fileTypeMeta(file, kind === "dir" ? "dir" : undefined);
   const Icon = meta.Icon;
   const missing = kind === "missing";
   const base = pathBasename(file);
   const dir = pathDirname(file);
-
   const handleClick = () => {
     if (missing) return;
     // 文件夹点击直接在文件管理器打开；文件优先走右侧预览
     if (kind === "dir" || !onOpenFile) {
-      void invoke("open_local_file", { path: file }).catch((error) => {
-        console.error("打开路径失败:", error);
+      void invoke("open_local_file", {
+        path: file
+      }).catch(error => {
+        console.error(t("ConversationView.17"), error);
       });
       return;
     }
     onOpenFile(file);
   };
-
-  const hint = missing
-    ? "路径不存在或已被移动"
-    : kind === "dir"
-      ? "文件夹 · 点击打开 · 右键更多操作"
-      : `${meta.kindLabel} · 点击预览 · 右键更多操作`;
+  const hint = missing ? t("ConversationView.18") : kind === "dir" ? t("ConversationView.19") : t("ConversationView.134", {
+    v0: meta.kindLabel
+  });
   const title = `${file}\n${hint}`;
-
-  return (
-    <li>
+  return <li>
       <FileActionsArea path={file}>
-        <button
-          type="button"
-          className={`run-summary-file-chip kind-${kind}`}
-          title={title}
-          onClick={handleClick}
-        >
-          <span className="run-summary-file-icon" style={{ color: meta.color }}>
+        <button type="button" className={`run-summary-file-chip kind-${kind}`} title={title} onClick={handleClick}>
+          <span className="run-summary-file-icon" style={{
+          color: meta.color
+        }}>
             <Icon className="run-summary-file-svg" />
           </span>
           <span className="run-summary-file-name">{base}</span>
-          {missing ? <span className="run-summary-file-state">未找到</span> : null}
+          {missing ? <span className="run-summary-file-state">{t("ConversationView.20")}</span> : null}
           {dir ? <span className="run-summary-file-dir">{dir}</span> : null}
         </button>
       </FileActionsArea>
-    </li>
-  );
+    </li>;
 }
 
 /** 找到本轮对话最后一条 AI 回复（不是作为中间思考展示的），用于在尾部挂本轮小结。 */
@@ -479,18 +541,15 @@ function findLastAssistantIndex(messages: ConversationMessage[]): number {
   }
   return -1;
 }
-
 async function copyMessageText(value: string): Promise<boolean> {
   try {
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(value);
       return true;
     }
-  } catch {
-  }
+  } catch {}
   return false;
 }
-
 export default function ConversationView({
   serviceReady,
   streaming,
@@ -550,13 +609,12 @@ export default function ConversationView({
   onAddResourcePlugin,
   skills = [],
   onAddResourceSkill,
-  onAddCodeSnippet,
+  onAddCodeSnippet
 }: ConversationViewProps) {
   // 目录树条目拖入输入框时的高亮
   const [treeDragOver, setTreeDragOver] = useState(false);
   // 房间协作模式下即使会话消息为空也按对话态渲染（消息由事件流提供）
   const isHome = messages.length === 0 && !roomContent;
-
   const messageListRef = useRef<HTMLDivElement>(null);
   const followOutputRef = useRef(true);
   const composingRef = useRef(false);
@@ -581,21 +639,18 @@ export default function ConversationView({
   const draftRef = useRef(localDraft);
   const lastCommittedDraftRef = useRef(draft);
   draftRef.current = localDraft;
-
   const commitDraft = (value: string) => {
     draftRef.current = value;
     lastCommittedDraftRef.current = value;
     setLocalDraft(value);
     onDraftChange(value);
   };
-
   useEffect(() => {
     if (draft === lastCommittedDraftRef.current) return;
     draftRef.current = draft;
     lastCommittedDraftRef.current = draft;
     setLocalDraft(draft);
   }, [draft]);
-
   useEffect(() => {
     if (!resourceMenuOpen && !projectMenuOpen) return;
     const onDown = (event: MouseEvent) => {
@@ -620,19 +675,16 @@ export default function ConversationView({
       document.removeEventListener("keydown", onKey);
     };
   }, [resourceMenuOpen, projectMenuOpen]);
-
   const runResourceAction = (action: () => void) => {
     setResourceMenuOpen(false);
     action();
   };
-
   const runProjectAction = (action: () => void) => {
     setProjectMenuOpen(false);
     action();
   };
-
   const removeResource = (resource: ComposerResource) => {
-    onResourcesChange(resources.filter((item) => item.id !== resource.id));
+    onResourcesChange(resources.filter(item => item.id !== resource.id));
   };
   const sentHistoryRef = useRef(sentHistory);
   sentHistoryRef.current = sentHistory;
@@ -641,7 +693,10 @@ export default function ConversationView({
   // ---- @ 工程提及 ----
   // draft 中的 @工程名 在输入框渲染为标签；确认选择/删词/手动输入/历史恢复都会同步到 mentionChips
   const [mentionChips, setMentionChips] = useState<WorkspaceEntry[]>([]);
-  const [mentionTrigger, setMentionTrigger] = useState<{ start: number; query: string } | null>(null);
+  const [mentionTrigger, setMentionTrigger] = useState<{
+    start: number;
+    query: string;
+  } | null>(null);
   const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
   const mentionListRef = useRef<HTMLDivElement>(null);
@@ -651,81 +706,54 @@ export default function ConversationView({
   mentionTriggerRef.current = mentionTrigger;
 
   // 可供 @ 提及的候选：仅当前项目下挂载的本地工程文件夹
-  const mentionCandidates = useMemo(() => projects.filter((project) => (
-    project.local && project.parentPath === activeProject?.path
-  )), [activeProject, projects]);
+  const mentionCandidates = useMemo(() => projects.filter(project => project.local && project.parentPath === activeProject?.path), [activeProject, projects]);
 
   // 可 @ 的数字人：已入房间时取房间参与者；未入房间时取当前项目配置的数字人
   // （项目配置数字人 = 第一优先级使用，无需先加入房间即可 @ 指派）
   const humanMentionCandidates = useMemo(() => {
     if (room) {
-      const joinedIds = new Set(room.participants.map((p) => p.digitalHumanId));
-      return digitalHumans.filter((human) => joinedIds.has(human.id));
+      const joinedIds = new Set(room.participants.map(p => p.digitalHumanId));
+      return digitalHumans.filter(human => joinedIds.has(human.id));
     }
     return projectHumans;
   }, [digitalHumans, room, projectHumans]);
-
   const roomHumans = useMemo(() => {
     if (!room) return [];
-    return room.participants
-      .map((participant) => digitalHumans.find((human) => human.id === participant.digitalHumanId) || null)
-      .filter((human): human is DigitalHuman => Boolean(human));
+    return room.participants.map(participant => digitalHumans.find(human => human.id === participant.digitalHumanId) || null).filter((human): human is DigitalHuman => Boolean(human));
   }, [digitalHumans, room]);
 
   // 候选工程变化（切项目/增删工程）时刷新标签对应的工程信息，丢弃已不存在的
   useEffect(() => {
-    setMentionChips((current) => current
-      .map((chip) => mentionCandidates.find((project) => project.path === chip.path) || null)
-      .filter((chip): chip is WorkspaceEntry => Boolean(chip)));
+    setMentionChips(current => current.map(chip => mentionCandidates.find(project => project.path === chip.path) || null).filter((chip): chip is WorkspaceEntry => Boolean(chip)));
   }, [mentionCandidates]);
-
   const mentionResults = useMemo(() => {
     if (!mentionTrigger) return [];
     const query = mentionTrigger.query.trim().toLowerCase();
-    return mentionCandidates.filter((project) => (
-      !mentionChips.some((chip) => chip.path === project.path)
-      && (!query || project.name.toLowerCase().includes(query) || project.path.toLowerCase().includes(query))
-    ));
+    return mentionCandidates.filter(project => !mentionChips.some(chip => chip.path === project.path) && (!query || project.name.toLowerCase().includes(query) || project.path.toLowerCase().includes(query)));
   }, [mentionCandidates, mentionChips, mentionTrigger]);
-
   const humanMentionResults = useMemo(() => {
     if (!mentionTrigger) return [];
     const query = mentionTrigger.query.trim().toLowerCase();
-    return humanMentionCandidates.filter((human) => (
-      !humanMentions.some((item) => item.id === human.id)
-      && (!query || human.displayName.toLowerCase().includes(query) || human.purpose.toLowerCase().includes(query))
-    ));
+    return humanMentionCandidates.filter(human => !humanMentions.some(item => item.id === human.id) && (!query || human.displayName.toLowerCase().includes(query) || human.purpose.toLowerCase().includes(query)));
   }, [humanMentionCandidates, humanMentions, mentionTrigger]);
 
   // 可 @ 的插件：固定五类交付插件，已加入资源标签的不重复列出
   const pluginMentionResults = useMemo(() => {
     if (!mentionTrigger) return [];
     const query = mentionTrigger.query.trim().toLowerCase();
-    return PLUGIN_KINDS.filter((kind) => (
-      !resources.some((resource) => resource.kind === "plugin" && resource.pluginKind === kind)
-      && (!query || PLUGIN_RESOURCE_LABELS[kind].toLowerCase().includes(query) || kind.includes(query))
-    ));
+    return PLUGIN_KINDS.filter(kind => !resources.some(resource => resource.kind === "plugin" && resource.pluginKind === kind) && (!query || PLUGIN_RESOURCE_LABELS[kind].toLowerCase().includes(query) || kind.includes(query)));
   }, [resources, mentionTrigger]);
 
   // 可 @ 的技能：已安装且启用的 Skills，已加入资源标签的不重复列出
   const skillMentionResults = useMemo(() => {
     if (!mentionTrigger) return [];
     const query = mentionTrigger.query.trim().toLowerCase();
-    return skills.filter((skill) => (
-      skill.enabled
-      && !resources.some((resource) => resource.kind === "skill" && resource.name === skill.name)
-      && (!query || skill.name.toLowerCase().includes(query) || (skill.description || "").toLowerCase().includes(query))
-    ));
+    return skills.filter(skill => skill.enabled && !resources.some(resource => resource.kind === "skill" && resource.name === skill.name) && (!query || skill.name.toLowerCase().includes(query) || (skill.description || "").toLowerCase().includes(query)));
   }, [skills, resources, mentionTrigger]);
-
-  const mentionTotalCount = humanMentionResults.length + mentionResults.length
-    + pluginMentionResults.length + skillMentionResults.length;
+  const mentionTotalCount = humanMentionResults.length + mentionResults.length + pluginMentionResults.length + skillMentionResults.length;
 
   // 插件/技能始终可用，@ 有匹配结果即弹层，避免"弹个空框"
-  const mentionOpen = Boolean(
-    mentionTrigger && !mentionDismissed && !streaming
-    && mentionTotalCount > 0,
-  );
+  const mentionOpen = Boolean(mentionTrigger && !mentionDismissed && !streaming && mentionTotalCount > 0);
   const mentionOpenRef = useRef(mentionOpen);
   mentionOpenRef.current = mentionOpen;
 
@@ -745,33 +773,41 @@ export default function ConversationView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mentionsProp]);
-
   useEffect(() => {
     setMentionActiveIndex(0);
   }, [mentionTrigger?.start, mentionTrigger?.query]);
-
   useEffect(() => {
     if (!mentionOpen) return;
     const list = mentionListRef.current;
     const active = list?.querySelector(".mention-item.active");
-    if (active instanceof HTMLElement) active.scrollIntoView({ block: "nearest" });
+    if (active instanceof HTMLElement) active.scrollIntoView({
+      block: "nearest"
+    });
   }, [mentionActiveIndex, mentionOpen]);
-
   const closeMention = () => setMentionTrigger(null);
 
   /** 删除输入框里的 "@query" 触发词（标签体现在上方横条里），返回改写后的草稿与光标位置 */
-  const removeMentionTriggerWord = (): { next: string; caretAfter: number } | null => {
+  const removeMentionTriggerWord = (): {
+    next: string;
+    caretAfter: number;
+  } | null => {
     const trigger = mentionTriggerRef.current;
     const textarea = textareaRef.current;
     if (!trigger) return null;
     const value = draftRef.current;
     const caret = textarea ? textarea.selectionStart : value.length;
     const next = (value.slice(0, trigger.start) + value.slice(caret)).replace(/ {2,}/g, " ");
-    return { next, caretAfter: Math.min(trigger.start, next.length) };
+    return {
+      next,
+      caretAfter: Math.min(trigger.start, next.length)
+    };
   };
 
   /** 触发词删除后的收尾：关弹层、提交草稿、焦点与光标归位 */
-  const finishMentionPick = (removed: { next: string; caretAfter: number }) => {
+  const finishMentionPick = (removed: {
+    next: string;
+    caretAfter: number;
+  }) => {
     setMentionTrigger(null);
     setMentionDismissed(false);
     commitDraft(removed.next);
@@ -789,9 +825,7 @@ export default function ConversationView({
   const confirmMention = (project: WorkspaceEntry) => {
     const removed = removeMentionTriggerWord();
     if (!removed) return;
-    setMentionChips((current) => (
-      current.some((chip) => chip.path === project.path) ? current : [...current, project]
-    ));
+    setMentionChips(current => current.some(chip => chip.path === project.path) ? current : [...current, project]);
     finishMentionPick(removed);
   };
 
@@ -799,7 +833,7 @@ export default function ConversationView({
   const confirmHumanMention = (human: DigitalHuman) => {
     const removed = removeMentionTriggerWord();
     if (!removed) return;
-    if (!humanMentions.some((item) => item.id === human.id)) {
+    if (!humanMentions.some(item => item.id === human.id)) {
       onHumanMentionsChange?.([...humanMentions, human]);
     }
     finishMentionPick(removed);
@@ -820,20 +854,17 @@ export default function ConversationView({
     onAddResourceSkill?.(skill);
     finishMentionPick(removed);
   };
-
   const removeMentionChip = (project: WorkspaceEntry) => {
     // 标签只存在 chips 状态里（输入框正文不含 @名称），直接从 chips 删除即可
-    setMentionChips((current) => current.filter((chip) => chip.path !== project.path));
+    setMentionChips(current => current.filter(chip => chip.path !== project.path));
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
   /** 浏览/恢复历史草稿时清空引用标签（历史正文是干净的，标签归属当时那条消息，不带回新草稿） */
   const clearMentions = () => setMentionChips([]);
-
   const exitHistoryBrowsing = () => {
     setHistoryCursor(sentHistoryRef.current.length);
   };
-
   const setDraftAndCaret = (value: string) => {
     commitDraft(value);
     requestAnimationFrame(() => {
@@ -854,14 +885,11 @@ export default function ConversationView({
     const browsing = historyCursorRef.current < history.length;
     if (!browsing) {
       const empty = draftRef.current.trim() === "";
-      const atEdge = forward
-        ? textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length
-        : textarea.selectionStart === 0 && textarea.selectionEnd === 0 && !textarea.value.slice(0, textarea.selectionStart).includes("\n");
+      const atEdge = forward ? textarea.selectionStart === textarea.value.length && textarea.selectionEnd === textarea.value.length : textarea.selectionStart === 0 && textarea.selectionEnd === 0 && !textarea.value.slice(0, textarea.selectionStart).includes("\n");
       if (!empty && !atEdge) return false;
       // 进入浏览前备份当前草稿，↓ 到底时恢复
       draftBackupRef.current = draftRef.current;
     }
-
     let next = forward ? historyCursorRef.current + 1 : historyCursorRef.current - 1;
     if (forward && next >= history.length) {
       // 翻过最新一条：恢复备份的草稿并退出浏览，同时恢复草稿对应的标签
@@ -877,38 +905,47 @@ export default function ConversationView({
     clearMentions();
     return true;
   };
-
   const openExternal = (url: string) => {
-    invoke("open_external", { url }).catch((error) => {
-      console.error("打开外部链接失败:", error);
+    invoke("open_external", {
+      url
+    }).catch(error => {
+      console.error(t("ConversationView.21"), error);
     });
   };
-
   const markdownComponents = useMemo(() => ({
-    a: ({ href, children }: { href?: string; children?: ReactNode }) => (
-      <a
-        href={href}
-        onClick={(event) => {
-          const localFilePath = localFilePathFromHref(href);
-          if (localFilePath && onOpenFile) {
-            event.preventDefault();
-            onOpenFile(localFilePath);
-            return;
-          }
-          if (href) {
-            event.preventDefault();
-            openExternal(href);
-          }
-        }}
-      >
+    a: ({
+      href,
+      children
+    }: {
+      href?: string;
+      children?: ReactNode;
+    }) => <a href={href} onClick={event => {
+      const localFilePath = localFilePathFromHref(href);
+      if (localFilePath && onOpenFile) {
+        event.preventDefault();
+        onOpenFile(localFilePath);
+        return;
+      }
+      if (href) {
+        event.preventDefault();
+        openExternal(href);
+      }
+    }}>
         {children}
-      </a>
-    ),
+      </a>,
     // ```echarts 代码块：渲染为 ECharts 图表
-    pre: ({ children }: { children?: ReactNode }) => {
+    pre: ({
+      children
+    }: {
+      children?: ReactNode;
+    }) => {
       // react-markdown 会把 code 包在 pre 里；从中取出 language 与源码
       const child = Array.isArray(children) ? children[0] : children;
-      const className = (child as { props?: { className?: string } })?.props?.className || "";
+      const className = (child as {
+        props?: {
+          className?: string;
+        };
+      })?.props?.className || "";
       const match = /language-(\w+)/.exec(className);
       if (match && match[1] === "echarts") {
         const raw = extractText(child);
@@ -916,17 +953,14 @@ export default function ConversationView({
         if (code.startsWith("{")) return <EChartBlock code={code} />;
       }
       return <pre>{children}</pre>;
-    },
+    }
   }), [onOpenFile]);
 
   // 引用必须稳定：renderMarkdown 每次渲染都是新函数时，memo(MessageItem) 浅比较
   // 永远失败，流式期间每个 chunk 都会让全部历史消息连同 ReactMarkdown 重渲染 → 闪烁
-  const renderMarkdown = useCallback((value: string) => (
-    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
+  const renderMarkdown = useCallback((value: string) => <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
       {value}
-    </ReactMarkdown>
-  ), [markdownComponents]);
-
+    </ReactMarkdown>, [markdownComponents]);
   const lastMessage = messages[messages.length - 1];
   const sendFromComposer = () => {
     // 生成期间允许预输入，但 Enter 不触发发送（发送按钮此时是"停止"），
@@ -939,48 +973,47 @@ export default function ConversationView({
     closeMention();
     onSend();
   };
-  const runningTool = [...messages].reverse().find((message) => (
-    message.role === "tool" && message.status === "running"
-  ));
+  const runningTool = [...messages].reverse().find(message => message.role === "tool" && message.status === "running");
   const isThinking = Boolean(lastMessage?.role === "assistant" && lastMessage.reasoning && !lastMessage.content);
-  const runningLabel = runningTool
-    ? (runningTool.toolName === "ask_user_question" ? "等待你的回答" : `工具 · ${runningTool.toolName || "Tool"}`)
-    : isThinking ? "思考中" : "生成中";
-  const roomStatusHumans = roomStreaming
-    ? (humanMentions.length > 0 ? humanMentions : roomHumans.length > 0 ? roomHumans : projectHumans)
-    : [];
-  const roomStatusHumanLabel = roomStatusHumans.length === 0
-    ? "数字人协作中"
-    : roomStatusHumans.length === 1
-      ? `${roomStatusHumans[0].displayName} · 协作中`
-      : `${roomStatusHumans.slice(0, 2).map((human) => human.displayName).join("、")}${roomStatusHumans.length > 2 ? ` 等 ${roomStatusHumans.length} 位` : ""} · 协作中`;
-
+  const runningLabel = runningTool ? runningTool.toolName === "ask_user_question" ? t("ConversationView.22") : t("ConversationView.135", {
+    v0: runningTool.toolName || "Tool"
+  }) : isThinking ? t("ConversationView.23") : t("ConversationView.24");
+  const roomStatusHumans = roomStreaming ? humanMentions.length > 0 ? humanMentions : roomHumans.length > 0 ? roomHumans : projectHumans : [];
+  const roomStatusHumanLabel = roomStatusHumans.length === 0 ? t("ConversationView.25") : roomStatusHumans.length === 1 ? t("ConversationView.136", {
+    v0: roomStatusHumans[0].displayName
+  }) : t("ConversationView.137", {
+    v0: roomStatusHumans.slice(0, 2).map(human => human.displayName).join("、"),
+    v1: roomStatusHumans.length > 2 ? t("ConversationView.138", {
+      v0: roomStatusHumans.length
+    }) : ""
+  });
   useEffect(() => {
     if (roomStreaming) {
-      setRoomStatusStartedAt((current) => current || Date.now());
+      setRoomStatusStartedAt(current => current || Date.now());
       return;
     }
     setRoomStatusStartedAt(null);
   }, [roomStreaming]);
-
   const usedTokens = messages.reduce((sum, message) => sum + messageTokenCount(message), 0);
   const contextLimit = 128_000;
-  const contextPercent = Math.min(100, (usedTokens / contextLimit) * 100);
-  const contextTooltip = `${contextPercent.toFixed(1)}% · ${formatTokens(usedTokens)} / ${formatTokens(contextLimit)} 上下文已使用`;
+  const contextPercent = Math.min(100, usedTokens / contextLimit * 100);
+  const contextTooltip = t("ConversationView.139", {
+    v0: contextPercent.toFixed(1),
+    v1: formatTokens(usedTokens),
+    v2: formatTokens(contextLimit)
+  });
   useEffect(() => {
     if (messageListRef.current && followOutputRef.current) {
       messageListRef.current.scrollTop = messageListRef.current.scrollHeight;
     }
   }, [messages, streaming]);
-
   const scrollToBottom = () => {
     followOutputRef.current = true;
     messageListRef.current?.scrollTo({
       top: messageListRef.current.scrollHeight,
-      behavior: "smooth",
+      behavior: "smooth"
     });
   };
-
   const timelineItems = useMemo<TimelineItem[]>(() => {
     // 基于"原始消息数组"判断中间消息（下一条是 tool），而不是过滤后的列表，
     // 这样过程中的文字在任何一步都能稳定折叠保留，不会随渲染状态变化而消失。
@@ -991,692 +1024,471 @@ export default function ConversationView({
           previous.messages.push(message);
           return nextItems;
         }
-        nextItems.push({ kind: "activity", key: activityKey(message, index), messages: [message] });
+        nextItems.push({
+          kind: "activity",
+          key: activityKey(message, index),
+          messages: [message]
+        });
         return nextItems;
       }
-
       const reasoning = message.reasoning?.trim() || "";
       const content = message.content.trim();
       const isLast = index === messages.length - 1;
       const hasAnything = Boolean(reasoning || content);
       // 跳过完全为空的消息项（流式占位除外），避免空 article 产生多余间距
       if (!hasAnything && !(isLast && (streaming || roomStreaming))) return nextItems;
-
       nextItems.push({
         kind: "message",
         key: `${message.role}-${index}-${message.callId || message.createdAt || "message"}`,
         message,
-        asThought: message.role === "assistant"
-          && messages[index + 1]?.role === "tool"
-          && !content,
+        asThought: message.role === "assistant" && messages[index + 1]?.role === "tool" && !content
       });
       return nextItems;
     }, []);
     const lastItem = items[items.length - 1];
-    const hasVisiblePendingAssistant = lastItem?.kind === "message"
-      && lastItem.message.role === "assistant"
-      && !lastItem.message.reasoning?.trim()
-      && !lastItem.message.content.trim();
-    const waitingForFirstAssistantChunk = (streaming || roomStreaming)
-      && messages.length > 0
-      && messages[messages.length - 1]?.role === "user";
+    const hasVisiblePendingAssistant = lastItem?.kind === "message" && lastItem.message.role === "assistant" && !lastItem.message.reasoning?.trim() && !lastItem.message.content.trim();
+    const waitingForFirstAssistantChunk = (streaming || roomStreaming) && messages.length > 0 && messages[messages.length - 1]?.role === "user";
     if (waitingForFirstAssistantChunk && !hasVisiblePendingAssistant) {
       items.push({
         kind: "message",
         key: "assistant-pending-placeholder",
-        message: { role: "assistant", content: "" },
+        message: {
+          role: "assistant",
+          content: ""
+        }
       });
     }
     return items;
   }, [messages, roomStreaming, streaming]);
-
-  const renderComposer = (variant: "hero" | "chat") => (
-    <>
-      {variant === "chat" && (streaming || roomStreaming) ? (
-        <div className="conversation-status">
-          {streaming && activeHuman ? (
-            <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
+  const renderComposer = (variant: "hero" | "chat") => <>
+      {variant === "chat" && (streaming || roomStreaming) ? <div className="conversation-status">
+          {streaming && activeHuman ? <span className="msg-attribution-avatar" style={{
+        background: activeHuman.themeColor,
+        width: 18,
+        height: 18,
+        fontSize: 10
+      }}>
               {activeHuman.avatarRef}
-            </span>
-          ) : roomStreaming && roomStatusHumans.length > 0 ? (
-            <span
-              className="conversation-status-humans"
-              title={`参与数字人：${roomStatusHumans.map((human) => human.displayName).join("、")}`}
-            >
-              {roomStatusHumans.slice(0, 3).map((human) => (
-                <span key={human.id} className="conversation-status-human">
+            </span> : roomStreaming && roomStatusHumans.length > 0 ? <span className="conversation-status-humans" title={t("ConversationView.140", {
+        v0: roomStatusHumans.map(human => human.displayName).join("、")
+      })}>
+              {roomStatusHumans.slice(0, 3).map(human => <span key={human.id} className="conversation-status-human">
                   <HumanAvatar human={human} size={16} />
-                </span>
-              ))}
+                </span>)}
               {roomStatusHumans.length > 3 ? <span className="conversation-status-more">+{roomStatusHumans.length - 3}</span> : null}
-            </span>
-          ) : (
-            <span className="conversation-status-dot" />
-          )}
+            </span> : <span className="conversation-status-dot" />}
           <span className="conversation-status-label">
-            {streaming
-              ? (activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel)
-              : `${roomStatusHumanLabel} · 等待调度`}
+            {streaming ? activeHuman ? `${activeHuman.displayName} · ${runningLabel}` : runningLabel : t("ConversationView.141", {
+          v0: roomStatusHumanLabel
+        })}
             {streaming && streamStartedAt ? <ElapsedLabel startedAt={streamStartedAt} /> : ""}
             {!streaming && roomStreaming && roomStatusStartedAt ? <ElapsedLabel startedAt={roomStatusStartedAt} /> : ""}
           </span>
-        </div>
-      ) : null}
-      {approvals.length > 0 ? (
-        <div className="runtime-approval" aria-live="polite">
-          {approvals.map((approval) => (
-            <ApprovalCard
-              key={approval.approvalId}
-              approval={approval}
-              resolving={Boolean(resolvingApprovalId)}
-              onResolve={(verdict) => onResolveApproval(approval.approvalId, verdict)}
-              leading={activeHuman ? (
-                <span className="msg-attribution-avatar" style={{ background: activeHuman.themeColor, width: 18, height: 18, fontSize: 10 }}>
+        </div> : null}
+      {approvals.length > 0 ? <div className="runtime-approval" aria-live="polite">
+          {approvals.map(approval => <ApprovalCard key={approval.approvalId} approval={approval} resolving={Boolean(resolvingApprovalId)} onResolve={verdict => onResolveApproval(approval.approvalId, verdict)} leading={activeHuman ? <span className="msg-attribution-avatar" style={{
+        background: activeHuman.themeColor,
+        width: 18,
+        height: 18,
+        fontSize: 10
+      }}>
                   {activeHuman.avatarRef}
-                </span>
-              ) : null}
-            />
-          ))}
-        </div>
-      ) : null}
-      {pendingQuestions.length > 0 ? (
-        <div className="runtime-approval" aria-live="polite">
-          {pendingQuestions.map((question) => (
-            <QuestionCard
-              key={question.questionId}
-              question={question}
-              submitting={submittingQuestionId === question.questionId}
-              onSubmit={onAnswerQuestion}
-            />
-          ))}
-        </div>
-      ) : null}
+                </span> : null} />)}
+        </div> : null}
+      {pendingQuestions.length > 0 ? <div className="runtime-approval" aria-live="polite">
+          {pendingQuestions.map(question => <QuestionCard key={question.questionId} question={question} submitting={submittingQuestionId === question.questionId} onSubmit={onAnswerQuestion} />)}
+        </div> : null}
       <div className={variant === "hero" ? "prompt-shell hero" : "prompt-shell chat"}>
-      {mentionChips.length > 0 || humanMentions.length > 0 ? (
-        <div className="mention-banner" aria-label="已加入的数字人与引用的工程">
-          {humanMentions.map((human) => {
-            const participant = room?.participants.find((p) => p.digitalHumanId === human.id);
-            const presence = participant?.presence || "idle";
-            return (
-              <span key={human.id} className="mention-chip human" title={`${human.purpose}\n状态：${PRESENCE_TEXT[presence]}`}>
+      {mentionChips.length > 0 || humanMentions.length > 0 ? <div className="mention-banner" aria-label={t("ConversationView.26")}>
+          {humanMentions.map(human => {
+          const participant = room?.participants.find(p => p.digitalHumanId === human.id);
+          const presence = participant?.presence || "idle";
+          return <span key={human.id} className="mention-chip human" title={t("ConversationView.142", {
+            v0: human.purpose,
+            v1: PRESENCE_TEXT[presence]
+          })}>
                 <HumanAvatar human={human} size={18} presence={presence} />
                 <span className="mention-chip-name">{human.displayName}</span>
                 <span className={`mention-chip-presence presence-text-${presence}`}>{PRESENCE_TEXT[presence]}</span>
-                <button
-                  type="button"
-                  className="mention-banner-remove"
-                  aria-label={`移除 ${human.displayName}`}
-                  title={`移除 ${human.displayName}`}
-                  disabled={streaming}
-                  onClick={() => {
-                    onHumanMentionsChange?.(humanMentions.filter((item) => item.id !== human.id));
-                    onRemoveParticipant?.(human.id);
-                  }}
-                >
+                <button type="button" className="mention-banner-remove" aria-label={t("ConversationView.143", {
+              v0: human.displayName
+            })} title={t("ConversationView.144", {
+              v0: human.displayName
+            })} disabled={streaming} onClick={() => {
+              onHumanMentionsChange?.(humanMentions.filter(item => item.id !== human.id));
+              onRemoveParticipant?.(human.id);
+            }}>
                   <XIcon className="icon-10" />
                 </button>
-              </span>
-            );
-          })}
-          {mentionChips.map((chip) => (
-            <span key={chip.path} className="mention-chip" title={chip.path}>
+              </span>;
+        })}
+          {mentionChips.map(chip => <span key={chip.path} className="mention-chip" title={chip.path}>
               <FolderIcon className="icon-12" />
               <span className="mention-chip-name">{chip.name}</span>
-              <button
-                type="button"
-                className="mention-banner-remove"
-                aria-label={`移除 ${chip.name}`}
-                title={`移除 ${chip.name}`}
-                disabled={streaming}
-                onClick={() => removeMentionChip(chip)}
-              >
+              <button type="button" className="mention-banner-remove" aria-label={t("ConversationView.145", {
+            v0: chip.name
+          })} title={t("ConversationView.146", {
+            v0: chip.name
+          })} disabled={streaming} onClick={() => removeMentionChip(chip)}>
                 <XIcon className="icon-10" />
               </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {resources.length > 0 ? (
-        <div className="resource-banner" aria-label="已添加资源">
-          {resources.map((resource) => (
-            <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resourceTooltip(resource)}>
+            </span>)}
+        </div> : null}
+      {resources.length > 0 ? <div className="resource-banner" aria-label={t("ConversationView.27")}>
+          {resources.map(resource => <span key={resource.id} className={`resource-chip ${resource.kind}`} title={resourceTooltip(resource)}>
               {resourceChipIcon(resource)}
               <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
               <span className="resource-chip-name">{resourceLabel(resource)}</span>
-              <button
-                type="button"
-                className="resource-banner-remove"
-                title={`移除 ${resourceLabel(resource)}`}
-                disabled={streaming}
-                onClick={() => removeResource(resource)}
-              >
+              <button type="button" className="resource-banner-remove" title={t("ConversationView.147", {
+            v0: resourceLabel(resource)
+          })} disabled={streaming} onClick={() => removeResource(resource)}>
                 <XIcon className="icon-10" />
               </button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-        <div
-          className={`composer-input${treeDragOver ? " tree-drag-over" : ""}`}
-          onDragOver={(event) => {
-            // 目录树拖入（自定义 MIME 或纯文本路径兜底）：高亮输入框并允许落放
-            if (!onDropTreeResources) return;
-            if (event.dataTransfer.types.includes("application/x-dsh-tree-resource") || event.dataTransfer.types.includes("text/plain")) {
+            </span>)}
+        </div> : null}
+        <div className={`composer-input${treeDragOver ? " tree-drag-over" : ""}`} onDragOver={event => {
+        // 目录树拖入（自定义 MIME 或纯文本路径兜底）：高亮输入框并允许落放
+        if (!onDropTreeResources) return;
+        if (event.dataTransfer.types.includes("application/x-dsh-tree-resource") || event.dataTransfer.types.includes("text/plain")) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+          if (!treeDragOver) setTreeDragOver(true);
+        }
+      }} onDragLeave={event => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setTreeDragOver(false);
+      }} onDrop={event => {
+        setTreeDragOver(false);
+        if (!onDropTreeResources) return;
+        const raw = event.dataTransfer.getData("application/x-dsh-tree-resource");
+        if (!raw) return;
+        event.preventDefault();
+        try {
+          const parsed = JSON.parse(raw) as {
+            path?: string;
+            name?: string;
+            displayName?: string;
+            isDir?: boolean;
+          };
+          const item = parsed && typeof parsed === "object" && parsed.path ? {
+            path: parsed.path,
+            name: parsed.name || "",
+            displayName: parsed.displayName,
+            isDir: Boolean(parsed.isDir)
+          } : null;
+          if (item) onDropTreeResources([item]);
+        } catch {
+          // 非法数据忽略
+        }
+      }} onMouseDown={event => {
+        // 兜底：点到输入区但目标不是 textarea 本身（覆盖层/内边距/边角）时，
+        // 把焦点交还给 textarea，且把光标移到文本末尾，不打断正常输入
+        const textarea = textareaRef.current;
+        if (!textarea || event.target === textarea) return;
+        event.preventDefault();
+        textarea.focus();
+        const end = textarea.value.length;
+        textarea.selectionStart = end;
+        textarea.selectionEnd = end;
+      }}>
+          <textarea ref={textareaRef} value={localDraft} placeholder={historyBrowsing ? t("ConversationView.148", {
+          v0: historyCursor + 1,
+          v1: sentHistory.length
+        }) : roomStreaming ? t("ConversationView.28") : streaming ? t("ConversationView.29") : t("ConversationView.30")} onChange={event => {
+          exitHistoryBrowsing();
+          const value = event.target.value;
+          const caret = event.target.selectionStart;
+          commitDraft(value);
+          const trigger = detectMentionTrigger(value, caret);
+          if (trigger) {
+            // Esc 关闭后同一触发词不再自动弹出；换一个触发词（@ 位置变化）重新弹出
+            setMentionDismissed(dismissed => dismissed && mentionTriggerRef.current?.start === trigger.start ? dismissed : false);
+            setMentionTrigger(trigger);
+          } else {
+            setMentionTrigger(null);
+            setMentionDismissed(false);
+          }
+        }} onCompositionStart={() => {
+          composingRef.current = true;
+        }} onCompositionEnd={() => {
+          composingRef.current = false;
+        }} onPaste={event => {
+          const clipboard = event.clipboardData;
+          // 1) 剪贴板里有文件：图片转多模态资源、文本类文件提取文本，不落进输入框
+          const files = Array.from(clipboard?.files || []);
+          if (files.length > 0 && onPasteFiles) {
+            event.preventDefault();
+            onPasteFiles(files);
+            return;
+          }
+          // 2) 超长文本：折叠为资源标签（全文随隐藏上下文注入），避免输入框刷屏
+          const text = clipboard?.getData("text/plain") || "";
+          if (text && (text.length > PASTE_TEXT_CHIP_CHARS || text.split("\n").length > PASTE_TEXT_CHIP_LINES) && onPasteLongText) {
+            event.preventDefault();
+            onPasteLongText(text);
+          }
+        }} onKeyDown={event => {
+          const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
+          if (composing) return;
+          // @ 弹层打开时优先处理弹层导航
+          if (mentionOpenRef.current) {
+            if (event.key === "ArrowDown") {
               event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
-              if (!treeDragOver) setTreeDragOver(true);
+              setMentionActiveIndex(index => (index + 1) % Math.max(1, mentionTotalCount));
+              return;
             }
-          }}
-          onDragLeave={(event) => {
-            if (event.currentTarget.contains(event.relatedTarget as Node)) return;
-            setTreeDragOver(false);
-          }}
-          onDrop={(event) => {
-            setTreeDragOver(false);
-            if (!onDropTreeResources) return;
-            const raw = event.dataTransfer.getData("application/x-dsh-tree-resource");
-            if (!raw) return;
-            event.preventDefault();
-            try {
-              const parsed = JSON.parse(raw) as { path?: string; name?: string; displayName?: string; isDir?: boolean };
-              const item = parsed && typeof parsed === "object" && parsed.path
-                ? { path: parsed.path, name: parsed.name || "", displayName: parsed.displayName, isDir: Boolean(parsed.isDir) }
-                : null;
-              if (item) onDropTreeResources([item]);
-            } catch {
-              // 非法数据忽略
+            if (event.key === "ArrowUp") {
+              event.preventDefault();
+              setMentionActiveIndex(index => (index - 1 + Math.max(1, mentionTotalCount)) % Math.max(1, mentionTotalCount));
+              return;
             }
-          }}
-          onMouseDown={(event) => {
-            // 兜底：点到输入区但目标不是 textarea 本身（覆盖层/内边距/边角）时，
-            // 把焦点交还给 textarea，且把光标移到文本末尾，不打断正常输入
-            const textarea = textareaRef.current;
-            if (!textarea || event.target === textarea) return;
-            event.preventDefault();
-            textarea.focus();
-            const end = textarea.value.length;
-            textarea.selectionStart = end;
-            textarea.selectionEnd = end;
-          }}
-        >
-          <textarea
-            ref={textareaRef}
-            value={localDraft}
-            placeholder={historyBrowsing
-              ? `历史消息 ${historyCursor + 1}/${sentHistory.length} · ↑↓ 切换 · Esc 返回草稿`
-              : roomStreaming
-                ? "数字人协作中… 可先整理思路，任务完成后回车发送"
-                : streaming
-                  ? "生成中… 可先输入下一条消息，完成后回车发送"
-                  : "描述任务，输入 @ 可选择数字人、工程、插件或技能（↑ 键调出历史消息）"}
-            onChange={(event) => {
-              exitHistoryBrowsing();
-              const value = event.target.value;
-              const caret = event.target.selectionStart;
-              commitDraft(value);
-              const trigger = detectMentionTrigger(value, caret);
-              if (trigger) {
-                // Esc 关闭后同一触发词不再自动弹出；换一个触发词（@ 位置变化）重新弹出
-                setMentionDismissed((dismissed) => (
-                  dismissed && mentionTriggerRef.current?.start === trigger.start ? dismissed : false
-                ));
-                setMentionTrigger(trigger);
+            if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              // 扁平索引分组：数字人 → 工程 → 插件 → 技能
+              const projectOffset = humanMentionResults.length;
+              const pluginOffset = projectOffset + mentionResults.length;
+              const skillOffset = pluginOffset + pluginMentionResults.length;
+              const index = mentionActiveIndex;
+              if (index < projectOffset) {
+                const human = humanMentionResults[index];
+                if (human) confirmHumanMention(human);
+              } else if (index < pluginOffset) {
+                const target = mentionResults[index - projectOffset] || mentionResults[0];
+                if (target) confirmMention(target);
+              } else if (index < skillOffset) {
+                const kind = pluginMentionResults[index - pluginOffset] || pluginMentionResults[0];
+                if (kind) confirmPluginMention(kind);
               } else {
-                setMentionTrigger(null);
-                setMentionDismissed(false);
+                const skill = skillMentionResults[index - skillOffset] || skillMentionResults[0];
+                if (skill) confirmSkillMention(skill);
               }
-            }}
-            onCompositionStart={() => {
-              composingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              composingRef.current = false;
-            }}
-            onPaste={(event) => {
-              const clipboard = event.clipboardData;
-              // 1) 剪贴板里有文件：图片转多模态资源、文本类文件提取文本，不落进输入框
-              const files = Array.from(clipboard?.files || []);
-              if (files.length > 0 && onPasteFiles) {
-                event.preventDefault();
-                onPasteFiles(files);
-                return;
-              }
-              // 2) 超长文本：折叠为资源标签（全文随隐藏上下文注入），避免输入框刷屏
-              const text = clipboard?.getData("text/plain") || "";
-              if (text && (text.length > PASTE_TEXT_CHIP_CHARS || text.split("\n").length > PASTE_TEXT_CHIP_LINES) && onPasteLongText) {
-                event.preventDefault();
-                onPasteLongText(text);
-              }
-            }}
-            onKeyDown={(event) => {
-              const composing = composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229;
-              if (composing) return;
-              // @ 弹层打开时优先处理弹层导航
-              if (mentionOpenRef.current) {
-                if (event.key === "ArrowDown") {
-                  event.preventDefault();
-                  setMentionActiveIndex((index) => (index + 1) % Math.max(1, mentionTotalCount));
-                  return;
-                }
-                if (event.key === "ArrowUp") {
-                  event.preventDefault();
-                  setMentionActiveIndex((index) => (index - 1 + Math.max(1, mentionTotalCount)) % Math.max(1, mentionTotalCount));
-                  return;
-                }
-                if (event.key === "Enter" || event.key === "Tab") {
-                  event.preventDefault();
-                  // 扁平索引分组：数字人 → 工程 → 插件 → 技能
-                  const projectOffset = humanMentionResults.length;
-                  const pluginOffset = projectOffset + mentionResults.length;
-                  const skillOffset = pluginOffset + pluginMentionResults.length;
-                  const index = mentionActiveIndex;
-                  if (index < projectOffset) {
-                    const human = humanMentionResults[index];
-                    if (human) confirmHumanMention(human);
-                  } else if (index < pluginOffset) {
-                    const target = mentionResults[index - projectOffset] || mentionResults[0];
-                    if (target) confirmMention(target);
-                  } else if (index < skillOffset) {
-                    const kind = pluginMentionResults[index - pluginOffset] || pluginMentionResults[0];
-                    if (kind) confirmPluginMention(kind);
-                  } else {
-                    const skill = skillMentionResults[index - skillOffset] || skillMentionResults[0];
-                    if (skill) confirmSkillMention(skill);
-                  }
-                  return;
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  closeMention();
-                  setMentionDismissed(true);
-                  return;
-                }
-              }
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendFromComposer();
-                return;
-              }
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                if (recallHistory(event.currentTarget, event.key === "ArrowDown")) {
-                  event.preventDefault();
-                }
-                return;
-              }
-              if (event.key === "Escape" && historyBrowsing) {
-                event.preventDefault();
-                setHistoryCursor(sentHistoryRef.current.length);
-                setDraftAndCaret(draftBackupRef.current);
-                clearMentions();
-              }
-            }}
-          />
-          {mentionOpen ? (
-            <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label="选择数字人、工程、插件或技能">
-              {humanMentionResults.length > 0 ? <div className="mention-popup-title">指派给数字人</div> : null}
-              {humanMentionResults.map((human, index) => (
-                <button
-                  key={human.id}
-                  type="button"
-                  role="option"
-                  aria-selected={index === mentionActiveIndex}
-                  className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
-                  onMouseDown={(event) => {
-                    event.preventDefault();
-                    confirmHumanMention(human);
-                  }}
-                  onMouseEnter={() => setMentionActiveIndex(index)}
-                >
+              return;
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              closeMention();
+              setMentionDismissed(true);
+              return;
+            }
+          }
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            sendFromComposer();
+            return;
+          }
+          if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+            if (recallHistory(event.currentTarget, event.key === "ArrowDown")) {
+              event.preventDefault();
+            }
+            return;
+          }
+          if (event.key === "Escape" && historyBrowsing) {
+            event.preventDefault();
+            setHistoryCursor(sentHistoryRef.current.length);
+            setDraftAndCaret(draftBackupRef.current);
+            clearMentions();
+          }
+        }} />
+          {mentionOpen ? <div className="mention-popup" ref={mentionListRef} role="listbox" aria-label={t("ConversationView.31")}>
+              {humanMentionResults.length > 0 ? <div className="mention-popup-title">{t("ConversationView.32")}</div> : null}
+              {humanMentionResults.map((human, index) => <button key={human.id} type="button" role="option" aria-selected={index === mentionActiveIndex} className={`mention-item${index === mentionActiveIndex ? " active" : ""}`} onMouseDown={event => {
+            event.preventDefault();
+            confirmHumanMention(human);
+          }} onMouseEnter={() => setMentionActiveIndex(index)}>
                   <HumanAvatar human={human} size={22} />
                   <span className="mention-item-name">{human.displayName}</span>
                   <span className="mention-item-path" title={human.purpose}>{human.purpose}</span>
-                </button>
-              ))}
-              {mentionResults.length > 0 ? <div className="mention-popup-title">工程</div> : null}
-              {mentionTotalCount === 0 ? (
-                <div className="mention-empty">没有匹配项</div>
-              ) : null}
+                </button>)}
+              {mentionResults.length > 0 ? <div className="mention-popup-title">{t("ConversationView.33")}</div> : null}
+              {mentionTotalCount === 0 ? <div className="mention-empty">{t("ConversationView.34")}</div> : null}
               {mentionResults.map((project, projectIndex) => {
-                const index = humanMentionResults.length + projectIndex;
-                return (
-                  <button
-                    key={project.path}
-                    type="button"
-                    role="option"
-                    aria-selected={index === mentionActiveIndex}
-                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      confirmMention(project);
-                    }}
-                    onMouseEnter={() => setMentionActiveIndex(index)}
-                  >
+            const index = humanMentionResults.length + projectIndex;
+            return <button key={project.path} type="button" role="option" aria-selected={index === mentionActiveIndex} className={`mention-item${index === mentionActiveIndex ? " active" : ""}`} onMouseDown={event => {
+              event.preventDefault();
+              confirmMention(project);
+            }} onMouseEnter={() => setMentionActiveIndex(index)}>
                     <FolderIcon className="icon-14" />
                     <span className="mention-item-name">{project.name}</span>
                     <span className="mention-item-path" title={project.path}>{project.path}</span>
-                  </button>
-                );
-              })}
-              {pluginMentionResults.length > 0 ? <div className="mention-popup-title">插件</div> : null}
+                  </button>;
+          })}
+              {pluginMentionResults.length > 0 ? <div className="mention-popup-title">{t("ConversationView.35")}</div> : null}
               {pluginMentionResults.map((kind, pluginIndex) => {
-                const index = humanMentionResults.length + mentionResults.length + pluginIndex;
-                return (
-                  <button
-                    key={`plugin-${kind}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === mentionActiveIndex}
-                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      confirmPluginMention(kind);
-                    }}
-                    onMouseEnter={() => setMentionActiveIndex(index)}
-                  >
+            const index = humanMentionResults.length + mentionResults.length + pluginIndex;
+            return <button key={`plugin-${kind}`} type="button" role="option" aria-selected={index === mentionActiveIndex} className={`mention-item${index === mentionActiveIndex ? " active" : ""}`} onMouseDown={event => {
+              event.preventDefault();
+              confirmPluginMention(kind);
+            }} onMouseEnter={() => setMentionActiveIndex(index)}>
                     <PluginIcon kind={kind} className="icon-14" />
                     <span className="mention-item-name">{PLUGIN_RESOURCE_LABELS[kind]}</span>
-                    <span className="mention-item-path">以 {PLUGIN_RESOURCE_LABELS[kind]} 插件交付</span>
-                  </button>
-                );
-              })}
-              {skillMentionResults.length > 0 ? <div className="mention-popup-title">技能</div> : null}
+                    <span className="mention-item-path">{t("ConversationView.36")}{PLUGIN_RESOURCE_LABELS[kind]}{t("ConversationView.37")}</span>
+                  </button>;
+          })}
+              {skillMentionResults.length > 0 ? <div className="mention-popup-title">{t("ConversationView.38")}</div> : null}
               {skillMentionResults.map((skill, skillIndex) => {
-                const index = humanMentionResults.length + mentionResults.length
-                  + pluginMentionResults.length + skillIndex;
-                return (
-                  <button
-                    key={`skill-${skill.name}`}
-                    type="button"
-                    role="option"
-                    aria-selected={index === mentionActiveIndex}
-                    className={`mention-item${index === mentionActiveIndex ? " active" : ""}`}
-                    title={skill.description ? `${skill.description}\n${skill.path}` : skill.path}
-                    onMouseDown={(event) => {
-                      event.preventDefault();
-                      confirmSkillMention(skill);
-                    }}
-                    onMouseEnter={() => setMentionActiveIndex(index)}
-                  >
+            const index = humanMentionResults.length + mentionResults.length + pluginMentionResults.length + skillIndex;
+            return <button key={`skill-${skill.name}`} type="button" role="option" aria-selected={index === mentionActiveIndex} className={`mention-item${index === mentionActiveIndex ? " active" : ""}`} title={skill.description ? `${skill.description}\n${skill.path}` : skill.path} onMouseDown={event => {
+              event.preventDefault();
+              confirmSkillMention(skill);
+            }} onMouseEnter={() => setMentionActiveIndex(index)}>
                     <ToolIcon className="icon-14" />
                     <span className="mention-item-name">{skill.name}</span>
                     <span className="mention-item-path">{skill.description || skill.path}</span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
+                  </button>;
+          })}
+            </div> : null}
         </div>
         <div className="prompt-toolbar">
           <div className="prompt-leading">
             <div className="composer-project">
               <div className="resource-add" ref={resourceMenuRef}>
-                <button
-                  className="composer-project-add"
-                  type="button"
-                  title="加资源"
-                  aria-label="加资源"
-                  aria-haspopup="menu"
-                  aria-expanded={resourceMenuOpen}
-                  disabled={streaming}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setResourceMenuOpen((open) => !open);
-                  }}
-                >
+                <button className="composer-project-add" type="button" title={t("ConversationView.39")} aria-label={t("ConversationView.40")} aria-haspopup="menu" aria-expanded={resourceMenuOpen} disabled={streaming} onClick={event => {
+                event.stopPropagation();
+                setResourceMenuOpen(open => !open);
+              }}>
                   <PlusIcon className="icon-15" />
                 </button>
-                {resourceMenuOpen ? (
-                  <div className="resource-menu" role="menu">
-                    <div className="resource-menu-title">资源</div>
+                {resourceMenuOpen ? <div className="resource-menu" role="menu">
+                    <div className="resource-menu-title">{t("ConversationView.41")}</div>
                     <button type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(onPickResourceFolder)}>
-                      <FolderIcon className="icon-14" />
-                      文件夹
-                    </button>
+                      <FolderIcon className="icon-14" />{t("ConversationView.42")}</button>
                     <button type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(onPickResourceFile)}>
-                      <FileIcon className="icon-14" />
-                      文件（图片、MD 等）
-                    </button>
-                    <div className="resource-menu-subtitle">项目</div>
-                    {(activeProject ? [activeProject] : []).concat(projects.filter((project) => (
-                      (!project.local || !project.parentPath) && project.path !== activeProject?.path
-                    ))).slice(0, 6).map((project) => (
-                      <button key={project.path} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourceProject(project))}>
+                      <FileIcon className="icon-14" />{t("ConversationView.43")}</button>
+                    <div className="resource-menu-subtitle">{t("ConversationView.44")}</div>
+                    {(activeProject ? [activeProject] : []).concat(projects.filter(project => (!project.local || !project.parentPath) && project.path !== activeProject?.path)).slice(0, 6).map(project => <button key={project.path} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourceProject(project))}>
                         <FolderIcon className="icon-14" />
                         <span className="resource-menu-name">{project.name}</span>
-                      </button>
-                    ))}
+                      </button>)}
                     <div className="resource-menu-divider" />
-                    <div className="resource-menu-title">插件</div>
-                    {PLUGIN_KINDS.map((kind) => (
-                      <button key={kind} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourcePlugin(kind))}>
+                    <div className="resource-menu-title">{t("ConversationView.45")}</div>
+                    {PLUGIN_KINDS.map(kind => <button key={kind} type="button" role="menuitem" className="resource-menu-item" onClick={() => runResourceAction(() => onAddResourcePlugin(kind))}>
                         <PluginIcon kind={kind} className="icon-14" />
                         {PLUGIN_RESOURCE_LABELS[kind]}
-                      </button>
-                    ))}
-                    {onAddResourceSkill ? (
-                      <>
+                      </button>)}
+                    {onAddResourceSkill ? <>
                         <div className="resource-menu-divider" />
-                        <div className="resource-menu-title">技能</div>
-                        {skills.filter((skill) => skill.enabled).map((skill) => (
-                          <button
-                            key={skill.name}
-                            type="button"
-                            role="menuitem"
-                            className="resource-menu-item"
-                            title={skill.description ? `${skill.description}\n${skill.path}` : skill.path}
-                            onClick={() => runResourceAction(() => onAddResourceSkill(skill))}
-                          >
+                        <div className="resource-menu-title">{t("ConversationView.46")}</div>
+                        {skills.filter(skill => skill.enabled).map(skill => <button key={skill.name} type="button" role="menuitem" className="resource-menu-item" title={skill.description ? `${skill.description}\n${skill.path}` : skill.path} onClick={() => runResourceAction(() => onAddResourceSkill(skill))}>
                             <ToolIcon className="icon-14" />
                             <span className="resource-menu-name">{skill.name}</span>
-                          </button>
-                        ))}
-                        {skills.filter((skill) => skill.enabled).length === 0 ? (
-                          <button type="button" role="menuitem" className="resource-menu-item resource-menu-hint" onClick={() => runResourceAction(onOpenSettings)}>
+                          </button>)}
+                        {skills.filter(skill => skill.enabled).length === 0 ? <button type="button" role="menuitem" className="resource-menu-item resource-menu-hint" onClick={() => runResourceAction(onOpenSettings)}>
                             <ToolIcon className="icon-14" />
-                            <span className="resource-menu-name">暂无技能，去设置安装</span>
-                          </button>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
+                            <span className="resource-menu-name">{t("ConversationView.47")}</span>
+                          </button> : null}
+                      </> : null}
+                  </div> : null}
               </div>
               {/* 数字人配置入口已收敛到侧边栏项目行；输入框不再放数字人按钮 */}
               {/* 项目选择：触发器只显示项目名；下拉里展示路径 / 分支 / 子工程等丰富信息 */}
               <div className="project-control" ref={projectMenuRef}>
                 <FolderIcon className="icon-14" />
-                <button
-                  type="button"
-                  className="project-trigger"
-                  aria-label="选择项目"
-                  aria-haspopup="menu"
-                  aria-expanded={projectMenuOpen}
-                  title={activeProject?.path || "选择项目"}
-                  disabled={streaming}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    setProjectMenuOpen((open) => !open);
-                  }}
-                >
-                  <span className="project-trigger-label">{activeProject?.name || "默认工作区"}</span>
+                <button type="button" className="project-trigger" aria-label={t("ConversationView.48")} aria-haspopup="menu" aria-expanded={projectMenuOpen} title={activeProject?.path || t("ConversationView.49")} disabled={streaming} onClick={event => {
+                event.stopPropagation();
+                setProjectMenuOpen(open => !open);
+              }}>
+                  <span className="project-trigger-label">{activeProject?.name || t("ConversationView.50")}</span>
                   <ChevronIcon className="icon-12 chevron" />
                 </button>
-                {projectMenuOpen ? (
-                  <div className="project-picker-menu" role="menu">
-                    <button
-                      type="button"
-                      role="menuitem"
-                      className={`project-picker-item${activeProject ? "" : " active"}`}
-                      onClick={() => runProjectAction(onSelectDefaultWorkspace)}
-                    >
-                      <span className="project-picker-name">默认工作区</span>
+                {projectMenuOpen ? <div className="project-picker-menu" role="menu">
+                    <button type="button" role="menuitem" className={`project-picker-item${activeProject ? "" : " active"}`} onClick={() => runProjectAction(onSelectDefaultWorkspace)}>
+                      <span className="project-picker-name">{t("ConversationView.51")}</span>
                       <span className="project-picker-meta">
                         {(() => {
-                          const globalHumans = digitalHumans.filter((human) => !human.projectPath);
-                          return globalHumans.length > 0
-                            ? `数字人：${globalHumans.map((human) => human.displayName).join("、")}`
-                            : "未绑定项目目录";
-                        })()}
+                      const globalHumans = digitalHumans.filter(human => !human.projectPath);
+                      return globalHumans.length > 0 ? t("ConversationView.149", {
+                        v0: globalHumans.map(human => human.displayName).join("、")
+                      }) : t("ConversationView.52");
+                    })()}
                       </span>
                     </button>
-                    {projects.map((project) => {
-                      // 隶属于某项目的本地工程不单独列出，跟随其父项目作为对话背景
-                      if (project.local && project.parentPath) return null;
-                      const children = projects.filter((item) => item.local && item.parentPath === project.path);
-                      const humans = digitalHumans.filter((human) => human.projectPath === project.path);
-                      const branch = projectBranches[project.path] || "";
-                      const metaText = [
-                        branch,
-                        children.length > 0 ? `工程：${children.map((item) => item.name).join("、")}` : "",
-                        humans.length > 0 ? `数字人：${humans.map((human) => human.displayName).join("、")}` : "",
-                      ].filter(Boolean).join(" · ") || "未挂载工程 · 未配置数字人";
-                      return (
-                        <button
-                          key={project.path}
-                          type="button"
-                          role="menuitem"
-                          className={`project-picker-item${activeProject?.path === project.path ? " active" : ""}`}
-                          title={`${project.path}\n${metaText}`}
-                          onClick={() => runProjectAction(() => onSelectProject(project))}
-                        >
+                    {projects.map(project => {
+                  // 隶属于某项目的本地工程不单独列出，跟随其父项目作为对话背景
+                  if (project.local && project.parentPath) return null;
+                  const children = projects.filter(item => item.local && item.parentPath === project.path);
+                  const humans = digitalHumans.filter(human => human.projectPath === project.path);
+                  const branch = projectBranches[project.path] || "";
+                  const metaText = [branch, children.length > 0 ? t("ConversationView.150", {
+                    v0: children.map(item => item.name).join("、")
+                  }) : "", humans.length > 0 ? t("ConversationView.151", {
+                    v0: humans.map(human => human.displayName).join("、")
+                  }) : ""].filter(Boolean).join(" · ") || t("ConversationView.53");
+                  return <button key={project.path} type="button" role="menuitem" className={`project-picker-item${activeProject?.path === project.path ? " active" : ""}`} title={`${project.path}\n${metaText}`} onClick={() => runProjectAction(() => onSelectProject(project))}>
                           <span className="project-picker-name">{project.name}</span>
                           <span className="project-picker-meta">{metaText}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                        </button>;
+                })}
+                  </div> : null}
               </div>
             </div>
             <div className="branch-controls">
-              {projects.map((project) => {
-                // 子工程不单独展示分支切换，跟随父项目
-                if (project.local && project.parentPath) return null;
-                const branch = projectBranches[project.path] || "";
-                const branches = projectBranchOptions[project.path] || [];
-                if (!branch || branches.length === 0) return null;
-                return (
-                  <div className="branch-control" key={project.path} title={`${project.name} · Git 分支`}>
+              {projects.map(project => {
+              // 子工程不单独展示分支切换，跟随父项目
+              if (project.local && project.parentPath) return null;
+              const branch = projectBranches[project.path] || "";
+              const branches = projectBranchOptions[project.path] || [];
+              if (!branch || branches.length === 0) return null;
+              return <div className="branch-control" key={project.path} title={t("ConversationView.152", {
+                v0: project.name
+              })}>
                     <GitBranchIcon className="icon-14" />
-                    <select
-                      className="branch-chip"
-                      value={branch}
-                      aria-label={`${project.name} Git 分支`}
-                      disabled={streaming || Boolean(switchingBranchPath)}
-                      onChange={(event) => onSwitchProjectBranch(project, event.target.value)}
-                    >
-                      {branches.map((item) => (
-                        <option key={item} value={item}>
+                    <select className="branch-chip" value={branch} aria-label={t("ConversationView.153", {
+                  v0: project.name
+                })} disabled={streaming || Boolean(switchingBranchPath)} onChange={event => onSwitchProjectBranch(project, event.target.value)}>
+                      {branches.map(item => <option key={item} value={item}>
                           {item}
-                        </option>
-                      ))}
+                        </option>)}
                     </select>
-                  </div>
-                );
-              })}
+                  </div>;
+            })}
             </div>
             <div className="permission-select">
               <ShieldIcon className="icon-14" />
-              <select
-                className="permission-chip"
-                value={approvalMode}
-                title="请求审批 / 自动审批（仍受沙箱限制）/ 完全开放·沙箱外"
-                aria-label="工具执行权限"
-                disabled={streaming}
-                onChange={(event) => onApprovalModeChange(event.target.value as ApprovalMode)}
-              >
-                <option value="REQUEST_APPROVAL">请求审批</option>
-                <option value="AUTO_APPROVE">自动审批·沙箱内</option>
-                <option value="FULL_OPEN">完全开放·沙箱外</option>
+              <select className="permission-chip" value={approvalMode} title={t("ConversationView.54")} aria-label={t("ConversationView.55")} disabled={streaming} onChange={event => onApprovalModeChange(event.target.value as ApprovalMode)}>
+                <option value="REQUEST_APPROVAL">{t("ConversationView.56")}</option>
+                <option value="AUTO_APPROVE">{t("ConversationView.57")}</option>
+                <option value="FULL_OPEN">{t("ConversationView.58")}</option>
               </select>
             </div>
           </div>
           <div className="prompt-meta">
           </div>
           <div className="prompt-controls">
-            {modelChoices.length > 0 ? (
-              <div className="model-control" title={activeModel
-                ? `${activeModel.displayName || activeModel.modelCode || activeModel.channelCode || "模型"} · ${activeModel.modelCode || ""}`.replace(/ · $/, "")
-                : "选择对话模型"}>
-                <select
-                  className="model-chip"
-                  value={activeModel?.channelCode || ""}
-                  aria-label="对话模型"
-                  disabled={streaming}
-                  onChange={(event) => onActivateModel(event.target.value)}
-                >
-                  {modelChoices.map((model) => {
-                    const value = model.channelCode || model.modelCode || "";
-                    // chip 与选项均展示短标签（模型名），完整「渠道 · 模型」信息放在悬浮提示中
-                    return (
-                      <option key={value} value={value}>
+            {modelChoices.length > 0 ? <div className="model-control" title={activeModel ? `${activeModel.displayName || activeModel.modelCode || activeModel.channelCode || t("ConversationView.59")} · ${activeModel.modelCode || ""}`.replace(/ · $/, "") : t("ConversationView.60")}>
+                <select className="model-chip" value={activeModel?.channelCode || ""} aria-label={t("ConversationView.61")} disabled={streaming} onChange={event => onActivateModel(event.target.value)}>
+                  {modelChoices.map(model => {
+                const value = model.channelCode || model.modelCode || "";
+                // chip 与选项均展示短标签（模型名），完整「渠道 · 模型」信息放在悬浮提示中
+                return <option key={value} value={value}>
                         {model.modelCode || model.displayName || value}
-                      </option>
-                    );
-                  })}
+                      </option>;
+              })}
                 </select>
-              </div>
-            ) : (
-              <button className="model-control" title="打开模型设置" onClick={onOpenSettings}>
-                <span>{activeModel?.modelCode || activeModel?.displayName || activeModel?.channelCode || "添加模型"}</span>
-              </button>
-            )}
-            <div className="reasoning-select" title="选择推理级别">
-              <select
-                className="reasoning-chip"
-                value={reasoningEffort}
-                aria-label="推理级别"
-                disabled={streaming}
-                onChange={(event) => onReasoningEffortChange(event.target.value as ReasoningEffort)}
-              >
-                <option value="low">低</option>
-                <option value="medium">中</option>
-                <option value="high">高</option>
+              </div> : <button className="model-control" title={t("ConversationView.62")} onClick={onOpenSettings}>
+                <span>{activeModel?.modelCode || activeModel?.displayName || activeModel?.channelCode || t("ConversationView.63")}</span>
+              </button>}
+            <div className="reasoning-select" title={t("ConversationView.64")}>
+              <select className="reasoning-chip" value={reasoningEffort} aria-label={t("ConversationView.65")} disabled={streaming} onChange={event => onReasoningEffortChange(event.target.value as ReasoningEffort)}>
+                <option value="low">{t("ConversationView.66")}</option>
+                <option value="medium">{t("ConversationView.67")}</option>
+                <option value="high">{t("ConversationView.68")}</option>
               </select>
             </div>
-            <div
-              className="context-ring-wrap"
-              role="status"
-              aria-label={contextTooltip}
-              title={contextTooltip}
-            >
+            <div className="context-ring-wrap" role="status" aria-label={contextTooltip} title={contextTooltip}>
               <svg className="context-ring-svg" viewBox="0 0 22 22" aria-hidden="true">
                 <circle className="context-ring-bg" cx="11" cy="11" r="9" />
-                <circle
-                  className={`context-ring-fg${contextPercent >= 80 ? " danger" : contextPercent >= 50 ? " warn" : ""}`}
-                  cx="11"
-                  cy="11"
-                  r="9"
-                  strokeDasharray={`${(contextPercent / 100) * 2 * Math.PI * 9} ${2 * Math.PI * 9}`}
-                  strokeDashoffset="0"
-                />
+                <circle className={`context-ring-fg${contextPercent >= 80 ? " danger" : contextPercent >= 50 ? " warn" : ""}`} cx="11" cy="11" r="9" strokeDasharray={`${contextPercent / 100 * 2 * Math.PI * 9} ${2 * Math.PI * 9}`} strokeDashoffset="0" />
               </svg>
               <span className="context-ring-label">{Math.round(contextPercent)}%</span>
               <div className="context-ring-tooltip">{contextTooltip}</div>
             </div>
-            <button
-              className={(streaming || roomStreaming) ? "composer-action stop" : "composer-action send"}
-              onClick={(streaming || roomStreaming) ? onStopGeneration : sendFromComposer}
-              disabled={!streaming && !roomStreaming && (!serviceReady || (!localDraft.trim() && resources.length === 0))}
-              title={streaming
-                ? "停止生成"
-                : roomStreaming
-                  ? "停止数字人协作"
-                  : !serviceReady
-                    ? "智能体服务未就绪"
-                    : !localDraft.trim() && resources.length === 0
-                      ? "请先输入消息或添加资源"
-                      : "发送"}
-              aria-label={streaming ? "停止生成" : roomStreaming ? "停止数字人协作" : "发送"}
-            >
-              {(streaming || roomStreaming) ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
+            <button className={streaming || roomStreaming ? "composer-action stop" : "composer-action send"} onClick={streaming || roomStreaming ? onStopGeneration : sendFromComposer} disabled={!streaming && !roomStreaming && (!serviceReady || !localDraft.trim() && resources.length === 0)} title={streaming ? t("ConversationView.69") : roomStreaming ? t("ConversationView.70") : !serviceReady ? t("ConversationView.71") : !localDraft.trim() && resources.length === 0 ? t("ConversationView.72") : t("ConversationView.73")} aria-label={streaming ? t("ConversationView.74") : roomStreaming ? t("ConversationView.75") : t("ConversationView.76")}>
+              {streaming || roomStreaming ? <StopIcon className="icon-16" /> : <SendIcon className="icon-16" />}
             </button>
           </div>
         </div>
       </div>
-    </>
-  );
-
+    </>;
   const runFiles = useMemo(() => {
     // 服务端权威产物清单（绝对路径）优先，再并入从工具参数提取的路径，去重
     const merged = [...(runArtifacts || []), ...editedFiles(messages)];
@@ -1684,130 +1496,63 @@ export default function ConversationView({
   }, [messages, runArtifacts]);
   const lastAssistantIndex = useMemo(() => findLastAssistantIndex(messages), [messages]);
   // runSummary 对象引用必须稳定：内联字面量每次渲染都是新对象，会让 memo(MessageItem) 对最后一条消息失效
-  const runSummaryForLast = useMemo(() => (
-    !streaming
-      ? {
-          duration: typeof runDurationMs === "number" && runDurationMs > 0 ? formatDuration(runDurationMs) : null,
-          files: runFiles,
-        }
-      : undefined
-  ), [streaming, runDurationMs, runFiles]);
-
-  return (
-    <div className="conversation-layout">
+  const runSummaryForLast = useMemo(() => !streaming ? {
+    duration: typeof runDurationMs === "number" && runDurationMs > 0 ? formatDuration(runDurationMs) : null,
+    files: runFiles
+  } : undefined, [streaming, runDurationMs, runFiles]);
+  return <div className="conversation-layout">
       <div className="conversation-main">
-        {isHome ? (
-          <div className="conversation-scroll home">
+        {isHome ? <div className="conversation-scroll home">
             <div className="home-hero">
             <div className="home-title">
-              <h1>今天要做什么？</h1>
+              <h1>{t("ConversationView.77")}</h1>
               <p>
-                {activeProject
-                  ? "DSH-Java 智能体已就绪，当前项目已加载"
-                  : "DSH-Java 智能体已就绪，选择项目后开始一个新对话"}
+                {activeProject ? t("ConversationView.78") : t("ConversationView.79")}
               </p>
             </div>
             <div className="suggestion-grid">
-              <button
-                onClick={() =>
-                  commitDraft(
-                    "分析当前项目的整体结构与核心模块，画一张 draw.io 架构图，并附简要说明。"
-                  )
-                }
-              >
-                <span className="suggestion-title">看懂一个项目</span>
-                <span className="suggestion-desc">
-                  梳理结构与核心链路，自动产出 draw.io 架构图
-                </span>
+              <button onClick={() => commitDraft(t("ConversationView.80"))}>
+                <span className="suggestion-title">{t("ConversationView.81")}</span>
+                <span className="suggestion-desc">{t("ConversationView.82")}</span>
               </button>
-              <button
-                onClick={() =>
-                  commitDraft(
-                    "分析当前项目的代码规模与模块分布，生成一份带 ECharts 图表的项目分析报告。"
-                  )
-                }
-              >
-                <span className="suggestion-title">生成分析报告</span>
-                <span className="suggestion-desc">
-                  一键产出带图表的 Word / Markdown 报告
-                </span>
+              <button onClick={() => commitDraft(t("ConversationView.83"))}>
+                <span className="suggestion-title">{t("ConversationView.84")}</span>
+                <span className="suggestion-desc">{t("ConversationView.85")}</span>
               </button>
-              <button
-                onClick={() =>
-                  commitDraft(
-                    "审查当前项目的代码质量与潜在风险，列出改进建议并按优先级排序。"
-                  )
-                }
-              >
-                <span className="suggestion-title">审查与改进</span>
-                <span className="suggestion-desc">
-                  找出风险与坏味道，给出可执行的优化建议
-                </span>
+              <button onClick={() => commitDraft(t("ConversationView.86"))}>
+                <span className="suggestion-title">{t("ConversationView.87")}</span>
+                <span className="suggestion-desc">{t("ConversationView.88")}</span>
               </button>
             </div>
             </div>
-          </div>
-        ) : roomContent ? (
-          // 房间协作模式：消息区由服务端房间事件流驱动（多数字人归属、计划、工具卡、产物）
-          <div className="conversation-scroll room-mode">
+          </div> : roomContent ?
+      // 房间协作模式：消息区由服务端房间事件流驱动（多数字人归属、计划、工具卡、产物）
+      <div className="conversation-scroll room-mode">
             <div className="conversation-column room-column">{roomContent}</div>
-          </div>
-        ) : (
-          <>
+          </div> : <>
             {/* 消息区 + 回到底部按钮包一层相对定位容器：按钮锚定消息区底缘而非整个 main，避免叠进输入框 */}
             <div className="conversation-body">
-            <div
-              className="conversation-scroll"
-              ref={messageListRef}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-                followOutputRef.current = distance < 84;
-                setCanJumpLatest(distance > 240);
-              }}
-            >
+            <div className="conversation-scroll" ref={messageListRef} onScroll={event => {
+            const element = event.currentTarget;
+            const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+            followOutputRef.current = distance < 84;
+            setCanJumpLatest(distance > 240);
+          }}>
               <div className="conversation-column">
-                {timelineItems.map((item) => (
-                  item.kind === "activity" ? (
-                    <ActivityItem key={item.key} messages={item.messages} showAttribution={showAttribution} digitalHumans={digitalHumans} />
-                  ) : (
-                    <MessageItem
-                      key={item.key}
-                      message={item.message}
-                      asThought={item.asThought}
-                      renderMarkdown={renderMarkdown}
-                      streaming={streaming || roomStreaming}
-                      live={(streaming || roomStreaming) && item.message === messages[messages.length - 1]}
-                      showAttribution={showAttribution}
-                      digitalHumans={digitalHumans}
-                      onOpenFile={onOpenFile}
-                      basePath={sessionProjectPath || activeProject?.path}
-                      onAddCodeSnippet={onAddCodeSnippet}
-                      runSummary={
-                        !streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex]
-                          ? runSummaryForLast
-                          : undefined
-                      }
-                    />
-                  )
-                ))}
+                {timelineItems.map(item => item.kind === "activity" ? <ActivityItem key={item.key} messages={item.messages} showAttribution={showAttribution} digitalHumans={digitalHumans} /> : <MessageItem key={item.key} message={item.message} asThought={item.asThought} renderMarkdown={renderMarkdown} streaming={streaming || roomStreaming} live={(streaming || roomStreaming) && item.message === messages[messages.length - 1]} showAttribution={showAttribution} digitalHumans={digitalHumans} onOpenFile={onOpenFile} basePath={sessionProjectPath || activeProject?.path} onAddCodeSnippet={onAddCodeSnippet} runSummary={!streaming && item.message.role === "assistant" && item.message === messages[lastAssistantIndex] ? runSummaryForLast : undefined} />)}
               </div>
             </div>
-            {canJumpLatest ? (
-              <button className="jump-latest" type="button" onClick={scrollToBottom} aria-label="回到最新" title="回到最新">
+            {canJumpLatest ? <button className="jump-latest" type="button" onClick={scrollToBottom} aria-label={t("ConversationView.89")} title={t("ConversationView.90")}>
                 <ArrowDownIcon className="icon-18" />
-              </button>
-            ) : null}
+              </button> : null}
             </div>
-          </>
-        )}
+          </>}
       {/* 成员展示并入输入框 chips（含状态与删除），不再单独显示顶部成员栏，避免重复 */}
       <div className="composer-dock">
         {renderComposer(isHome ? "hero" : "chat")}
       </div>
       </div>
-    </div>
-  );
+    </div>;
 }
 
 /** 折叠块自动开合：active 时自动展开（工具执行中 / 思考中），active 翻转后自动收起；用户手动切换则尊重用户，直到 active 再次变化。 */
@@ -1834,26 +1579,23 @@ function useAutoExpand(active: boolean): [boolean, (event: SyntheticEvent<HTMLDe
 const ReasoningBlock = memo(function ReasoningBlock({
   text,
   active = false,
-  attributionAvatar,
+  attributionAvatar
 }: {
   text: string;
   active?: boolean;
   attributionAvatar?: ReactNode;
 }) {
   const [open, onToggle] = useAutoExpand(active);
-  return (
-    <details className="reasoning-block" open={open} onToggle={onToggle}>
-      <summary aria-label="AI 思考过程">
+  return <details className="reasoning-block" open={open} onToggle={onToggle}>
+      <summary aria-label={t("ConversationView.91")}>
         <span className="reasoning-dot" />
-        <span className="reasoning-label">{active ? "思考中" : "思考过程"}</span>
+        <span className="reasoning-label">{active ? t("ConversationView.92") : t("ConversationView.93")}</span>
         {attributionAvatar}
         <ChevronIcon className="icon-12 chevron" />
       </summary>
       <pre>{text}</pre>
-    </details>
-  );
+    </details>;
 });
-
 const MessageItem = memo(function MessageItem({
   message,
   asThought,
@@ -1865,7 +1607,7 @@ const MessageItem = memo(function MessageItem({
   digitalHumans,
   onOpenFile,
   basePath,
-  onAddCodeSnippet,
+  onAddCodeSnippet
 }: {
   message: ConversationMessage;
   asThought?: boolean;
@@ -1874,7 +1616,10 @@ const MessageItem = memo(function MessageItem({
   /** 该消息是否是当前正在流式输出的最后一条：驱动思考过程/工具步骤的自动展开与收起 */
   live?: boolean;
   showAttribution?: boolean;
-  runSummary?: { duration: string | null; files: string[] };
+  runSummary?: {
+    duration: string | null;
+    files: string[];
+  };
   /** 数字人目录：归属头像点击时取完整档案 */
   digitalHumans: DigitalHuman[];
   /** 在右侧面板打开本地文件 */
@@ -1889,148 +1634,88 @@ const MessageItem = memo(function MessageItem({
   const contentText = message.content.replace(/​/g, "");
   const pendingAssistant = message.role === "assistant" && streaming && !reasoningText && !contentText.trim();
   const attribution = showAttribution ? message.attribution : undefined;
-  const humanRecord = attribution
-    ? digitalHumans.find((human) => human.id === attribution.digitalHumanId) || null
-    : null;
+  const humanRecord = attribution ? digitalHumans.find(human => human.id === attribution.digitalHumanId) || null : null;
 
   // 数字人归属：小头像内嵌在思考过程/工具行行尾，点击弹出角色信息卡
-  const attributionAvatar = attribution ? (
-    <AttributionAvatar
-      name={attribution.displayName}
-      avatar={attribution.avatarRef}
-      color={attribution.themeColor}
-      human={humanRecord}
-      taskLabel={attribution.taskLabel}
-    />
-  ) : null;
-
+  const attributionAvatar = attribution ? <AttributionAvatar name={attribution.displayName} avatar={attribution.avatarRef} color={attribution.themeColor} human={humanRecord} taskLabel={attribution.taskLabel} /> : null;
   if (asThought) {
-    return (
-      <article className={`message ${message.role} thought`} aria-live={streaming ? "polite" : undefined}>
+    return <article className={`message ${message.role} thought`} aria-live={streaming ? "polite" : undefined}>
         <div className="message-body">
-          <ReasoningBlock
-            text={reasoningText}
-            active={live && Boolean(reasoningText)}
-            attributionAvatar={attributionAvatar}
-          />
+          <ReasoningBlock text={reasoningText} active={live && Boolean(reasoningText)} attributionAvatar={attributionAvatar} />
         </div>
-      </article>
-    );
+      </article>;
   }
-
-  return (
-    <article className={`message ${message.role}${attribution ? " attributed" : ""}${pendingAssistant ? " pending" : ""}`} aria-live={streaming ? "polite" : undefined}>
+  return <article className={`message ${message.role}${attribution ? " attributed" : ""}${pendingAssistant ? " pending" : ""}`} aria-live={streaming ? "polite" : undefined}>
       <div className="message-body">
-        {attribution ? (
-          <div className="message-attribution-row">
-            <AttributionAvatar
-              name={attribution.displayName}
-              avatar={attribution.avatarRef}
-              color={attribution.themeColor}
-              human={humanRecord}
-              taskLabel={attribution.taskLabel}
-            />
+        {attribution ? <div className="message-attribution-row">
+            <AttributionAvatar name={attribution.displayName} avatar={attribution.avatarRef} color={attribution.themeColor} human={humanRecord} taskLabel={attribution.taskLabel} />
             <span className="message-attribution-name">{attribution.displayName}</span>
-          </div>
-        ) : null}
-        {isTool ? (
-          <div className="tool-card">
+          </div> : null}
+        {isTool ? <div className="tool-card">
             <details className="tool-card-detail">
               <summary>
                 <span>{message.toolName || "Tool"}</span>
-                {message.status ? (
-                  <span className={`tool-status ${message.status}`}>
-                    {message.status === "success" ? "完成" : message.status === "running" ? "执行中" : "失败"}
-                  </span>
-                ) : null}
+                {message.status ? <span className={`tool-status ${message.status}`}>
+                    {message.status === "success" ? t("ConversationView.94") : message.status === "running" ? t("ConversationView.95") : t("ConversationView.96")}
+                  </span> : null}
                 {attributionAvatar}
               </summary>
               <pre>{message.result || JSON.stringify(message.arguments || {}, null, 2)}</pre>
             </details>
-          </div>
-        ) : (
-          <>
-            {reasoningText ? (
-              <ReasoningBlock
-                text={reasoningText}
-                active={live && !contentText.trim()}
-                attributionAvatar={attributionAvatar}
-              />
-            ) : null}
-            {message.role === "user" && message.mentions && message.mentions.length > 0 ? (
-              <div className="message-mentions">
-                {message.mentions.map((project) => (
-                  <span key={project.path} className="mention-chip static" title={project.path}>
+          </div> : <>
+            {reasoningText ? <ReasoningBlock text={reasoningText} active={live && !contentText.trim()} attributionAvatar={attributionAvatar} /> : null}
+            {message.role === "user" && message.mentions && message.mentions.length > 0 ? <div className="message-mentions">
+                {message.mentions.map(project => <span key={project.path} className="mention-chip static" title={project.path}>
                     <FolderIcon className="icon-12" />
                     <span className="mention-chip-name">{project.name}</span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {message.role === "user" && message.resources && message.resources.length > 0 ? (
-              <div className="message-mentions">
-                {message.resources.map((resource) => (
-                  <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resourceTooltip(resource)}>
+                  </span>)}
+              </div> : null}
+            {message.role === "user" && message.resources && message.resources.length > 0 ? <div className="message-mentions">
+                {message.resources.map(resource => <span key={resource.id} className={`resource-chip static ${resource.kind}`} title={resourceTooltip(resource)}>
                     {resourceChipIcon(resource)}
                     <span className="resource-chip-kind">{resourceKindLabel(resource)}</span>
                     <span className="resource-chip-name">{resourceLabel(resource)}</span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {contentText ? (
-              <div className="message-content">
+                  </span>)}
+              </div> : null}
+            {contentText ? <div className="message-content">
                 {renderMarkdown(contentText)}
-              </div>
-            ) : pendingAssistant ? (
-              <div className="typing-indicator" role="status" aria-label="正在生成回复">
+              </div> : pendingAssistant ? <div className="typing-indicator" role="status" aria-label={t("ConversationView.97")}>
                 <span>.</span>
                 <span>.</span>
                 <span>.</span>
-              </div>
-            ) : null}
+              </div> : null}
             {/* 产出的本地文件（md/word/excel/代码等）：内嵌渲染卡片，点击查看 */}
             {!streaming && contentText ? <InlineFileCards content={contentText} onOpenFile={onOpenFile} basePath={basePath} onAddCodeSnippet={onAddCodeSnippet} /> : null}
-            {runSummary ? (
-              <div className="run-summary">
-                {runSummary.duration ? (
-                  <span className="run-summary-chip">
-                    <span className="run-summary-dot" />
-                    本轮耗时 {runSummary.duration}
-                  </span>
-                ) : null}
-                {runSummary.files.length > 0 ? (
-                  <div className="run-summary-files">
+            {runSummary ? <div className="run-summary">
+                {runSummary.duration ? <span className="run-summary-chip">
+                    <span className="run-summary-dot" />{t("ConversationView.98")}{runSummary.duration}
+                  </span> : null}
+                {runSummary.files.length > 0 ? <div className="run-summary-files">
                     <span className="run-summary-files-header">
-                      <span>修改文件</span>
+                      <span>{t("ConversationView.99")}</span>
                       <span className="run-summary-count">{runSummary.files.length}</span>
                     </span>
                     <RunSummaryFiles files={runSummary.files} onOpenFile={onOpenFile} basePath={basePath} />
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-            {message.role === "user" || message.role === "assistant" ? (
-              <MessageMeta message={message} />
-            ) : null}
-          </>
-        )}
+                  </div> : null}
+              </div> : null}
+            {message.role === "user" || message.role === "assistant" ? <MessageMeta message={message} /> : null}
+          </>}
       </div>
-    </article>
-  );
+    </article>;
 });
-
-function MessageMeta({ message }: { message: ConversationMessage }) {
+function MessageMeta({
+  message
+}: {
+  message: ConversationMessage;
+}) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<number | null>(null);
   useEffect(() => () => {
     if (timerRef.current) window.clearTimeout(timerRef.current);
   }, []);
-
   const time = formatMessageTime(message.createdAt);
   const copyText = message.content || message.reasoning || "";
   if (!time && !copyText) return null;
-
   const handleCopy = async () => {
     if (!copyText) return;
     if (await copyMessageText(copyText)) {
@@ -2039,29 +1724,17 @@ function MessageMeta({ message }: { message: ConversationMessage }) {
       timerRef.current = window.setTimeout(() => setCopied(false), 1_600);
     }
   };
-
-  return (
-    <div className="message-meta">
+  return <div className="message-meta">
       {time ? <span className="message-time">{time}</span> : null}
-      {copyText ? (
-        <button
-          className={`message-copy${copied ? " copied" : ""}`}
-          type="button"
-          onClick={() => void handleCopy()}
-          title={copied ? "已复制" : "复制内容"}
-          aria-label={copied ? "已复制" : "复制内容"}
-        >
-          {copied ? "已复制" : <CopyIcon className="icon-14" />}
-        </button>
-      ) : null}
-    </div>
-  );
+      {copyText ? <button className={`message-copy${copied ? " copied" : ""}`} type="button" onClick={() => void handleCopy()} title={copied ? t("ConversationView.100") : t("ConversationView.101")} aria-label={copied ? t("ConversationView.102") : t("ConversationView.103")}>
+          {copied ? t("ConversationView.104") : <CopyIcon className="icon-14" />}
+        </button> : null}
+    </div>;
 }
-
 const ActivityItem = memo(function ActivityItem({
   messages,
   showAttribution = true,
-  digitalHumans,
+  digitalHumans
 }: {
   messages: ConversationMessage[];
   showAttribution?: boolean;
@@ -2073,20 +1746,16 @@ const ActivityItem = memo(function ActivityItem({
   // WorkBuddy 风格：每个工具步骤直接平铺成一行（图标+动作+文件名+差异），
   // 单步且非运行中时不包折叠块，最简洁；多步/运行中给一个可折叠的聚合头。
   if (!running && messages.length === 1) {
-    return (
-      <article className="message activity flat">
+    return <article className="message activity flat">
         <div className="message-body">
           <ToolStep message={messages[0]} showAttribution={showAttribution} digitalHumans={digitalHumans} />
         </div>
-      </article>
-    );
+      </article>;
   }
-
   const title = running ? activityLabel(messages) : activitySummary(messages);
   // 聚合头：执行中自动展开跟随进度，执行完自动收起；用户手动开合后尊重用户
   const [open, onToggle] = useAutoExpand(running);
-  return (
-    <article className="message activity">
+  return <article className="message activity">
       <div className="message-body">
         <details className="activity-detail" open={open} onToggle={onToggle}>
           <summary>
@@ -2097,87 +1766,71 @@ const ActivityItem = memo(function ActivityItem({
           </summary>
           {running ? <div className="activity-progress" aria-hidden="true" /> : null}
           <div className="activity-list">
-            {messages.map((message, index) => (
-              <ToolStep key={activityKey(message, index)} message={message} showAttribution={showAttribution} digitalHumans={digitalHumans} />
-            ))}
+            {messages.map((message, index) => <ToolStep key={activityKey(message, index)} message={message} showAttribution={showAttribution} digitalHumans={digitalHumans} />)}
           </div>
         </details>
       </div>
-    </article>
-  );
+    </article>;
 });
-
-function ToolStepIcon({ name }: { name: ReturnType<typeof toolIconName> }) {
+function ToolStepIcon({
+  name
+}: {
+  name: ReturnType<typeof toolIconName>;
+}) {
   const className = "tool-step-icon";
   switch (name) {
     case "edit":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="m4 20h4L20 8l-4-4L4 16v4Z" />
           <path d="m14 6 4 4" />
-        </svg>
-      );
+        </svg>;
     case "read":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="11" cy="11" r="6.5" />
           <path d="m16 16 4.5 4.5" />
-        </svg>
-      );
+        </svg>;
     case "command":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
           <path d="m7 9.5 3 2.5-3 2.5M12.5 14.5H17" />
-        </svg>
-      );
+        </svg>;
     case "search":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="10.8" cy="10.8" r="6.3" />
           <path d="m16 16 4.3 4.3" />
-        </svg>
-      );
+        </svg>;
     case "web":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="8.5" />
           <path d="M3.5 12h17M12 3.5c2.6 2.4 3.9 5.3 3.9 8.5s-1.3 6.1-3.9 8.5c-2.6-2.4-3.9-5.3-3.9-8.5s1.3-6.1 3.9-8.5Z" />
-        </svg>
-      );
+        </svg>;
     case "list":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.2l2 2.4H18a2.5 2.5 0 0 1 2.5 2.5v6.6A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5z" />
-        </svg>
-      );
+        </svg>;
     default:
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.8 2.8-2.4-.7-.7-2.4z" />
-        </svg>
-      );
+        </svg>;
   }
 }
-
 function toolActionLabel(message: ConversationMessage): string {
   const running = message.status === "running";
   const failed = message.status === "error" || message.status === "failed";
-  if (isEditTool(message.toolName)) return "编辑";
+  if (isEditTool(message.toolName)) return t("ConversationView.105");
   const name = (message.toolName || "").toLowerCase();
-  if (name === "fs_read") return "已读取";
-  if (name === "fs_list" || name === "fs_tree") return "查看目录";
-  if (name === "shell_execute") return failed ? "命令失败" : running ? "执行命令" : "已执行命令";
-  if (name === "web_search") return "搜索";
-  if (name === "web_fetch") return "读取网页";
-  if (name === "ask_user_question") return failed ? "提问失败" : running ? "等待回答" : "已回答";
+  if (name === "fs_read") return t("ConversationView.106");
+  if (name === "fs_list" || name === "fs_tree") return t("ConversationView.107");
+  if (name === "shell_execute") return failed ? t("ConversationView.108") : running ? t("ConversationView.109") : t("ConversationView.110");
+  if (name === "web_search") return t("ConversationView.111");
+  if (name === "web_fetch") return t("ConversationView.112");
+  if (name === "ask_user_question") return failed ? t("ConversationView.113") : running ? t("ConversationView.114") : t("ConversationView.115");
   return toolTitle(message);
 }
-
 const ToolStep = memo(function ToolStep({
   message,
   showAttribution = true,
-  digitalHumans,
+  digitalHumans
 }: {
   message: ConversationMessage;
   showAttribution?: boolean;
@@ -2192,44 +1845,24 @@ const ToolStep = memo(function ToolStep({
   const attribution = showAttribution ? message.attribution : undefined;
   // 执行中自动展开实时输出，完成/失败后自动收成一行；用户手动切换后尊重用户选择
   const [open, onToggle] = useAutoExpand(running);
-
-  return (
-    <details className={`tool-step${statusClass}`} open={open} onToggle={onToggle}>
+  return <details className={`tool-step${statusClass}`} open={open} onToggle={onToggle}>
       <summary>
         <ToolStepIcon name={toolIconName(message)} />
         <span className="tool-step-action">{toolActionLabel(message)}</span>
-        {file ? (
-          <span className="tool-step-file" title={file.dir ? `${file.dir}/${file.base}` : file.base}>
+        {file ? <span className="tool-step-file" title={file.dir ? `${file.dir}/${file.base}` : file.base}>
             {file.dir ? <span className="tool-step-dir">{file.dir}/</span> : null}
             <span className="tool-step-base">{file.base}</span>
-          </span>
-        ) : detail ? (
-          <span className="tool-step-file" title={detail}>
+          </span> : detail ? <span className="tool-step-file" title={detail}>
             <span className="tool-step-base dim">{detail}</span>
-          </span>
-        ) : null}
-        {diff && (diff.add > 0 || diff.del > 0) ? (
-          <span className="tool-step-diff">
+          </span> : null}
+        {diff && (diff.add > 0 || diff.del > 0) ? <span className="tool-step-diff">
             {diff.add > 0 ? <span className="diff-add">+{diff.add}</span> : null}
             {diff.del > 0 ? <span className="diff-del">-{diff.del}</span> : null}
-          </span>
-        ) : null}
-        {failed ? <span className="tool-status failed">失败</span> : null}
-        {attribution ? (
-          <AttributionAvatar
-            name={attribution.displayName}
-            avatar={attribution.avatarRef}
-            color={attribution.themeColor}
-            human={digitalHumans.find((human) => human.id === attribution.digitalHumanId) || null}
-            taskLabel={attribution.taskLabel}
-          />
-        ) : null}
+          </span> : null}
+        {failed ? <span className="tool-status failed">{t("ConversationView.116")}</span> : null}
+        {attribution ? <AttributionAvatar name={attribution.displayName} avatar={attribution.avatarRef} color={attribution.themeColor} human={digitalHumans.find(human => human.id === attribution.digitalHumanId) || null} taskLabel={attribution.taskLabel} /> : null}
       </summary>
-      <pre>{message.result
-        || (typeof message.arguments?.command === "string" && message.arguments.command.trim()
-          ? `$ ${message.arguments.command.trim()}`
-          : JSON.stringify(message.arguments || {}, null, 2))}
+      <pre>{message.result || (typeof message.arguments?.command === "string" && message.arguments.command.trim() ? `$ ${message.arguments.command.trim()}` : JSON.stringify(message.arguments || {}, null, 2))}
       </pre>
-    </details>
-  );
+    </details>;
 });

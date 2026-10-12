@@ -1,15 +1,22 @@
+import i18n from "../i18n";
 import { useEffect, useRef } from "react";
 
 /**
  * ECharts 渲染块：对话 markdown 中 ```echarts 代码块（JSON option）渲染为图表。
  * 动态加载 echarts，失败时降级显示原始 JSON。
  */
-export const EChartBlock = function EChartBlock({ code }: { code: string }) {
+const t = i18n.t.bind(i18n);
+export const EChartBlock = function EChartBlock({
+  code
+}: {
+  code: string;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     let disposed = false;
-    let chart: { dispose: () => void } | null = null;
+    let chart: {
+      dispose: () => void;
+    } | null = null;
     void (async () => {
       try {
         const echarts = await import("echarts");
@@ -30,14 +37,11 @@ export const EChartBlock = function EChartBlock({ code }: { code: string }) {
       chart?.dispose();
     };
   }, [code]);
-
-  return (
-    <div className="echart-block">
+  return <div className="echart-block">
       <div ref={containerRef} className="echart-canvas" />
       <details className="echart-source">
-        <summary>查看图表配置</summary>
+        <summary>{t("EChartBlock.0")}</summary>
         <pre>{code}</pre>
       </details>
-    </div>
-  );
+    </div>;
 };

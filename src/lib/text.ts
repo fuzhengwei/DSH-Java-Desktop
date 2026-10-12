@@ -1,13 +1,12 @@
+import i18n from "../i18n";
 /**
  * 与后端 WorkspaceRegistryService 的名称清洗规则保持一致：
  * 后端使用 `[^\p{L}\p{N}._-]` → `_`，把所有 emoji、符号变体、组合字符等替换为下划线。
  * 前端在创建/编辑项目前应用同样的清洗，避免用户输入的名称与后端存储的名称不一致。
  */
+const t = i18n.t.bind(i18n);
 export function sanitizeProjectName(name: string): string {
-  return name
-    .replace(/[^\p{L}\p{N}._-]/gu, "_")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return name.replace(/[^\p{L}\p{N}._-]/gu, "_").replace(/\s{2,}/g, " ").trim();
 }
 
 /**
@@ -15,10 +14,7 @@ export function sanitizeProjectName(name: string): string {
  * 如果清洗后为空，则回退到原始名称。
  */
 export function sanitizeDisplayName(name: string): string {
-  const cleaned = name
-    .replace(/[\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2460}-\u{24FF}\u{2500}-\u{257F}\u{2580}-\u{259F}\u{25A0}-\u{25FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  const cleaned = name.replace(/[\u{1F000}-\u{1FAFF}\u{2190}-\u{21FF}\u{2300}-\u{23FF}\u{2460}-\u{24FF}\u{2500}-\u{257F}\u{2580}-\u{259F}\u{25A0}-\u{25FF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE0F}\u{200D}]/gu, "").replace(/\s{2,}/g, " ").trim();
   return cleaned || name;
 }
 
@@ -36,12 +32,11 @@ export function stripHiddenContext(value: string): string {
   const openIndex = text.indexOf(HIDDEN_CONTEXT_OPEN);
   if (openIndex >= 0) {
     const closeIndex = text.indexOf(HIDDEN_CONTEXT_CLOSE, openIndex);
-    text = closeIndex >= 0
-      ? text.slice(0, openIndex) + text.slice(closeIndex + HIDDEN_CONTEXT_CLOSE.length)
-      : text.slice(0, openIndex);
+    text = closeIndex >= 0 ? text.slice(0, openIndex) + text.slice(closeIndex + HIDDEN_CONTEXT_CLOSE.length) : text.slice(0, openIndex);
   }
   // 兜底：早期版本未包 hidden-context 标记的「当前选择的工程」尾巴
-  return text.replace(/\n?\[当前选择的工程\][\s\S]*$/, "").trim();
+  // 兼容中英文两个版本的注入标记（历史会话可能是任意一种语言写入的）
+  return text.replace(/\n?\[(?:当前选择的工程|Selected Project)\][\s\S]*$/, "").trim();
 }
 
 /**
@@ -52,8 +47,8 @@ export function stripHiddenContext(value: string): string {
  * 否则所有会话标题都变成同一段包装文案。
  */
 export function visibleUserMessage(value: string): string {
-  const marker = "用户原始请求：";
-  const instructionPrefix = "请先使用可用工具完成下面的任务，";
+  const marker = t("text.0");
+  const instructionPrefix = t("text.1");
   if (value.startsWith(instructionPrefix) && value.includes(marker)) {
     return value.slice(value.indexOf(marker) + marker.length).trim();
   }

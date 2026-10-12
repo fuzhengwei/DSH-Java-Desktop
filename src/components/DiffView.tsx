@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { languageFromExtension } from "../lib/markdown-plugins";
@@ -11,14 +12,13 @@ import hljs from "highlight.js/lib/common";
  *
  * 数据由 Rust 端 project_file_diff 解析 git diff HEAD 提供（含暂存区）。
  */
-
+const t = i18n.t.bind(i18n);
 type FileDiffLine = {
   kind: "add" | "del" | "context";
   oldNo: number | null;
   newNo: number | null;
   text: string;
 };
-
 type FileDiffHunk = {
   oldStart: number;
   oldLines: number;
@@ -26,7 +26,6 @@ type FileDiffHunk = {
   newLines: number;
   lines: FileDiffLine[];
 };
-
 export type FileDiffResult = {
   available: boolean;
   status: string;
@@ -42,10 +41,16 @@ const COLLAPSE_CONTEXT_LIMIT = 8;
 
 /** 超大文件保护：diff 行数上限，超出仅渲染前 N 行 */
 const MAX_DIFF_ROWS = 12_000;
-
-type DiffRow =
-  | { type: "pair"; left: FileDiffLine | null; right: FileDiffLine | null }
-  | { type: "collapsed"; count: number; oldNo: number; newNo: number };
+type DiffRow = {
+  type: "pair";
+  left: FileDiffLine | null;
+  right: FileDiffLine | null;
+} | {
+  type: "collapsed";
+  count: number;
+  oldNo: number;
+  newNo: number;
+};
 
 /**
  * hunk 内逐块配对成左右两栏：
@@ -59,7 +64,11 @@ function hunkToRows(hunk: FileDiffHunk): DiffRow[] {
   while (index < lines.length) {
     const line = lines[index];
     if (line.kind === "context") {
-      rows.push({ type: "pair", left: line, right: line });
+      rows.push({
+        type: "pair",
+        left: line,
+        right: line
+      });
       index += 1;
       continue;
     }
@@ -76,13 +85,25 @@ function hunkToRows(hunk: FileDiffHunk): DiffRow[] {
     }
     const pairCount = Math.min(dels.length, adds.length);
     for (let pair = 0; pair < pairCount; pair += 1) {
-      rows.push({ type: "pair", left: dels[pair], right: adds[pair] });
+      rows.push({
+        type: "pair",
+        left: dels[pair],
+        right: adds[pair]
+      });
     }
     for (let rest = pairCount; rest < dels.length; rest += 1) {
-      rows.push({ type: "pair", left: dels[rest], right: null });
+      rows.push({
+        type: "pair",
+        left: dels[rest],
+        right: null
+      });
     }
     for (let rest = pairCount; rest < adds.length; rest += 1) {
-      rows.push({ type: "pair", left: null, right: adds[rest] });
+      rows.push({
+        type: "pair",
+        left: null,
+        right: adds[rest]
+      });
     }
   }
   return rows;
@@ -97,14 +118,18 @@ function collapseRows(rows: DiffRow[]): DiffRow[] {
       const head = run.slice(0, 3);
       const tail = run.slice(-3);
       const middle = run.length - 6;
-      const first = run[0] as Extract<DiffRow, { type: "pair" }>;
-      const last = run[run.length - 1] as Extract<DiffRow, { type: "pair" }>;
+      const first = run[0] as Extract<DiffRow, {
+        type: "pair";
+      }>;
+      const last = run[run.length - 1] as Extract<DiffRow, {
+        type: "pair";
+      }>;
       output.push(...head);
       output.push({
         type: "collapsed",
         count: middle,
         oldNo: (first.left?.oldNo ?? 0) + 3,
-        newNo: (first.right?.newNo ?? 0) + 3,
+        newNo: (first.right?.newNo ?? 0) + 3
       });
       output.push(...tail);
       void last;
@@ -124,65 +149,73 @@ function collapseRows(rows: DiffRow[]): DiffRow[] {
   flush();
   return output;
 }
-
 const STATUS_LABEL: Record<string, string> = {
-  M: "已修改",
-  A: "新增",
-  D: "已删除",
-  R: "重命名",
+  M: t("DiffView.0"),
+  A: t("DiffView.1"),
+  D: t("DiffView.2"),
+  R: t("DiffView.3")
 };
-
-function DiffCodeText({ text, lang }: { text: string; lang: string | null }) {
+function DiffCodeText({
+  text,
+  lang
+}: {
+  text: string;
+  lang: string | null;
+}) {
   const highlighted = useMemo(() => {
     if (!lang || !hljs.getLanguage(lang)) return null;
     try {
-      return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+      return hljs.highlight(text, {
+        language: lang,
+        ignoreIllegals: true
+      }).value;
     } catch {
       return null;
     }
   }, [text, lang]);
-  return highlighted != null
-    ? <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-    : <code>{text}</code>;
+  return highlighted != null ? <code dangerouslySetInnerHTML={{
+    __html: highlighted
+  }} /> : <code>{text}</code>;
 }
-
-function DiffColumn({ lines, side, lang }: { lines: DiffRow[]; side: "left" | "right"; lang: string | null }) {
-  return (
-    <div className={`diff-col diff-col-${side}`}>
+function DiffColumn({
+  lines,
+  side,
+  lang
+}: {
+  lines: DiffRow[];
+  side: "left" | "right";
+  lang: string | null;
+}) {
+  return <div className={`diff-col diff-col-${side}`}>
       {lines.map((row, rowIndex) => {
-        if (row.type === "collapsed") {
-          return (
-            <div key={rowIndex} className="diff-row diff-row-collapsed" aria-label={`${row.count} 行未改动`}>
+      if (row.type === "collapsed") {
+        return <div key={rowIndex} className="diff-row diff-row-collapsed" aria-label={t("DiffView.14", {
+          v0: row.count
+        })}>
               <span className="diff-line-no" />
               <span className="diff-cell">
                 <span className="diff-collapse-label">{row.count} unchanged lines</span>
               </span>
-            </div>
-          );
-        }
-        const line = side === "left" ? row.left : row.right;
-        const no = line ? (side === "left" ? line.oldNo : line.newNo) : null;
-        const kind = line?.kind || "empty";
-        return (
-          <div key={rowIndex} className={`diff-row diff-kind-${kind}`}>
+            </div>;
+      }
+      const line = side === "left" ? row.left : row.right;
+      const no = line ? side === "left" ? line.oldNo : line.newNo : null;
+      const kind = line?.kind || "empty";
+      return <div key={rowIndex} className={`diff-row diff-kind-${kind}`}>
             <span className="diff-line-no">{no ?? ""}</span>
             <span className="diff-cell">
               {line ? <DiffCodeText text={line.text} lang={lang} /> : null}
             </span>
-          </div>
-        );
-      })}
-    </div>
-  );
+          </div>;
+    })}
+    </div>;
 }
-
 type Props = {
   /** 项目/仓库内任意目录路径（用于定位 git 仓库） */
   basePath: string;
   /** 文件绝对路径或仓库相对路径 */
   filePath: string;
 };
-
 export function useFileDiff(basePath: string, filePath: string) {
   const [diff, setDiff] = useState<FileDiffResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -195,18 +228,21 @@ export function useFileDiff(basePath: string, filePath: string) {
     let cancelled = false;
     let last = "";
     const poll = () => {
-      void invoke<{ mtimeMs: number; size: number } | null>("local_file_stamp", { path: filePath })
-        .then((stamp) => {
-          if (cancelled || !stamp) return;
-          const key = `${stamp.mtimeMs}:${stamp.size}`;
-          if (key !== last) {
-            const first = last === "";
-            last = key;
-            // 首次只记录基线指纹；后续变化才触发重算
-            if (!first) setDiffVersion((value) => value + 1);
-          }
-        })
-        .catch(() => { /* 文件暂不可访问：忽略，等下一轮 */ });
+      void invoke<{
+        mtimeMs: number;
+        size: number;
+      } | null>("local_file_stamp", {
+        path: filePath
+      }).then(stamp => {
+        if (cancelled || !stamp) return;
+        const key = `${stamp.mtimeMs}:${stamp.size}`;
+        if (key !== last) {
+          const first = last === "";
+          last = key;
+          // 首次只记录基线指纹；后续变化才触发重算
+          if (!first) setDiffVersion(value => value + 1);
+        }
+      }).catch(() => {/* 文件暂不可访问：忽略，等下一轮 */});
     };
     poll();
     const timer = window.setInterval(poll, 2000);
@@ -218,85 +254,85 @@ export function useFileDiff(basePath: string, filePath: string) {
 
   // diff 结果版本号：文件指纹变化时 +1，驱动下方 effect 重新拉取
   const [diffVersion, setDiffVersion] = useState(0);
-
   useEffect(() => {
     if (!basePath || !filePath) return;
     let cancelled = false;
     setLoading(true);
     setError("");
-    void invoke<FileDiffResult>("project_file_diff", { path: basePath, filePath })
-      .then((result) => {
-        if (!cancelled) setDiff(result);
-      })
-      .catch((caught) => {
-        if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    void invoke<FileDiffResult>("project_file_diff", {
+      path: basePath,
+      filePath
+    }).then(result => {
+      if (!cancelled) setDiff(result);
+    }).catch(caught => {
+      if (!cancelled) setError(caught instanceof Error ? caught.message : String(caught));
+    }).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
     return () => {
       cancelled = true;
     };
   }, [basePath, filePath, diffVersion]);
-  return { diff, loading, error };
+  return {
+    diff,
+    loading,
+    error
+  };
 }
-
-export function DiffView({ basePath, filePath }: Props) {
-  const { diff, loading, error } = useFileDiff(basePath, filePath);
+export function DiffView({
+  basePath,
+  filePath
+}: Props) {
+  const {
+    diff,
+    loading,
+    error
+  } = useFileDiff(basePath, filePath);
   const lang = useMemo(() => {
     const name = filePath.split("/").filter(Boolean).pop() || filePath;
     const candidate = languageFromExtension(name);
     return candidate && hljs.getLanguage(candidate) ? candidate : null;
   }, [filePath]);
-
   if (loading) {
-    return <div className="diff-view-loading">正在计算 Git 差异…</div>;
+    return <div className="diff-view-loading">{t("DiffView.4")}</div>;
   }
   if (error) {
     return <div className="diff-view-error">{error}</div>;
   }
   if (!diff || !diff.available) {
-    return <div className="diff-view-empty">该文件当前没有 Git 变更（相对 HEAD）</div>;
+    return <div className="diff-view-empty">{t("DiffView.5")}</div>;
   }
   if (diff.isBinary) {
-    return (
-      <div className="diff-view-empty">
-        二进制文件不展示逐行差异（{STATUS_LABEL[diff.status] || diff.status}）
-      </div>
-    );
+    return <div className="diff-view-empty">{t("DiffView.6")}{STATUS_LABEL[diff.status] || diff.status}）
+      </div>;
   }
 
   // hunk → 行对 → 折叠，再整体截断保护
-  const paired = diff.hunks.flatMap((hunk) => collapseRows(hunkToRows(hunk)));
+  const paired = diff.hunks.flatMap(hunk => collapseRows(hunkToRows(hunk)));
   const truncated = paired.length > MAX_DIFF_ROWS;
   const rows = truncated ? paired.slice(0, MAX_DIFF_ROWS) : paired;
-
-  return (
-    <div className="diff-view">
+  return <div className="diff-view">
       <div className="diff-view-meta">
         <span className={`diff-status-badge s-${diff.status}`}>
           {STATUS_LABEL[diff.status] || diff.status}
         </span>
-        {diff.oldPath ? <span className="diff-rename-hint">自 {diff.oldPath} 重命名</span> : null}
+        {diff.oldPath ? <span className="diff-rename-hint">{t("DiffView.7")}{diff.oldPath}{t("DiffView.8")}</span> : null}
         <span className="diff-stat">
           <em className="rail-diff-add">+{diff.insertions}</em>
           <em className="rail-diff-del">-{diff.deletions}</em>
         </span>
-        <span className="diff-hint">相对 HEAD（含暂存区）</span>
+        <span className="diff-hint">{t("DiffView.9")}</span>
       </div>
       <div className="diff-split">
         <div className="diff-pane">
-          <div className="diff-pane-head">旧版本</div>
+          <div className="diff-pane-head">{t("DiffView.10")}</div>
           <DiffColumn lines={rows} side="left" lang={lang} />
         </div>
         <div className="diff-pane">
-          <div className="diff-pane-head">新版本</div>
+          <div className="diff-pane-head">{t("DiffView.11")}</div>
           <DiffColumn lines={rows} side="right" lang={lang} />
         </div>
       </div>
-      {truncated ? (
-        <div className="diff-view-truncated">差异过大，仅显示前 {(MAX_DIFF_ROWS / 1000).toFixed(0)}K 行</div>
-      ) : null}
-    </div>
-  );
+      {truncated ? <div className="diff-view-truncated">{t("DiffView.12")}{(MAX_DIFF_ROWS / 1000).toFixed(0)}{t("DiffView.13")}</div> : null}
+    </div>;
 }

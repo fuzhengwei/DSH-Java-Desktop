@@ -1,3 +1,4 @@
+import i18n from "../i18n";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import ReactMarkdown from "react-markdown";
@@ -6,14 +7,7 @@ import { rehypeHighlight } from "../lib/markdown-plugins";
 import type { ConversationMessage, DigitalHuman, RuntimeApproval } from "../types";
 import type { RoomEvent, ServerRoomView } from "../lib/digital-human-client";
 import { listRuntimeApprovals, resolveRuntimeApproval } from "../lib/agent-client";
-import {
-  cancelRoomTask,
-  digitalHumanTokensFor,
-  fetchRoomEvents,
-  fetchServerRoom,
-  resumeRoomTask,
-  subscribeRoomEvents,
-} from "../lib/digital-human-client";
+import { cancelRoomTask, digitalHumanTokensFor, fetchRoomEvents, fetchServerRoom, resumeRoomTask, subscribeRoomEvents } from "../lib/digital-human-client";
 import { buildRoomFeed, foldToolRuns } from "../lib/room-feed";
 import type { FeedRow, HumanRef, ToolRun } from "../lib/room-feed";
 import { EChartBlock } from "./EChartBlock";
@@ -21,7 +15,7 @@ import { ApprovalCard } from "./ApprovalCard";
 import { FileCard, fileCardIcon, InlineFileCards, localFilePathFromHref, type FileCardState } from "./FilePreview";
 import { ArrowDownIcon, ChevronIcon } from "./icons";
 import { AttributionAvatar } from "./AttributionAvatar";
-
+const t = i18n.t.bind(i18n);
 type Props = {
   port: number;
   roomId: string;
@@ -32,61 +26,60 @@ type Props = {
   /** 运行态变化：有活跃任务时为 true（用于禁用输入框、显示总停止） */
   onRunningChange?: (running: boolean) => void;
   /** 点击产物卡：右侧滑出预览 */
-  onOpenArtifact?: (artifact: { artifactId?: string; title: string; producerName?: string }) => void;
+  onOpenArtifact?: (artifact: {
+    artifactId?: string;
+    title: string;
+    producerName?: string;
+  }) => void;
   /** 点击正文里的文件路径：右侧文件预览 */
   onOpenFile?: (path: string) => void;
   /** 房间刚开始执行、服务端快照尚未返回时也显示输出占位 */
   starting?: boolean;
   /** 右侧群聊点击摘要：中间区域滚动定位到对应 seq 的条目 */
-  focusRequest?: { seq: number; nonce: number } | null;
+  focusRequest?: {
+    seq: number;
+    nonce: number;
+  } | null;
 };
-
 type RoomArtifact = NonNullable<ServerRoomView["artifacts"]>[number];
 type ArtifactAvailability = "ready" | "pending" | "missing";
-
 function extractText(node: unknown): string {
   if (typeof node === "string") return node;
   if (typeof node === "number") return String(node);
   if (Array.isArray(node)) return node.map(extractText).join("");
   if (node && typeof node === "object" && "props" in node) {
-    return extractText((node as { props?: { children?: unknown } }).props?.children);
+    return extractText((node as {
+      props?: {
+        children?: unknown;
+      };
+    }).props?.children);
   }
   return "";
 }
 
 /** HumanRef（feed 轻量引用）→ 目录档案（用于点击查看角色信息） */
 function lookupHuman(humans: DigitalHuman[], ref: HumanRef): DigitalHuman | null {
-  return humans.find((human) => human.id === ref.id) || null;
+  return humans.find(human => human.id === ref.id) || null;
 }
-
 function formatMessageTime(value?: string): string {
   if (!value) return "";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
-
 function roomArtifactHasPreview(artifact?: RoomArtifact): boolean {
-  return Boolean(
-    artifact?.content?.trim()
-    || artifact?.previewMarkdown?.trim()
-    || artifact?.summary?.trim()
-    || artifact?.filePath?.trim()
-    || artifact?.echartsOption,
-  );
+  return Boolean(artifact?.content?.trim() || artifact?.previewMarkdown?.trim() || artifact?.summary?.trim() || artifact?.filePath?.trim() || artifact?.echartsOption);
 }
-
 function roomArtifactFilePaths(artifact?: RoomArtifact): string[] {
   return artifact?.filePath?.trim() ? [artifact.filePath.trim()] : [];
 }
-
 function roomArtifactAvailability(artifact: RoomArtifact | undefined, existingFilePaths: Set<string> | null): ArtifactAvailability {
   if (!artifact) return "pending";
   if (artifact.content?.trim() || artifact.previewMarkdown?.trim() || artifact.summary?.trim() || artifact.echartsOption) return "ready";
   const filePaths = roomArtifactFilePaths(artifact);
   if (filePaths.length === 0) return "pending";
   if (!existingFilePaths) return "pending";
-  return filePaths.some((path) => existingFilePaths.has(path)) ? "ready" : "missing";
+  return filePaths.some(path => existingFilePaths.has(path)) ? "ready" : "missing";
 }
 
 // ── 工具行：与普通对话 ToolStep 同款 ──────────────
@@ -101,21 +94,27 @@ function toolIconName(message: Pick<ConversationMessage, "toolName">): "edit" | 
   if (name === "web_fetch") return "web";
   return "tool";
 }
-
 function toolActionLabel(run: ToolRun): string {
   const running = !run.resultSummary && run.status !== "error" && run.status !== "success";
   const name = (run.toolName || "").toLowerCase();
-  if (toolIconName(run) === "edit") return "编辑";
-  if (name === "fs_read") return "已读取";
-  if (name === "fs_list" || name === "fs_tree") return "查看目录";
-  if (name === "shell_execute") return run.status === "error" ? "命令失败" : running ? "执行命令" : "已执行命令";
-  if (name === "web_search") return "搜索";
-  if (name === "web_fetch") return "读取网页";
-  return running ? `正在执行 ${run.toolName}` : `已执行 ${run.toolName}`;
+  if (toolIconName(run) === "edit") return t("RoomCollaborationView.0");
+  if (name === "fs_read") return t("RoomCollaborationView.1");
+  if (name === "fs_list" || name === "fs_tree") return t("RoomCollaborationView.2");
+  if (name === "shell_execute") return run.status === "error" ? t("RoomCollaborationView.3") : running ? t("RoomCollaborationView.4") : t("RoomCollaborationView.5");
+  if (name === "web_search") return t("RoomCollaborationView.6");
+  if (name === "web_fetch") return t("RoomCollaborationView.7");
+  return running ? t("RoomCollaborationView.30", {
+    v0: run.toolName
+  }) : t("RoomCollaborationView.31", {
+    v0: run.toolName
+  });
 }
 
 /** 从调用参数/摘要里取文件路径（与普通对话 toolFilePath 同规则） */
-function runFilePath(run: ToolRun): { base: string; dir: string } | null {
+function runFilePath(run: ToolRun): {
+  base: string;
+  dir: string;
+} | null {
   const args = run.callArguments || {};
   const raw = args.path ?? args.file_path ?? args.file ?? args.target ?? args.filename;
   const text = typeof raw === "string" && raw.trim() ? raw.trim() : run.callSummary || "";
@@ -123,7 +122,10 @@ function runFilePath(run: ToolRun): { base: string; dir: string } | null {
   const segments = text.trim().split(/[\\/]/).filter(Boolean);
   const base = segments[segments.length - 1] || text.trim();
   const dir = segments.length > 1 ? segments.slice(0, -1).join("/") : "";
-  return { base, dir };
+  return {
+    base,
+    dir
+  };
 }
 
 /**
@@ -138,7 +140,9 @@ function toolCallDisplayText(run: ToolRun): string {
       const obj = JSON.parse(raw) as Record<string, unknown>;
       let args: unknown = obj.args ?? obj.arguments;
       if (typeof args === "string") {
-        try { args = JSON.parse(args); } catch { /* args 保持字符串 */ }
+        try {
+          args = JSON.parse(args);
+        } catch {/* args 保持字符串 */}
       }
       if (args && typeof args === "object" && !Array.isArray(args)) {
         const record = args as Record<string, unknown>;
@@ -156,157 +160,145 @@ function toolCallDisplayText(run: ToolRun): string {
   }
   return raw;
 }
-
-function ToolStepIcon({ name }: { name: ReturnType<typeof toolIconName> }) {
+function ToolStepIcon({
+  name
+}: {
+  name: ReturnType<typeof toolIconName>;
+}) {
   const className = "tool-step-icon";
   switch (name) {
     case "edit":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="m4 20h4L20 8l-4-4L4 16v4Z" />
           <path d="m14 6 4 4" />
-        </svg>
-      );
+        </svg>;
     case "read":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="11" cy="11" r="6.5" />
           <path d="m16 16 4.5 4.5" />
-        </svg>
-      );
+        </svg>;
     case "command":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
           <path d="m7 9.5 3 2.5-3 2.5M12.5 14.5H17" />
-        </svg>
-      );
+        </svg>;
     case "search":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="10.8" cy="10.8" r="6.3" />
           <path d="m16 16 4.3 4.3" />
-        </svg>
-      );
+        </svg>;
     case "web":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="8.5" />
           <path d="M3.5 12h17M12 3.5c2.6 2.4 3.9 5.3 3.9 8.5s-1.3 6.1-3.9 8.5c-2.6-2.4-3.9-5.3-3.9-8.5s1.3-6.1 3.9-8.5c-2.6 2.4-3.9 5.3-3.9 8.5s1.3 6.1 3.9 8.5Z" />
-        </svg>
-      );
+        </svg>;
     case "list":
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="M3.5 7.5A2.5 2.5 0 0 1 6 5h3.2l2 2.4H18a2.5 2.5 0 0 1 2.5 2.5v6.6A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5z" />
-        </svg>
-      );
+        </svg>;
     default:
-      return (
-        <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      return <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
           <path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.8 2.8-2.4-.7-.7-2.4z" />
-        </svg>
-      );
+        </svg>;
   }
 }
 
 /** 单条工具行：与普通对话 ToolStep 完全同款的视觉（图标+动作+文件+归属头像） */
-const RoomToolStep = memo(function RoomToolStep({ run, focused, humans }: { run: ToolRun; focused?: boolean; humans: DigitalHuman[] }) {
+const RoomToolStep = memo(function RoomToolStep({
+  run,
+  focused,
+  humans
+}: {
+  run: ToolRun;
+  focused?: boolean;
+  humans: DigitalHuman[];
+}) {
   const file = runFilePath(run);
   const failed = run.status === "error";
   const statusClass = failed ? " failed" : run.status === "success" || run.resultSummary ? "" : " running";
-  return (
-    <details
-      data-seq={run.seq}
-      className={`tool-step${statusClass}${focused ? " room-focus" : ""}`}
-      open={focused || undefined}
-    >
+  return <details data-seq={run.seq} className={`tool-step${statusClass}${focused ? " room-focus" : ""}`} open={focused || undefined}>
       <summary>
         <ToolStepIcon name={toolIconName(run)} />
         <span className="tool-step-action">{toolActionLabel(run)}</span>
-        {file ? (
-          <span className="tool-step-file" title={file.dir ? `${file.dir}/${file.base}` : file.base}>
+        {file ? <span className="tool-step-file" title={file.dir ? `${file.dir}/${file.base}` : file.base}>
             {file.dir ? <span className="tool-step-dir">{file.dir}/</span> : null}
             <span className="tool-step-base">{file.base}</span>
-          </span>
-        ) : run.callSummary ? (
-          <span className="tool-step-file" title={toolCallDisplayText(run)}>
+          </span> : run.callSummary ? <span className="tool-step-file" title={toolCallDisplayText(run)}>
             <span className="tool-step-base dim">{toolCallDisplayText(run)}</span>
-          </span>
-        ) : null}
-        {failed ? <span className="tool-status failed">失败</span> : null}
-        <AttributionAvatar
-          name={run.human.name}
-          avatar={run.human.avatar}
-          color={run.human.color}
-          live={!run.resultSummary && !failed && run.status !== "success"}
-          human={lookupHuman(humans, run.human)}
-        />
+          </span> : null}
+        {failed ? <span className="tool-status failed">{t("RoomCollaborationView.8")}</span> : null}
+        <AttributionAvatar name={run.human.name} avatar={run.human.avatar} color={run.human.color} live={!run.resultSummary && !failed && run.status !== "success"} human={lookupHuman(humans, run.human)} />
       </summary>
       <pre>{run.resultSummary || toolCallDisplayText(run) || JSON.stringify(run.callArguments || {}, null, 2)}</pre>
-    </details>
-  );
+    </details>;
 });
-
-type ToolGroup = Extract<FeedRow, { kind: "tool-group" }>;
+type ToolGroup = Extract<FeedRow, {
+  kind: "tool-group";
+}>;
 
 /** 同一数字人的连续工具调用：聚合头（执行过程 · N 步）+ 可展开明细，同普通对话 ActivityItem */
-function ToolGroupBlock({ group, focusSeq, forceOpen, humans }: {
+function ToolGroupBlock({
+  group,
+  focusSeq,
+  forceOpen,
+  humans
+}: {
   group: ToolGroup;
   focusSeq: number | null;
   forceOpen: boolean;
   humans: DigitalHuman[];
 }) {
-  const doneCount = group.runs.filter((run) => run.resultSummary || run.status === "success" || run.status === "error").length;
+  const doneCount = group.runs.filter(run => run.resultSummary || run.status === "success" || run.status === "error").length;
   const running = doneCount < group.runs.length;
   const single = group.runs.length === 1;
-
   if (single) {
-    return (
-      <article className="message activity flat" data-seq={group.seq}>
+    return <article className="message activity flat" data-seq={group.seq}>
         <div className="message-body">
           <RoomToolStep run={group.runs[0]} focused={focusSeq === group.runs[0].seq} humans={humans} />
         </div>
-      </article>
-    );
+      </article>;
   }
-
-  const title = running ? `正在执行 ${group.runs.length} 步` : `执行过程 · ${group.runs.length} 步`;
-  return (
-    <article className="message activity" data-seq={group.seq}>
+  const title = running ? t("RoomCollaborationView.32", {
+    v0: group.runs.length
+  }) : t("RoomCollaborationView.33", {
+    v0: group.runs.length
+  });
+  return <article className="message activity" data-seq={group.seq}>
       <div className="message-body">
         <details className="activity-detail" open={forceOpen || running || undefined}>
           <summary>
             <span className={`activity-state activity-state-${running ? "running" : "done"}`} />
             <span className="activity-title">{title}</span>
             {group.runs.length > 1 ? <span className="activity-count">{group.runs.length}</span> : null}
-            <AttributionAvatar
-              name={group.human.name}
-              avatar={group.human.avatar}
-              color={group.human.color}
-              live={running}
-              human={lookupHuman(humans, group.human)}
-            />
+            <AttributionAvatar name={group.human.name} avatar={group.human.avatar} color={group.human.color} live={running} human={lookupHuman(humans, group.human)} />
             <ChevronIcon className="icon-12 chevron" />
           </summary>
           {running ? <div className="activity-progress" aria-hidden="true" /> : null}
           <div className="activity-list">
-            {group.runs.map((run) => (
-              <RoomToolStep key={run.id} run={run} focused={focusSeq === run.seq} humans={humans} />
-            ))}
+            {group.runs.map(run => <RoomToolStep key={run.id} run={run} focused={focusSeq === run.seq} humans={humans} />)}
           </div>
         </details>
       </div>
-    </article>
-  );
+    </article>;
 }
 
 // ── 主视图 ───────────────────────────────────────
 
 /** 活动（未终态）任务状态集合 */
 const ACTIVE_TASK_STATES: string[] = ["READY", "ASSIGNED", "RUNNING", "WAITING_APPROVAL"];
-
-const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId, humans, channelCode, approvalMode, onRoomChange, onRunningChange, onOpenArtifact, onOpenFile, starting = false, focusRequest }: Props) {
+const RoomCollaborationView = memo(function RoomCollaborationView({
+  port,
+  roomId,
+  humans,
+  channelCode,
+  approvalMode,
+  onRoomChange,
+  onRunningChange,
+  onOpenArtifact,
+  onOpenFile,
+  starting = false,
+  focusRequest
+}: Props) {
   const [events, setEvents] = useState<RoomEvent[]>([]);
   const [room, setRoom] = useState<ServerRoomView | null>(null);
   const [existingArtifactFiles, setExistingArtifactFiles] = useState<Set<string> | null>(null);
@@ -321,7 +313,10 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   // 快照刷新走 fetch——plugin-http 的 fetch 偶发静默挂起（agent-browser 流式缺陷同源），
   // 挂起后快照永远停在"运行中"，仅凭快照判定 running 会让任务终态事件收到了也不收口
   // （2026-09-19 21:33 第三次复现：服务端 COMPLETED、vite 已是修复版，仍卡"生成中"）。
-  const [derivedTaskStates, setDerivedTaskStates] = useState<Record<string, { state: string; at: number }>>({});
+  const [derivedTaskStates, setDerivedTaskStates] = useState<Record<string, {
+    state: string;
+    at: number;
+  }>>({});
   // 最近一次快照成功刷新的时间：只有比快照新的终态事件才允许覆盖快照的活动态判定
   const roomFetchedAtRef = useRef(0);
   // 历史是否已加载完成：SSE 订阅必须等它为 true 才启动。
@@ -342,10 +337,7 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     void (async () => {
       for (;;) {
         try {
-          const [snapshot, history] = await Promise.all([
-            fetchServerRoom(port, roomId),
-            fetchRoomEvents(port, roomId, 0),
-          ]);
+          const [snapshot, history] = await Promise.all([fetchServerRoom(port, roomId), fetchRoomEvents(port, roomId, 0)]);
           if (cancelled) return;
           roomFetchedAtRef.current = Date.now();
           setRoom(snapshot);
@@ -355,11 +347,17 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
           for (const event of history) seenSeqsRef.current.add(event.seq);
           lastSeqRef.current = history.reduce((max, e) => Math.max(max, e.seq), 0);
           // 历史事件直推任务状态种子（at=0：永远不新于快照，仅作快照缺任务时的兜底）
-          const seeded: Record<string, { state: string; at: number }> = {};
+          const seeded: Record<string, {
+            state: string;
+            at: number;
+          }> = {};
           for (const event of history) {
             if (event.type !== "TASK_STATE_CHANGED" || !event.taskId) continue;
             const state = typeof event.payload?.state === "string" ? event.payload.state : "";
-            if (state) seeded[event.taskId] = { state, at: 0 };
+            if (state) seeded[event.taskId] = {
+              state,
+              at: 0
+            };
           }
           setDerivedTaskStates(seeded);
           // 历史（含去重集合与 lastSeq）就位后再放行 SSE 订阅：
@@ -370,12 +368,14 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
           if (cancelled) return;
           // 展示错误但继续重试：一旦成功即恢复正常渲染与运行态管理
           setLoadError(caught instanceof Error ? caught.message : String(caught));
-          await new Promise((resolve) => window.setTimeout(resolve, 3_000));
+          await new Promise(resolve => window.setTimeout(resolve, 3_000));
           if (cancelled) return;
         }
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId]);
 
@@ -385,23 +385,32 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     if (seenSeqsRef.current.has(event.seq)) return;
     seenSeqsRef.current.add(event.seq);
     lastSeqRef.current = Math.max(lastSeqRef.current, event.seq);
-    setEvents((current) => [...current, event]);
+    setEvents(current => [...current, event]);
     // 任务状态事件直推记录：不等快照，fetch 挂起也不影响运行态判定
     if (event.type === "TASK_STATE_CHANGED" && event.taskId) {
       const state = typeof event.payload?.state === "string" ? event.payload.state : "";
       if (state) {
         const taskId = event.taskId;
-        setDerivedTaskStates((current) => ({ ...current, [taskId]: { state, at: Date.now() } }));
+        setDerivedTaskStates(current => ({
+          ...current,
+          [taskId]: {
+            state,
+            at: Date.now()
+          }
+        }));
       }
     } else if (event.type === "MESSAGE_CREATED" && event.taskId) {
-      setDerivedTaskStates((current) => ({
+      setDerivedTaskStates(current => ({
         ...current,
-        [event.taskId as string]: { state: "COMPLETED", at: Date.now() },
+        [event.taskId as string]: {
+          state: "COMPLETED",
+          at: Date.now()
+        }
       }));
     }
     // 任务/参与者状态变化时刷新房间快照
     if (["TASK_STATE_CHANGED", "MESSAGE_CREATED", "PARTICIPANT_JOINED", "PARTICIPANT_LEFT", "PARTICIPANT_STATUS_CHANGED", "ARTIFACT_CREATED"].includes(event.type)) {
-      void fetchServerRoom(port, roomId).then((snapshot) => {
+      void fetchServerRoom(port, roomId).then(snapshot => {
         roomFetchedAtRef.current = Date.now();
         setRoom(snapshot);
         onRoomChange?.(snapshot);
@@ -419,7 +428,6 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     return unsubscribe;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [port, roomId, historyReady]);
-
   useEffect(() => {
     const paths = Array.from(new Set((room?.artifacts || []).flatMap(roomArtifactFilePaths)));
     if (paths.length === 0) {
@@ -428,16 +436,17 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     }
     setExistingArtifactFiles(null);
     let cancelled = false;
-    void invoke<string[]>("existing_local_files", { paths })
-      .then((existing) => {
-        if (!cancelled) setExistingArtifactFiles(new Set(existing));
-      })
-      .catch(() => {
-        if (!cancelled) setExistingArtifactFiles(new Set());
-      });
-    return () => { cancelled = true; };
+    void invoke<string[]>("existing_local_files", {
+      paths
+    }).then(existing => {
+      if (!cancelled) setExistingArtifactFiles(new Set(existing));
+    }).catch(() => {
+      if (!cancelled) setExistingArtifactFiles(new Set());
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [room?.artifacts]);
-
   const feed = useMemo(() => buildRoomFeed(events, humans), [events, humans]);
 
   // ── 运行期审批：协作 Agent 走 REQUEST_APPROVAL 时会挂起等待桌面端裁决 ──
@@ -462,27 +471,20 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
       window.clearInterval(timer);
     };
   }, [port]);
-
   const resolveApproval = (approvalId: string, verdict: "ALLOW_ONCE" | "ALLOW_SESSION" | "DENY") => {
     setResolvingApprovalId(approvalId);
-    void resolveRuntimeApproval(port, approvalId, verdict)
-      .then(() => setRuntimeApprovals((current) => current.filter((item) => item.approvalId !== approvalId)))
-      .catch(() => undefined)
-      .finally(() => setResolvingApprovalId((id) => (id === approvalId ? null : id)));
+    void resolveRuntimeApproval(port, approvalId, verdict).then(() => setRuntimeApprovals(current => current.filter(item => item.approvalId !== approvalId))).catch(() => undefined).finally(() => setResolvingApprovalId(id => id === approvalId ? null : id));
   };
-
 
   // 活动任务判定：快照 ∪ 事件直推。快照可能因 fetch 挂起永久陈旧；
   // 比"快照刷新时刻"更新的终态事件允许覆盖快照里的活动态（事件流 + 断线重连补拉更可靠）。
   const activeTasks = useMemo(() => {
     const active = new Set<string>();
     const snapshotIds = new Set<string>();
-    for (const task of (room?.tasks || [])) {
+    for (const task of room?.tasks || []) {
       snapshotIds.add(task.taskId);
       const derived = derivedTaskStates[task.taskId];
-      const newerTerminal = Boolean(derived)
-        && derived.at > roomFetchedAtRef.current
-        && !ACTIVE_TASK_STATES.includes(derived.state);
+      const newerTerminal = Boolean(derived) && derived.at > roomFetchedAtRef.current && !ACTIVE_TASK_STATES.includes(derived.state);
       if (ACTIVE_TASK_STATES.includes(task.state) && !newerTerminal) active.add(task.taskId);
     }
     for (const [taskId, derived] of Object.entries(derivedTaskStates)) {
@@ -497,20 +499,26 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   const settledFeed = useMemo(() => {
     if (activeTasks.length > 0 || !room) return feed;
     let touched = false;
-    const next = feed.map((item) => {
+    const next = feed.map(item => {
       if (item.kind === "human-message" && item.streaming) {
         touched = true;
-        return { ...item, streaming: false };
+        return {
+          ...item,
+          streaming: false
+        };
       }
       if (item.kind === "tool" && item.status === "running") {
         touched = true;
-        return { ...item, status: "success" as const, resultSummary: item.resultSummary || "（无输出）" };
+        return {
+          ...item,
+          status: "success" as const,
+          resultSummary: item.resultSummary || t("RoomCollaborationView.9")
+        };
       }
       return item;
     });
     return touched ? next : feed;
   }, [feed, activeTasks, room]);
-
   const rows = useMemo(() => foldToolRuns(settledFeed), [settledFeed]);
 
   // 右侧群聊点选：滚动定位到目标条目并短暂高亮（命中折叠组时自动展开）
@@ -518,18 +526,23 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
   const [revealGroupSeq, setRevealGroupSeq] = useState<number | null>(null);
   useEffect(() => {
     if (!focusRequest) return;
-    const group = rows.find(
-      (row): row is Extract<FeedRow, { kind: "tool-group" }> =>
-        row.kind === "tool-group" && row.runs.some((run) => run.seq === focusRequest.seq),
-    );
+    const group = rows.find((row): row is Extract<FeedRow, {
+      kind: "tool-group";
+    }> => row.kind === "tool-group" && row.runs.some(run => run.seq === focusRequest.seq));
     setRevealGroupSeq(group ? group.seq : null);
     setFocusSeq(focusRequest.seq);
     const raf = requestAnimationFrame(() => {
       const node = listRef.current?.querySelector(`[data-seq="${focusRequest.seq}"]`);
-      node?.scrollIntoView({ block: "center", behavior: "smooth" });
+      node?.scrollIntoView({
+        block: "center",
+        behavior: "smooth"
+      });
     });
     const timer = window.setTimeout(() => setFocusSeq(null), 2400);
-    return () => { cancelAnimationFrame(raf); window.clearTimeout(timer); };
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearTimeout(timer);
+    };
   }, [focusRequest, rows]);
 
   // 自动滚动到底（仅当用户本来就在底部时跟随）
@@ -540,15 +553,9 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
 
   // 运行态上抛：输入框据此禁用，避免协作任务并发提交
   const running = activeTasks.length > 0;
-  const latestUserSeq = settledFeed.reduce(
-    (seq, item) => item.kind === "user" ? Math.max(seq, item.seq) : seq,
-    -1,
-  );
-  const hasCurrentResponse = settledFeed.some((item) => (
-    item.seq > latestUserSeq
-    && ["human-message", "tool-group", "plan", "artifact", "approval", "error"].includes(item.kind)
-  ));
-  const showTypingIndicator = (running || (starting && !room)) && !hasCurrentResponse;
+  const latestUserSeq = settledFeed.reduce((seq, item) => item.kind === "user" ? Math.max(seq, item.seq) : seq, -1);
+  const hasCurrentResponse = settledFeed.some(item => item.seq > latestUserSeq && ["human-message", "tool-group", "plan", "artifact", "approval", "error"].includes(item.kind));
+  const showTypingIndicator = (running || starting && !room) && !hasCurrentResponse;
   // 运行态上抛只在「确曾运行 → 转为结束」的边沿回调 false：
   // 视图刚挂载时首次快照可能早于任务创建（tasks 为空，running=false），
   // 若此时直接上报 false，会把 App 发送瞬间登记的 sessionRuns 误删，
@@ -584,279 +591,207 @@ const RoomCollaborationView = memo(function RoomCollaborationView({ port, roomId
     const timer = window.setInterval(() => void reconcile(), 5_000);
     return () => window.clearInterval(timer);
   }, [running, port, roomId, ingestEvent, onRoomChange]);
-
   const scrollToBottom = () => {
     followOutputRef.current = true;
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    listRef.current?.scrollTo({
+      top: listRef.current.scrollHeight,
+      behavior: "smooth"
+    });
   };
-
   if (loadError) {
-    return <div className="room-error">协作事件加载失败：{loadError}</div>;
+    return <div className="room-error">{t("RoomCollaborationView.10")}{loadError}</div>;
   }
-
   const markdownComponents = useMemo(() => ({
-    a: ({ href, children }: { href?: string; children?: ReactNode }) => (
-      <a
-        href={href}
-        onClick={(event) => {
-          const localFilePath = localFilePathFromHref(href);
-          if (localFilePath && onOpenFile) {
-            event.preventDefault();
-            onOpenFile(localFilePath);
-            return;
-          }
-          if (href) {
-            event.preventDefault();
-            void invoke("open_external", { url: href }).catch((error) => {
-              console.error("打开外部链接失败:", error);
-            });
-          }
-        }}
-      >
+    a: ({
+      href,
+      children
+    }: {
+      href?: string;
+      children?: ReactNode;
+    }) => <a href={href} onClick={event => {
+      const localFilePath = localFilePathFromHref(href);
+      if (localFilePath && onOpenFile) {
+        event.preventDefault();
+        onOpenFile(localFilePath);
+        return;
+      }
+      if (href) {
+        event.preventDefault();
+        void invoke("open_external", {
+          url: href
+        }).catch(error => {
+          console.error(t("RoomCollaborationView.11"), error);
+        });
+      }
+    }}>
         {children}
-      </a>
-    ),
-    pre: ({ children }: { children?: ReactNode }) => {
+      </a>,
+    pre: ({
+      children
+    }: {
+      children?: ReactNode;
+    }) => {
       const child = Array.isArray(children) ? children[0] : children;
-      const className = (child as { props?: { className?: string } })?.props?.className || "";
+      const className = (child as {
+        props?: {
+          className?: string;
+        };
+      })?.props?.className || "";
       const match = /language-(\w+)/.exec(className);
       if (match && ["echart", "echarts"].includes(match[1])) {
         const code = extractText(child).trim();
         if (code.startsWith("{")) return <EChartBlock code={code} />;
       }
       return <pre>{children}</pre>;
-    },
+    }
   }), [onOpenFile]);
-
-  const renderMarkdown = (value: string): ReactNode => (
-    <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>{value}</ReactMarkdown>
-  );
-
-  return (
-    <div className="room-view">
-      <div
-        className="conversation-scroll room-as-conversation"
-        ref={listRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
-          followOutputRef.current = distance < 84;
-          setCanJumpLatest(distance > 240);
-        }}
-      >
+  const renderMarkdown = (value: string): ReactNode => <ReactMarkdown remarkPlugins={[remarkGfmCompatible]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>{value}</ReactMarkdown>;
+  return <div className="room-view">
+      <div className="conversation-scroll room-as-conversation" ref={listRef} onScroll={event => {
+      const element = event.currentTarget;
+      const distance = element.scrollHeight - element.scrollTop - element.clientHeight;
+      followOutputRef.current = distance < 84;
+      setCanJumpLatest(distance > 240);
+    }}>
         <div className="conversation-column">
-      {rows.length === 0 && !showTypingIndicator ? (
-        <div className="room-empty">
+      {rows.length === 0 && !showTypingIndicator ? <div className="room-empty">
           <div className="dh-empty-icon">💬</div>
-          <p>把数字人加入后，@ 或直接描述目标开始协作</p>
-        </div>
-      ) : (
-        <>
-        {rows.map((item) => {
-          const focusClass = focusSeq === item.seq ? " room-focus" : "";
-          const dataSeq = { "data-seq": item.seq };
-          if (item.kind === "tool-group") {
-            return (
-              <ToolGroupBlock
-                key={item.id}
-                group={item}
-                focusSeq={focusSeq}
-                forceOpen={revealGroupSeq === item.seq}
-                humans={humans}
-              />
-            );
-          }
-          if (item.kind === "user") {
-            return (
-              <article key={item.id} {...dataSeq} className={`message user${focusClass}`}>
+          <p>{t("RoomCollaborationView.12")}</p>
+        </div> : <>
+        {rows.map(item => {
+            const focusClass = focusSeq === item.seq ? " room-focus" : "";
+            const dataSeq = {
+              "data-seq": item.seq
+            };
+            if (item.kind === "tool-group") {
+              return <ToolGroupBlock key={item.id} group={item} focusSeq={focusSeq} forceOpen={revealGroupSeq === item.seq} humans={humans} />;
+            }
+            if (item.kind === "user") {
+              return <article key={item.id} {...dataSeq} className={`message user${focusClass}`}>
                 <div className="message-body">
                   <div className="message-content">{renderMarkdown(item.content)}</div>
                   <div className="message-meta">
                     {item.occurredAt ? <span className="message-time">{formatMessageTime(item.occurredAt)}</span> : null}
                   </div>
                 </div>
-              </article>
-            );
-          }
-          if (item.kind === "sys") {
-            return <div key={item.id} {...dataSeq} className={`room-sys${focusClass}`}>{item.text}</div>;
-          }
-          if (item.kind === "plan") {
-            return (
-              <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
+              </article>;
+            }
+            if (item.kind === "sys") {
+              return <div key={item.id} {...dataSeq} className={`room-sys${focusClass}`}>{item.text}</div>;
+            }
+            if (item.kind === "plan") {
+              return <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
                   <div className="message-content">
-                    {renderMarkdown(
-                      `**协作调度 · 分工计划（${item.steps.length} 步）**\n\n${item.steps.map((step) => `${step.seq}. ${step.title} — ${step.assigneeName}`).join("\n")}`,
-                    )}
-                    <span className="msg-attribution-inline" title="协作调度" style={{ pointerEvents: "none" }}>
-                      <span className="msg-attribution-avatar" style={{ background: "#4160f0" }}>✦</span>
+                    {renderMarkdown(t("RoomCollaborationView.34", {
+                      v0: item.steps.length,
+                      v1: item.steps.map(step => `${step.seq}. ${step.title} — ${step.assigneeName}`).join("\n")
+                    }))}
+                    <span className="msg-attribution-inline" title={t("RoomCollaborationView.13")} style={{
+                      pointerEvents: "none"
+                    }}>
+                      <span className="msg-attribution-avatar" style={{
+                        background: "#4160f0"
+                      }}>✦</span>
                     </span>
                   </div>
                   <div className="message-meta" />
                 </div>
-              </article>
-            );
-          }
-          if (item.kind === "human-message") {
-            return (
-              <article key={item.id} {...dataSeq} className={`message assistant attributed${focusClass}`}>
+              </article>;
+            }
+            if (item.kind === "human-message") {
+              return <article key={item.id} {...dataSeq} className={`message assistant attributed${focusClass}`}>
                 <div className="message-body">
                   <div className="message-content">
                     {renderMarkdown(item.content || "…")}
                     {!item.streaming ? <InlineFileCards content={item.content} onOpenFile={onOpenFile} /> : null}
                     {item.streaming ? <span className="room-cursor" aria-hidden>▍</span> : null}
-                    <AttributionAvatar
-                      name={item.human.name}
-                      avatar={item.human.avatar}
-                      color={item.human.color}
-                      live={item.streaming}
-                      human={lookupHuman(humans, item.human)}
-                    />
+                    <AttributionAvatar name={item.human.name} avatar={item.human.avatar} color={item.human.color} live={item.streaming} human={lookupHuman(humans, item.human)} />
                   </div>
                   <div className="message-meta">
                     {item.occurredAt ? <span className="message-time">{formatMessageTime(item.occurredAt)}</span> : null}
                   </div>
                 </div>
-              </article>
-            );
-          }
-          if (item.kind === "artifact") {
-            const readyArtifact = (room?.artifacts || []).find((artifact) => (
-              artifact.artifactId === item.artifactId || artifact.title === item.title
-            ));
-            const availability = roomArtifactAvailability(readyArtifact, existingArtifactFiles);
-            const canPreview = roomArtifactHasPreview(readyArtifact) && availability === "ready" && Boolean(onOpenArtifact);
-            // 右键菜单目标：产物绑定且真实存在的本地文件
-            const artifactMenuPath = roomArtifactFilePaths(readyArtifact).find((path) => existingArtifactFiles?.has(path)) || null;
-            const icon = fileCardIcon({ fileName: readyArtifact?.filePath, kindHint: readyArtifact?.kind || item.kindLabel });
-            const state: FileCardState = availability;
-            const metaText = state === "ready" ? icon.label : state === "pending" ? "内容生成中" : "文件已不存在";
-            return (
-              <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
+              </article>;
+            }
+            if (item.kind === "artifact") {
+              const readyArtifact = (room?.artifacts || []).find(artifact => artifact.artifactId === item.artifactId || artifact.title === item.title);
+              const availability = roomArtifactAvailability(readyArtifact, existingArtifactFiles);
+              const canPreview = roomArtifactHasPreview(readyArtifact) && availability === "ready" && Boolean(onOpenArtifact);
+              // 右键菜单目标：产物绑定且真实存在的本地文件
+              const artifactMenuPath = roomArtifactFilePaths(readyArtifact).find(path => existingArtifactFiles?.has(path)) || null;
+              const icon = fileCardIcon({
+                fileName: readyArtifact?.filePath,
+                kindHint: readyArtifact?.kind || item.kindLabel
+              });
+              const state: FileCardState = availability;
+              const metaText = state === "ready" ? icon.label : state === "pending" ? t("RoomCollaborationView.14") : t("RoomCollaborationView.15");
+              return <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
-                  <FileCard
-                    title={item.title}
-                    icon={icon}
-                    meta={metaText}
-                    state={state}
-                    actionText="查看 →"
-                    onClick={canPreview ? () => onOpenArtifact?.({ artifactId: item.artifactId, title: item.title, producerName: item.human.name }) : undefined}
-                    menuPath={artifactMenuPath}
-                    disabledTitle={availability === "missing" ? "文件已不存在，无法查看" : "产物内容还在生成，稍后可查看"}
-                  />
+                  <FileCard title={item.title} icon={icon} meta={metaText} state={state} actionText={t("RoomCollaborationView.16")} onClick={canPreview ? () => onOpenArtifact?.({
+                    artifactId: item.artifactId,
+                    title: item.title,
+                    producerName: item.human.name
+                  }) : undefined} menuPath={artifactMenuPath} disabledTitle={availability === "missing" ? t("RoomCollaborationView.17") : t("RoomCollaborationView.18")} />
                   <div className="message-meta">
-                    <AttributionAvatar
-                      name={item.human.name}
-                      avatar={item.human.avatar}
-                      color={item.human.color}
-                      human={lookupHuman(humans, item.human)}
-                    />
+                    <AttributionAvatar name={item.human.name} avatar={item.human.avatar} color={item.human.color} human={lookupHuman(humans, item.human)} />
                   </div>
                 </div>
-              </article>
-            );
-          }
-          if (item.kind === "handoff") {
-            return <div key={item.id} {...dataSeq} className={`room-sys${focusClass}`}>🔀 {item.fromName} 完成，交接下游</div>;
-          }
-          if (item.kind === "approval") {
-            return (
-              <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
+              </article>;
+            }
+            if (item.kind === "handoff") {
+              return <div key={item.id} {...dataSeq} className={`room-sys${focusClass}`}>🔀 {item.fromName}{t("RoomCollaborationView.19")}</div>;
+            }
+            if (item.kind === "approval") {
+              return <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
                   <div className={`room-approval${item.resolved ? " resolved" : ""}`}>
                     <div className="room-approval-head">
-                      <AttributionAvatar
-                        name={item.human.name}
-                        avatar={item.human.avatar}
-                        color={item.human.color}
-                        human={lookupHuman(humans, item.human)}
-                      />
-                      {item.human.name} 请求确认写操作
-                    </div>
-                    <div className="room-approval-cmd">{item.summary || "执行写操作"}</div>
-                    {item.resolved ? (
-                      <span className={`room-tool-state ${item.resolved === "ALLOW" ? "done" : "error"}`}>
-                        {item.resolved === "ALLOW" ? "已允许" : "已拒绝"}
-                      </span>
-                    ) : (
-                      <div className="room-approval-actions">
-                        <button
-                          type="button"
-                          className="primary-action compact"
-                          onClick={() => void digitalHumanTokensFor(humans)
-                            .then((tokens) => resumeRoomTask(port, roomId, item.taskId, channelCode, approvalMode, tokens))
-                            .catch(() => undefined)}
-                        >
-                          允许并继续
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost-action compact danger-text"
-                          onClick={() => void cancelRoomTask(port, roomId, item.taskId).catch(() => undefined)}
-                        >
-                          拒绝
-                        </button>
-                      </div>
-                    )}
+                      <AttributionAvatar name={item.human.name} avatar={item.human.avatar} color={item.human.color} human={lookupHuman(humans, item.human)} />
+                      {item.human.name}{t("RoomCollaborationView.20")}</div>
+                    <div className="room-approval-cmd">{item.summary || t("RoomCollaborationView.21")}</div>
+                    {item.resolved ? <span className={`room-tool-state ${item.resolved === "ALLOW" ? "done" : "error"}`}>
+                        {item.resolved === "ALLOW" ? t("RoomCollaborationView.22") : t("RoomCollaborationView.23")}
+                      </span> : <div className="room-approval-actions">
+                        <button type="button" className="primary-action compact" onClick={() => void digitalHumanTokensFor(humans).then(tokens => resumeRoomTask(port, roomId, item.taskId, channelCode, approvalMode, tokens)).catch(() => undefined)}>{t("RoomCollaborationView.24")}</button>
+                        <button type="button" className="ghost-action compact danger-text" onClick={() => void cancelRoomTask(port, roomId, item.taskId).catch(() => undefined)}>{t("RoomCollaborationView.25")}</button>
+                      </div>}
                   </div>
                 </div>
-              </article>
-            );
-          }
-          if (item.kind === "error") {
-            return (
-              <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
+              </article>;
+            }
+            if (item.kind === "error") {
+              return <article key={item.id} {...dataSeq} className={`message assistant${focusClass}`}>
                 <div className="message-body">
-                  <div className="room-error-card">
-                    执行失败：{item.message}
+                  <div className="room-error-card">{t("RoomCollaborationView.26")}{item.message}
                     {" "}
-                    <AttributionAvatar
-                      name={item.human.name}
-                      avatar={item.human.avatar}
-                      color={item.human.color}
-                      human={lookupHuman(humans, item.human)}
-                    />
+                    <AttributionAvatar name={item.human.name} avatar={item.human.avatar} color={item.human.color} human={lookupHuman(humans, item.human)} />
                   </div>
                 </div>
-              </article>
-            );
-          }
-          return null;
-        })}
-        {runtimeApprovals.map((approval) => (
-          <article key={approval.approvalId} className="message assistant">
+              </article>;
+            }
+            return null;
+          })}
+        {runtimeApprovals.map(approval => <article key={approval.approvalId} className="message assistant">
             <div className="message-body">
-              <ApprovalCard
-                approval={approval}
-                resolving={resolvingApprovalId === approval.approvalId}
-                onResolve={(verdict) => resolveApproval(approval.approvalId, verdict)}
-              />
+              <ApprovalCard approval={approval} resolving={resolvingApprovalId === approval.approvalId} onResolve={verdict => resolveApproval(approval.approvalId, verdict)} />
             </div>
-          </article>
-        ))}
-        {showTypingIndicator ? (
-          <article className="message assistant" aria-live="polite">
+          </article>)}
+        {showTypingIndicator ? <article className="message assistant" aria-live="polite">
             <div className="message-body">
-              <div className="typing-indicator" role="status" aria-label="正在生成回复">
+              <div className="typing-indicator" role="status" aria-label={t("RoomCollaborationView.27")}>
                 <span>.</span>
                 <span>.</span>
                 <span>.</span>
               </div>
             </div>
-          </article>
-        ) : null}
-        </>
-      )}
+          </article> : null}
+        </>}
         </div>
       </div>
-      {canJumpLatest ? (
-        <button className="jump-latest" type="button" onClick={scrollToBottom} aria-label="回到最新" title="回到最新">
+      {canJumpLatest ? <button className="jump-latest" type="button" onClick={scrollToBottom} aria-label={t("RoomCollaborationView.28")} title={t("RoomCollaborationView.29")}>
           <ArrowDownIcon className="icon-18" />
-        </button>
-      ) : null}
-    </div>
-  );
+        </button> : null}
+    </div>;
 });
-
 export default RoomCollaborationView;

@@ -1,42 +1,35 @@
+import i18n from "../i18n";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { DigitalHuman } from "../types";
 import { HumanAvatar } from "./DigitalHumanCatalog";
-import {
-  BroomIcon,
-  EditIcon,
-  FolderPlusIcon,
-  MoreVerticalIcon,
-  PlusIcon,
-  SearchIcon,
-  TrashIcon,
-  UsersIcon,
-} from "./icons";
+import { BroomIcon, EditIcon, FolderPlusIcon, MoreVerticalIcon, PlusIcon, SearchIcon, TrashIcon, UsersIcon } from "./icons";
 
 /** 堆叠头像最多展示几个，其余收进 +N */
+const t = i18n.t.bind(i18n);
 const STACK_LIMIT = 2;
 
 /** 项目行内的数字人缩略头像堆叠 + 数量 */
 export function ProjectHumanStack({
-  humans,
+  humans
 }: {
   humans: DigitalHuman[];
 }) {
   if (humans.length === 0) return null;
   const shown = humans.slice(0, STACK_LIMIT);
   const rest = humans.length - shown.length;
-  const names = humans.map((human) => human.displayName).join("、");
-  return (
-    <span className="project-humans" aria-label={`${humans.length} 个数字人`} title={`${humans.length} 个数字人：${names}`}>
-      {shown.map((human) => (
-        <span key={human.id} className="project-humans-item">
+  const names = humans.map(human => human.displayName).join("、");
+  return <span className="project-humans" aria-label={t("ProjectRowMenu.16", {
+    v0: humans.length
+  })} title={t("ProjectRowMenu.17", {
+    v0: humans.length,
+    v1: names
+  })}>
+      {shown.map(human => <span key={human.id} className="project-humans-item">
           <HumanAvatar human={human} size={18} />
-        </span>
-      ))}
+        </span>)}
       {rest > 0 ? <span className="project-humans-more">+{rest}</span> : null}
-    </span>
-  );
+    </span>;
 }
-
 type MenuProps = {
   onNewConversation: () => void;
   onAddLocalProject: () => void;
@@ -60,11 +53,10 @@ export const ProjectRowMenu = memo(function ProjectRowMenu({
   onDelete,
   onClearOldSessions,
   onClearAllSessions,
-  triggerRef,
+  triggerRef
 }: MenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
-
   useEffect(() => {
     if (!open) return;
     const onDown = (event: MouseEvent) => {
@@ -82,79 +74,43 @@ export const ProjectRowMenu = memo(function ProjectRowMenu({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
-
   const run = (action: () => void) => {
     setOpen(false);
     action();
   };
-
-  return (
-    <span className="project-menu" ref={rootRef}>
-      <button
-        type="button"
-        ref={triggerRef}
-        className={`icon-button project-menu-trigger${open ? " open" : ""}`}
-        title="项目操作"
-        aria-label="项目操作"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={(event) => {
-          event.stopPropagation();
-          setOpen((value) => !value);
-        }}
-      >
+  return <span className="project-menu" ref={rootRef}>
+      <button type="button" ref={triggerRef} className={`icon-button project-menu-trigger${open ? " open" : ""}`} title={t("ProjectRowMenu.0")} aria-label={t("ProjectRowMenu.1")} aria-haspopup="menu" aria-expanded={open} onClick={event => {
+      event.stopPropagation();
+      setOpen(value => !value);
+    }}>
         <MoreVerticalIcon className="icon-14" />
       </button>
-      {open ? (
-        <div className="project-menu-pop" role="menu">
+      {open ? <div className="project-menu-pop" role="menu">
           <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onNewConversation)}>
-            <PlusIcon className="icon-14" />
-            新建对话
-          </button>
+            <PlusIcon className="icon-14" />{t("ProjectRowMenu.2")}</button>
           <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onAddLocalProject)}>
-            <FolderPlusIcon className="icon-14" />
-            添加工程
-          </button>
-          {onAddDigitalHuman ? (
-            <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onAddDigitalHuman)}>
-              <UsersIcon className="icon-14" />
-              添加数字人
-            </button>
-          ) : null}
+            <FolderPlusIcon className="icon-14" />{t("ProjectRowMenu.3")}</button>
+          {onAddDigitalHuman ? <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onAddDigitalHuman)}>
+              <UsersIcon className="icon-14" />{t("ProjectRowMenu.4")}</button> : null}
           <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onEdit)}>
-            <EditIcon className="icon-14" />
-            编辑项目
-          </button>
-          {(onClearOldSessions || onClearAllSessions) ? (
-            <>
+            <EditIcon className="icon-14" />{t("ProjectRowMenu.5")}</button>
+          {onClearOldSessions || onClearAllSessions ? <>
               <div className="project-menu-divider" aria-hidden="true" />
-              {onClearOldSessions ? (
-                <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onClearOldSessions)}>
-                  <BroomIcon className="icon-14" />
-                  清空非今日对话
-                </button>
-              ) : null}
-              {onClearAllSessions ? (
-                <button type="button" role="menuitem" className="project-menu-item danger" onClick={() => run(onClearAllSessions)}>
-                  <TrashIcon className="icon-14" />
-                  清空全部对话
-                </button>
-              ) : null}
-            </>
-          ) : null}
+              {onClearOldSessions ? <button type="button" role="menuitem" className="project-menu-item" onClick={() => run(onClearOldSessions)}>
+                  <BroomIcon className="icon-14" />{t("ProjectRowMenu.6")}</button> : null}
+              {onClearAllSessions ? <button type="button" role="menuitem" className="project-menu-item danger" onClick={() => run(onClearAllSessions)}>
+                  <TrashIcon className="icon-14" />{t("ProjectRowMenu.7")}</button> : null}
+            </> : null}
           <div className="project-menu-divider" aria-hidden="true" />
           <button type="button" role="menuitem" className="project-menu-item danger" onClick={() => run(onDelete)}>
-            <TrashIcon className="icon-14" />
-            删除项目
-          </button>
-        </div>
-      ) : null}
-    </span>
-  );
+            <TrashIcon className="icon-14" />{t("ProjectRowMenu.8")}</button>
+        </div> : null}
+    </span>;
 });
-
 type AssignPopoverProps = {
-  anchorRef: { current: HTMLElement | null };
+  anchorRef: {
+    current: HTMLElement | null;
+  };
   open: boolean;
   /** 锚点底部相对侧边栏的纵向偏移（固定定位用） */
   anchorTop: number;
@@ -178,20 +134,16 @@ export const ProjectHumanAssignPopover = memo(function ProjectHumanAssignPopover
   checkedIds,
   onAssign,
   onCreateNew,
-  onClose,
+  onClose
 }: AssignPopoverProps) {
   const [query, setQuery] = useState("");
   const popRef = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
     setQuery("");
     const onDown = (event: MouseEvent) => {
       const target = event.target as Node;
-      if (
-        popRef.current && !popRef.current.contains(target)
-        && anchorRef.current && !anchorRef.current.contains(target)
-      ) {
+      if (popRef.current && !popRef.current.contains(target) && anchorRef.current && !anchorRef.current.contains(target)) {
         onClose();
       }
     };
@@ -205,68 +157,35 @@ export const ProjectHumanAssignPopover = memo(function ProjectHumanAssignPopover
       document.removeEventListener("keydown", onKey);
     };
   }, [open, anchorRef, onClose]);
-
   const results = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return humans;
-    return humans.filter((human) => (
-      human.displayName.toLowerCase().includes(keyword)
-      || human.purpose.toLowerCase().includes(keyword)
-      || human.roleTags.some((tag) => tag.toLowerCase().includes(keyword))
-    ));
+    return humans.filter(human => human.displayName.toLowerCase().includes(keyword) || human.purpose.toLowerCase().includes(keyword) || human.roleTags.some(tag => tag.toLowerCase().includes(keyword)));
   }, [humans, query]);
-
   if (!open) return null;
-
-  return (
-    <div
-      className="project-human-pop"
-      ref={popRef}
-      role="dialog"
-      aria-label="配置项目数字人"
-      style={{ top: anchorTop }}
-    >
+  return <div className="project-human-pop" ref={popRef} role="dialog" aria-label={t("ProjectRowMenu.9")} style={{
+    top: anchorTop
+  }}>
       <div className="project-human-pop-head">
         <SearchIcon className="icon-14" />
-        <input
-          className="project-human-pop-input"
-          placeholder="搜索数字人…"
-          value={query}
-          autoFocus
-          onChange={(event) => setQuery(event.target.value)}
-        />
+        <input className="project-human-pop-input" placeholder={t("ProjectRowMenu.10")} value={query} autoFocus onChange={event => setQuery(event.target.value)} />
       </div>
       <div className="project-human-pop-list">
-        {results.length === 0 ? (
-          <div className="project-human-pop-empty">
-            {humans.length === 0 ? "还没有数字人，可在下方新建" : "没有匹配的数字人"}
-          </div>
-        ) : (
-          results.map((human) => (
-            <label key={human.id} className="project-human-pop-item">
-              <input
-                type="checkbox"
-                checked={checkedIds.has(human.id)}
-                onChange={(event) => onAssign(human.id, event.target.checked)}
-              />
+        {results.length === 0 ? <div className="project-human-pop-empty">
+            {humans.length === 0 ? t("ProjectRowMenu.11") : t("ProjectRowMenu.12")}
+          </div> : results.map(human => <label key={human.id} className="project-human-pop-item">
+              <input type="checkbox" checked={checkedIds.has(human.id)} onChange={event => onAssign(human.id, event.target.checked)} />
               <HumanAvatar human={human} size={26} health={human.endpoint.healthState} />
               <span className="project-human-pop-main">
                 <span className="project-human-pop-name">
                   {human.displayName}
-                  <span className="dh-src">{human.endpoint.type === "local-dsh" ? "本地" : "远端"}</span>
+                  <span className="dh-src">{human.endpoint.type === "local-dsh" ? t("ProjectRowMenu.13") : t("ProjectRowMenu.14")}</span>
                 </span>
                 <span className="project-human-pop-purpose">{human.purpose}</span>
               </span>
-            </label>
-          ))
-        )}
+            </label>)}
       </div>
-      {onCreateNew ? (
-        <button type="button" className="project-human-pop-create" onClick={onCreateNew}>
-          <PlusIcon className="icon-14" />
-          新建数字人并归属到该项目
-        </button>
-      ) : null}
-    </div>
-  );
+      {onCreateNew ? <button type="button" className="project-human-pop-create" onClick={onCreateNew}>
+          <PlusIcon className="icon-14" />{t("ProjectRowMenu.15")}</button> : null}
+    </div>;
 });
