@@ -1291,6 +1291,8 @@
   "PluginsSettings.70": "Operation failed: {{v0}}",
   "PluginsSettings.71": "Failed to load config: {{v0}}",
   "PluginsSettings.72": "Failed to save config: {{v0}}",
+  "PluginsSettings.73": "No plugin at hand? Use the dsh-java-plugin-skills skill pack to develop a plugin from scratch and connect it to this service.",
+  "PluginsSettings.74": "View dsh-java-plugin-skills →",
   "ProjectRowMenu.16": "{{v0}} digital humans",
   "ProjectRowMenu.17": "{{v0}} digital humans: {{v1}}",
   "RightDock.8": "Close {{v0}}",

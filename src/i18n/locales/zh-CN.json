@@ -1291,6 +1291,8 @@
   "PluginsSettings.70": "操作失败：{{v0}}",
   "PluginsSettings.71": "配置加载失败：{{v0}}",
   "PluginsSettings.72": "配置保存失败：{{v0}}",
+  "PluginsSettings.73": "没有现成插件？可以使用 dsh-java-plugin-skills 技能包，从零开发一个插件并接入本服务。",
+  "PluginsSettings.74": "查看 dsh-java-plugin-skills →",
   "ProjectRowMenu.16": "{{v0}} 个数字人",
   "ProjectRowMenu.17": "{{v0}} 个数字人：{{v1}}",
   "RightDock.8": "关闭 {{v0}}",

@@ -2,6 +2,18 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 约定。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.2] - 2026-10-13
+
+### 新增
+- 界面国际化（i18n）：完整覆盖中英双语，跟随系统 locale 自动切换（中文环境显示中文，其余回退英文）；浏览器调试可通过 `?lang=en` / `?lang=zh` 强制指定语言。
+- 插件安装面板新增开发指引：没有现成插件时，可点击链接前往 [dsh-java-plugin-skills](https://github.com/deepseek-harness-java/dsh-java-plugin-skills) 技能包，从零开发插件并接入本服务。
+
+### 修复
+- 桌面端外链跳转失效：插件安装面板的 GitHub 链接在 WebView 内无法打开，改为通过系统浏览器打开（与对话内 markdown 外链同链路），并保留浏览器环境降级。
+
+### 其他
+- 安装包元数据版本同步升级至 0.1.2（package.json / tauri.conf.json / Cargo.toml）。
+
 ## [0.1.1] - 2026-09-23
 
 ### 新增

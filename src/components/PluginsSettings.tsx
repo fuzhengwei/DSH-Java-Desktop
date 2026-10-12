@@ -1,5 +1,6 @@
 import i18n from "../i18n";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { HarnessPlugin, PluginCandidate, PluginConfigItem } from "../types";
 import { activatePlugin, analyzePluginJar, analyzePluginMaven, disablePlugin, installPlugin, listPluginConfig, listPlugins, savePluginConfig, uninstallPlugin } from "../lib/agent-client";
 const t = i18n.t.bind(i18n);
@@ -43,6 +44,12 @@ export default function PluginsSettings({
   const [savingConfig, setSavingConfig] = useState(false);
   const notify = useCallback((message: string) => {
     setNotice(message);
+  }, []);
+  const openExternal = useCallback((url: string) => {
+    invoke("open_external", { url }).catch(error => {
+      console.error("Failed to open external link", error);
+      if (url) window.open(url, "_blank");
+    });
   }, []);
   const refresh = useCallback(async () => {
     if (!servicePort) return;
@@ -265,6 +272,15 @@ export default function PluginsSettings({
               {installing ? t("PluginsSettings.26") : t("PluginsSettings.27")}
             </button>
           </div> : null}
+
+        <div className="plugin-install-hint">
+          <span>{t("PluginsSettings.73")}</span>
+          {" "}
+          <a href="https://github.com/deepseek-harness-java/dsh-java-plugin-skills" onClick={event => {
+          event.preventDefault();
+          openExternal("https://github.com/deepseek-harness-java/dsh-java-plugin-skills");
+        }}>{t("PluginsSettings.74")}</a>
+        </div>
       </section>
 
       <section className="settings-panel">

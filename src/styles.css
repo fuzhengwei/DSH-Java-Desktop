@@ -5434,6 +5434,27 @@ select:focus-visible {
   cursor: pointer;
 }
 
+.plugin-install-hint {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .5);
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.plugin-install-hint a {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.plugin-install-hint a:hover {
+  text-decoration: underline;
+}
+
 /* ═══════════════════ 数字人协作 ═══════════════════ */
 
 /* 头像体系 */
