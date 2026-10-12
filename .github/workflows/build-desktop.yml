@@ -51,6 +51,28 @@ jobs:
             librsvg2-dev \
             patchelf
 
+      # bundled JRE 的 JNI 库（如 libprefs.so）依赖 libjvm.so，它位于 JRE 自带的
+      # lib/server/ 目录，不在系统库路径上。linuxdeploy 解析 AppDir 内所有 ELF
+      # 的依赖时找不到它会导致 AppImage 打包失败（ERROR: Could not find dependency: libjvm.so）。
+      # 把构建用 JDK 的 libjvm.so 软链进系统库目录，让 linuxdeploy 能解析到。
+      # AppImage 运行时 JRE 的 lib/server/ 已随资源打包，java 进程自己能找到 libjvm.so，
+      # 因此 linuxdeploy 只是把 libjvm.so 复制进 AppDir 也无副作用（体积 +~20MB）。
+      - name: Make libjvm discoverable for linuxdeploy (Linux AppImage)
+        if: inputs.platform == 'linux'
+        run: |
+          set -euo pipefail
+          JAVA_LIBJVM="${JAVA_HOME}/lib/server/libjvm.so"
+          if [ ! -f "${JAVA_LIBJVM}" ]; then
+            # setup-java 的 JAVA_HOME 在部分 runner 镜像上指向 JRE，JNI 库在不同位置
+            JAVA_LIBJVM="$(find /usr/lib/jvm -name libjvm.so -path '*server*' 2>/dev/null | head -1 || true)"
+          fi
+          if [ -z "${JAVA_LIBJVM}" ] || [ ! -f "${JAVA_LIBJVM}" ]; then
+            sudo apt-get install -y openjdk-17-jdk-headless
+            JAVA_LIBJVM="$(find /usr/lib/jvm -name libjvm.so -path '*server*' 2>/dev/null | head -1)"
+          fi
+          echo "Linking ${JAVA_LIBJVM} -> /usr/lib/x86_64-linux-gnu/libjvm.so"
+          sudo ln -sf "${JAVA_LIBJVM}" /usr/lib/x86_64-linux-gnu/libjvm.so
+
       - name: Install dependencies
         run: npm ci
 
