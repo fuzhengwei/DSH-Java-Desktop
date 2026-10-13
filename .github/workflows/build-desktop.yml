@@ -99,10 +99,26 @@ jobs:
       - name: Verify bundled agent JAR
         run: npm run agent:verify
 
+      # umask 022：保证新写入文件默认 others 可读/目录可穿越，避免
+      # AppRun/AppRun.wrapped 因 runner 文件系统 ACL/umask 差异变成 750，
+      # 在 firejail 沙箱（AppImageHub 测试、部分用户环境）中 Permission denied
+      - name: Normalize umask for Linux AppImage build
+        if: inputs.platform == 'linux'
+        run: |
+          set -euo pipefail
+          echo "before: $(umask)"
+          sudo sed -i 's/^UMask=.*$/UMask=0022/' /etc/systemd/user.conf 2>/dev/null || true
+          echo "umask 022" >> ~/.bashrc
+          echo "umask 022" >> ~/.profile
+          # 当前 step 已是子进程，后续 step 每次新 shell，bashrc 会生效
+          umask 022 && echo "after: $(umask)"
+
       - name: Prepare bundled Java runtime
         env:
           DSH_JRE_TARGET: ${{ inputs.runtime-target }}
-        run: npm run agent:runtime
+        run: |
+          if [ "${{ inputs.platform }}" = "linux" ]; then umask 022; fi
+          npm run agent:runtime
 
       - name: Build and publish Tauri release
         uses: tauri-apps/tauri-action@v0
@@ -121,3 +137,10 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: '--target ${{ inputs.target }} --verbose'
+
+      # AppImage 打包在 tauri build 内部完成（linuxdeploy → appimagetool），
+      # 无法在中间插手；这里对产物做权限校验：AppRun/AppRun.wrapped 必须
+      # others 可执行，否则 firejail 沙箱环境无法启动
+      - name: Verify AppImage AppRun permissions
+        if: inputs.platform == 'linux'
+        run: bash scripts/fix-apprun-perms.sh verify
