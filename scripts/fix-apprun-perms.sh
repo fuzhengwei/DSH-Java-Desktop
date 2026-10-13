@@ -43,9 +43,10 @@ if [ "$MODE" = "verify" ]; then
   rc=0
   for img in "${TARGETS[@]}"; do
     [ -f "$img" ] || continue
-    # AppRun ELF 位于 runtime 之后；用 unsquashfs 读取 AppRun 权限
-    # squashfs superblock ('hsqs') 紧跟 runtime ELF。AppImage 规范：runtime 的
-    # squashfs 起始偏移记录在自身（--appimage-offset），优先用它。
+      # AppImage 规范：runtime 的 squashfs 起始偏移记录在自身
+      # （--appimage-offset），优先用它。⚠️ 注意 tauri-action 会在 build step
+      # 内部上传资产，verify step 的重打包发生在上传之后，因此重打包后的
+      # 产物需要重新上传（见 CI workflow 的 re-upload 步骤）。
     OFFSET=$("$img" --appimage-offset 2>/dev/null || true)
     if [ -z "${OFFSET}" ]; then
       # 无 FUSE/无法执行时退化为扫描（取最后一个 hsqs——前面的是 ELF 内容巧合）

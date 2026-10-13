@@ -140,7 +140,33 @@ jobs:
 
       # AppImage 打包在 tauri build 内部完成（linuxdeploy → appimagetool），
       # 无法在中间插手；这里对产物做权限校验：AppRun/AppRun.wrapped 必须
-      # others 可执行，否则 firejail 沙箱环境无法启动
+      # others 可执行，否则 firejail 沙箱环境无法启动。
+      # ⚠️ tauri-action 在 build step 内部就上传了资产，verify/repack 发生在
+      # 其后，因此重打包后必须重新上传覆盖。
       - name: Verify AppImage AppRun permissions
         if: inputs.platform == 'linux'
         run: bash scripts/fix-apprun-perms.sh verify
+
+      - name: Re-upload fixed AppImage (if repacked)
+        if: inputs.platform == 'linux'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          # 判断是否发生过重打包：比对本地产物与已上传资产大小，不一致才重传
+          TAG=$(gh api repos/${{ github.repository }}/releases --jq '.[0].tag_name')
+          for img in src-tauri/target/*/release/bundle/appimage/*.AppImage; do
+            NAME=$(basename "$img")
+            LOCAL_SIZE=$(stat -c %s "$img")
+            REMOTE_SIZE=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq ".assets[] | select(.name == \"$NAME\") | .size")
+            if [ "$LOCAL_SIZE" != "$REMOTE_SIZE" ]; then
+              echo "re-uploading $NAME (local $LOCAL_SIZE != remote $REMOTE_SIZE)"
+              gh release upload "$TAG" "$img" --clobber --repo "${{ github.repository }}"
+              # 签名文件同步更新（大小可能一致，一并覆盖保险）
+              SIG="${img}.sig"
+              [ -f "$SIG" ] && gh release upload "$TAG" "$SIG" --clobber --repo "${{ github.repository }}" || true
+            else
+              echo "$NAME unchanged (local $LOCAL_SIZE == remote $REMOTE_SIZE)"
+            fi
+          done
