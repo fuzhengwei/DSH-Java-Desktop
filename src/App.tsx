@@ -1,4 +1,4 @@
-import i18n from "./i18n";
+import i18n, { setLanguage, readStoredLanguage, type LanguageSetting } from "./i18n";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -724,6 +724,12 @@ export default function App() {
   const [lastRunArtifacts, setLastRunArtifacts] = useState<Record<string, string[]>>({});
   const [approvalMode, setApprovalMode] = useState<ApprovalMode>(readApprovalMode);
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>(readReasoningEffort);
+  // 界面语言：i18n 模块已按存储值完成初始化，这里仅持有状态供设置页展示/切换
+  const [language, setLanguageState] = useState<LanguageSetting>(readStoredLanguage);
+  const handleLanguageChange = useCallback((next: LanguageSetting) => {
+    setLanguageState(next);
+    setLanguage(next);
+  }, []);
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
@@ -3407,7 +3413,7 @@ export default function App() {
   }, []);
   if (activeView === "settings") {
     return <div className="standalone-page settings-standalone-page">
-        <SettingsView service={service} serviceStatus={serviceStatus} serviceError={serviceError} error={error} activeSection={settingsSection} onSectionChange={setSettingsSection} onBack={() => setActiveView("conversation")} approvalMode={approvalMode} reasoningEffort={reasoningEffort} onApprovalModeChange={setApprovalMode} onReasoningEffortChange={setReasoningEffort} draft={modelDraft} modelSettings={modelSettings} availableModels={availableModels} discoveredModels={discoveredModels} savingModel={savingModel} syncingModels={syncingModels} onDraftChange={setModelDraft} onDiscover={() => void syncAvailableModels()} onSave={() => submitModel()} onCancelEdit={() => setModelDraft(emptyModelDraft)} onActivate={channelCode => void activateModel(channelCode)} onDelete={channelCode => void removeModel(channelCode)} onEdit={editModel} onToggleModel={model => void toggleModel(model)} onReconnect={() => void startService()} digitalHumans={digitalHumans} digitalHumansLoading={!digitalHumansLoaded} digitalHumanProjects={combinedProjects.filter(project => !project.local || !project.parentPath)} onDigitalHumansChanged={() => void refreshDigitalHumans(port)} onAddDigitalHuman={() => {
+        <SettingsView service={service} serviceStatus={serviceStatus} serviceError={serviceError} error={error} activeSection={settingsSection} onSectionChange={setSettingsSection} onBack={() => setActiveView("conversation")} approvalMode={approvalMode} reasoningEffort={reasoningEffort} onApprovalModeChange={setApprovalMode} onReasoningEffortChange={setReasoningEffort} language={language} onLanguageChange={handleLanguageChange} draft={modelDraft} modelSettings={modelSettings} availableModels={availableModels} discoveredModels={discoveredModels} savingModel={savingModel} syncingModels={syncingModels} onDraftChange={setModelDraft} onDiscover={() => void syncAvailableModels()} onSave={() => submitModel()} onCancelEdit={() => setModelDraft(emptyModelDraft)} onActivate={channelCode => void activateModel(channelCode)} onDelete={channelCode => void removeModel(channelCode)} onEdit={editModel} onToggleModel={model => void toggleModel(model)} onReconnect={() => void startService()} digitalHumans={digitalHumans} digitalHumansLoading={!digitalHumansLoaded} digitalHumanProjects={combinedProjects.filter(project => !project.local || !project.parentPath)} onDigitalHumansChanged={() => void refreshDigitalHumans(port)} onAddDigitalHuman={() => {
         setWizardProjectPath("");
         setWizardOpen(true);
       }} onEditDigitalHuman={setEditingSettingsHuman} />

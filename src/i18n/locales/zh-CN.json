@@ -1323,5 +1323,11 @@
   "room-chat.71": "{{v0}}等 {{v1}} 步",
   "room-feed.5": "「{{v0}}」加入了协作",
   "room-feed.6": "↻ {{v0}} 重新接手这个任务",
-  "room-feed.7": "🔀 任务已转派给「{{v0}}」"
+  "room-feed.7": "🔀 任务已转派给「{{v0}}」",
+  "SettingsView.107": "界面语言",
+  "SettingsView.108": "界面显示语言",
+  "SettingsView.109": "使用英文界面",
+  "SettingsView.110": "使用中文界面",
+  "SettingsView.111": "跟随系统",
+  "SettingsView.112": "中文系统显示中文，其他语言显示英文"
 }

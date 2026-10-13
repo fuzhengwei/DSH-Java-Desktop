@@ -1323,5 +1323,11 @@
   "room-chat.71": "{{v0}} plus {{v1}} more steps",
   "room-feed.5": "\"{{v0}}\" joined the collaboration",
   "room-feed.6": "↻ {{v0}} took over this task again",
-  "room-feed.7": "🔀 Task reassigned to \"{{v0}}\""
+  "room-feed.7": "🔀 Task reassigned to \"{{v0}}\"",
+  "SettingsView.107": "Interface language",
+  "SettingsView.108": "UI display language",
+  "SettingsView.109": "Use the interface in English",
+  "SettingsView.110": "Use the interface in Chinese",
+  "SettingsView.111": "Follow system",
+  "SettingsView.112": "Chinese UI on Chinese systems, English otherwise"
 }

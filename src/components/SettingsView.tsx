@@ -1,4 +1,4 @@
-import i18n from "../i18n";
+import i18n, { type LanguageSetting } from "../i18n";
 import { useState, type ReactNode } from "react";
 import { ArrowLeftIcon, SettingsIcon, ShieldIcon, SlidersIcon } from "./icons";
 import PluginsSettings from "./PluginsSettings";
@@ -19,6 +19,9 @@ type SettingsViewProps = {
   reasoningEffort: ReasoningEffort;
   onApprovalModeChange: (mode: ApprovalMode) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  /** 界面语言设置（English / 中文 / 跟随系统） */
+  language: LanguageSetting;
+  onLanguageChange: (language: LanguageSetting) => void;
   draft: ModelDraft;
   modelSettings: ModelSetting[];
   availableModels: AvailableModel[];
@@ -43,6 +46,24 @@ type SettingsViewProps = {
   /** 打开编辑数字人弹窗（App.tsx 内统一渲染弹窗实例） */
   onEditDigitalHuman: (human: DigitalHuman) => void;
 };
+// 语言选项标题用「各语言自称」硬编码：English 环境下也要能认出「中文」选项
+const languageOptions: Array<{
+  value: LanguageSetting;
+  title: string;
+  detail: string;
+}> = [{
+  value: "en",
+  title: "English",
+  detail: t("SettingsView.109")
+}, {
+  value: "zh",
+  title: "中文",
+  detail: t("SettingsView.110")
+}, {
+  value: "system",
+  title: t("SettingsView.111"),
+  detail: t("SettingsView.112")
+}];
 const approvalOptions: Array<{
   value: ApprovalMode;
   title: string;
@@ -180,6 +201,8 @@ export default function SettingsView({
   reasoningEffort,
   onApprovalModeChange,
   onReasoningEffortChange,
+  language,
+  onLanguageChange,
   draft,
   modelSettings,
   availableModels,
@@ -421,6 +444,20 @@ export default function SettingsView({
             </> : null}
 
           {activeSection === "preferences" ? <>
+              <div className="set-section-label">{t("SettingsView.107")}</div>
+              <section className="set-card">
+                <div className="set-option-list" role="radiogroup" aria-label={t("SettingsView.108")}>
+                  {languageOptions.map(option => <label key={option.value} className={`set-option ${language === option.value ? "active" : ""}`}>
+                      <input type="radio" name="ui-language" checked={language === option.value} onChange={() => onLanguageChange(option.value)} />
+                      <div className="set-row-main">
+                        <strong>{option.title}</strong>
+                        <span>{option.detail}</span>
+                      </div>
+                      <i aria-hidden="true">{language === option.value ? t("SettingsView.86") : ""}</i>
+                    </label>)}
+                </div>
+              </section>
+
               <div className="set-section-label">{t("SettingsView.84")}</div>
               <section className="set-card">
                 <div className="set-option-list" role="radiogroup" aria-label={t("SettingsView.85")}>
