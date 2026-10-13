@@ -61,9 +61,11 @@ jobs:
         if: inputs.platform == 'linux'
         run: |
           set -euo pipefail
-          JAVA_LIBJVM="${JAVA_HOME}/lib/server/libjvm.so"
+          # ubuntu-22.04 runner 默认 JAVA_HOME 指向 JDK 11，而 bundled JRE 是 17，
+          # JNI 库版本需一致：优先用 runner 预装的 JDK 17（JAVA_HOME_17_X64）
+          JAVA_LIBJVM="${JAVA_HOME_17_X64:-${JAVA_HOME}}/lib/server/libjvm.so"
           if [ ! -f "${JAVA_LIBJVM}" ]; then
-            # setup-java 的 JAVA_HOME 在部分 runner 镜像上指向 JRE，JNI 库在不同位置
+            # runner 镜像的 JAVA_HOME 可能指向 JRE 或其他版本，扫 /usr/lib/jvm 兜底
             JAVA_LIBJVM="$(find /usr/lib/jvm -name libjvm.so -path '*server*' 2>/dev/null | head -1 || true)"
           fi
           if [ -z "${JAVA_LIBJVM}" ] || [ ! -f "${JAVA_LIBJVM}" ]; then

@@ -15,7 +15,10 @@ jobs:
     secrets: inherit
     with:
       platform: linux
-      runner: ubuntu-latest
+      # 固定 ubuntu-22.04：glibc 2.35 基线。在更新内核（24.04/glibc 2.39）上构建的
+      # AppImage 无法在 22.04 及大量存量发行版上启动（GLIBC 版本符号缺失）；
+      # 在旧基线构建则向上兼容新系统。ubuntu-latest 将迁移到 26，故显式固定。
+      runner: ubuntu-22.04
       target: x86_64-unknown-linux-gnu
       runtime-target: linux-x64
       release-tag-prefix: dsh-java-desktop-v
