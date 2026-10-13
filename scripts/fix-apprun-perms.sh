@@ -34,7 +34,10 @@ if [ "$MODE" = "verify" ]; then
   TARGETS=("$@")
   if [ ${#TARGETS[@]} -eq 0 ]; then
     shopt -s nullglob
-    TARGETS=(src-tauri/target/release/bundle/appimage/*.AppImage)
+    # tauri build 带 --target <triple> 时产物在 target/<triple>/release/ 下；
+    # 无交叉参数时在 target/release/ 下。两类都扫。
+    TARGETS=(src-tauri/target/*/release/bundle/appimage/*.AppImage
+             src-tauri/target/release/bundle/appimage/*.AppImage)
     shopt -u nullglob
   fi
   rc=0
@@ -124,12 +127,11 @@ PY
   exit $rc
 fi
 
-# ---- 默认模式：对 AppDir staging 规范权限（CI 中 tauri build 后调用，
-#      针对 linuxdeploy 已跑完但 appimagetool 尚未打包的场景不可行，
-#      因此 CI 实际用法：build 前 umask 022 + 本脚本在 build 后 verify） ----
+# ---- 默认模式：对 AppDir staging 规范权限（同 verify 的 glob 逻辑） ----
 STAGE_BASES=(
-  "${TAURI_DIR:-src-tauri}/target/release/bundle/appimage"
-  "${TAURI_DIR:-src-tauri}/target/debug/bundle/appimage"
+  src-tauri/target/*/release/bundle/appimage
+  src-tauri/target/release/bundle/appimage
+  src-tauri/target/debug/bundle/appimage
 )
 
 found=0
