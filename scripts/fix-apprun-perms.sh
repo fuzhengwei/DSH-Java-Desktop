@@ -41,19 +41,25 @@ if [ "$MODE" = "verify" ]; then
   for img in "${TARGETS[@]}"; do
     [ -f "$img" ] || continue
     # AppRun ELF 位于 runtime 之后；用 unsquashfs 读取 AppRun 权限
-    OFFSET=$(python3 - "$img" <<'PY'
+    # squashfs superblock ('hsqs') 紧跟 runtime ELF。AppImage 规范：runtime 的
+    # squashfs 起始偏移记录在自身（--appimage-offset），优先用它。
+    OFFSET=$("$img" --appimage-offset 2>/dev/null || true)
+    if [ -z "${OFFSET}" ]; then
+      # 无 FUSE/无法执行时退化为扫描（取最后一个 hsqs——前面的是 ELF 内容巧合）
+      OFFSET=$(python3 - "$img" <<'PY'
 import sys
-data = open(sys.argv[1], 'rb').read(1024*1024)
-f = open(sys.argv[1], 'rb')
-f.seek(0, 2); total = f.tell()
-# runtime ELF 大小：squashfs superblock ('hsqs') 通常紧跟 runtime
-import struct
-# 简化：找 'hsqs' 出现位置（跳过文件名里可能的巧合，取第一个 4K 对齐或紧邻 runtime 的）
-idx = data.find(b'hsqs')
-# AppImage runtime 一般 < 1MB；hsqs 在 runtime 末尾
-print(idx if idx > 0 else 944632)
+data = open(sys.argv[1], 'rb').read(2 * 1024 * 1024)
+idxs = []
+i = 0
+while True:
+    i = data.find(b'hsqs', i + 1)
+    if i < 0:
+        break
+    idxs.append(i)
+print(idxs[-1] if idxs else 0)
 PY
 )
+    fi
     echo "[fix-apprun-perms] checking $img (squashfs at offset $OFFSET)"
     if command -v unsquashfs >/dev/null 2>&1; then
       TMPDIR_CHECK=$(mktemp -d)
@@ -62,7 +68,8 @@ PY
         for f in "$TMPDIR_CHECK/root/AppRun" "$TMPDIR_CHECK/root/AppRun.wrapped"; do
           [ -f "$f" ] || continue
           PERMS=$(stat -c "%a" "$f" 2>/dev/null || stat -f "%Lp" "$f")
-          OTHERS_EXEC=$(( 8#$(echo "$PERMS" | cut -c9) & 1 ))
+          # perms 可能是 3 位（755）或 4 位（0755），others exec 位 = 最后一位的最低位
+          OTHERS_EXEC=$(( 8#${PERMS: -1} & 1 ))
           if [ "$OTHERS_EXEC" -ne 1 ]; then
             echo "ERROR: $f permission is $PERMS — others cannot execute (firejail will fail)"
             BAD=1
@@ -71,7 +78,42 @@ PY
         if [ -z "$BAD" ]; then
           echo "[fix-apprun-perms] OK: AppRun/AppRun.wrapped are world-executable"
         else
-          rc=1
+          # 权限有问题：就地重打包（解包→修权限→mksquashfs→拼回 runtime）
+          echo "[fix-apprun-perms] repacking $img with fixed permissions..."
+          WORK=$(mktemp -d)
+          unsquashfs -o "$OFFSET" -d "$WORK/root" "$img" > /dev/null 2>&1
+          setfacl -Rb "$WORK/root" 2>/dev/null || true
+          find "$WORK/root" -type d -exec chmod 755 {} +
+          find "$WORK/root" -type f -exec chmod 644 {} +
+          find "$WORK/root" -type f \( -name "*.so" -o -name "*.so.*" -o -name "AppRun*" \
+            -o -name "jspawnhelper" \) -exec chmod 755 {} +
+          # 主程序与所有原本带执行位的二进制
+          find "$WORK/root/usr/bin" -type f -exec chmod 755 {} + 2>/dev/null || true
+          RUNTIME_DIR="$WORK/root/usr/lib/DSH Java Desktop/agent/runtime"
+          if [ -d "$RUNTIME_DIR/bin" ]; then
+            chmod 755 "$RUNTIME_DIR/bin/"*
+            find "$RUNTIME_DIR" -type f -perm /111 -exec chmod 755 {} + 2>/dev/null || true
+            find "$RUNTIME_DIR/lib" -name "*.so" -exec chmod 755 {} + 2>/dev/null || true
+          fi
+          find "$WORK/root" -type f -perm /111 -exec chmod 755 {} + 2>/dev/null || true
+          find "$WORK/root/usr/lib" -type f \( -name "WebKitNetworkProcess" -o -name "WebKitWebProcess" \) -exec chmod 755 {} + 2>/dev/null || true
+          # 重新打包：mksquashfs + 拼接 runtime
+          RUNTIME_SIZE=$OFFSET
+          head -c "$RUNTIME_SIZE" "$img" > "$WORK/runtime"
+          mksquashfs "$WORK/root" "$WORK/payload.squashfs" -root-owned -noappend -comp zstd -Xcompression-level 19 -quiet > /dev/null 2>&1 \
+            || mksquashfs "$WORK/root" "$WORK/payload.squashfs" -root-owned -noappend -quiet > /dev/null 2>&1
+          cat "$WORK/runtime" "$WORK/payload.squashfs" > "$WORK/fixed.AppImage"
+          chmod 755 "$WORK/fixed.AppImage"
+          mv "$WORK/fixed.AppImage" "$img"
+          rm -rf "$WORK"
+          echo "[fix-apprun-perms] repacked: $img"
+          # 复检
+          if bash "$0" verify "$img"; then
+            echo "[fix-apprun-perms] final verify passed"
+          else
+            echo "ERROR: repack verification failed for $img"
+            rc=1
+          fi
         fi
       else
         echo "WARNING: could not unpack $img for verification (unsquashfs too old?)"
