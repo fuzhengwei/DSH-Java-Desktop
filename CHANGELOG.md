@@ -2,6 +2,21 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 约定。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.3] - 2026-10-13
+
+### 新增
+- 界面语言切换（设置 → 偏好）：支持 English / 中文 / 跟随系统 三选一，切换即时生效并持久化；「跟随系统」按系统 locale 自动选择（中文系统显示中文，其他语言显示英文）。
+- 浏览器开发调试支持 `?lang=en` / `?lang=zh` 强制指定语言。
+
+### 变更
+- 界面默认语言改为英文（面向国际分发；中文用户可在设置中切换为中文）。
+
+### 修复
+- Linux AppImage 打包失败：捆绑 JRE 的 JNI 库依赖 libjvm.so 导致 linuxdeploy 解析依赖报错，构建前将其软链至系统库目录解决。
+
+### 其他
+- 安装包元数据版本同步升级至 0.1.3（package.json / tauri.conf.json / Cargo.toml）。
+
 ## [0.1.2] - 2026-10-13
 
 ### 新增
