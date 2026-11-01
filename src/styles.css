@@ -9957,3 +9957,141 @@ select:focus-visible {
 .filter-reset:hover {
   color: var(--text);
 }
+
+/* ── 飞书 Bot 设置 ───────────────────────────── */
+.pairing-start-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pairing-name-input {
+  max-width: 280px;
+  padding: 8px 12px;
+  border: 1px solid var(--set-border, #d9d9d9);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+}
+
+.pairing-status-card {
+  border: 1px solid var(--set-border, #d9d9d9);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.pairing-status-title {
+  font-weight: 600;
+  color: #f59e0b;
+}
+
+.pairing-status-title.ok {
+  color: #22c55e;
+}
+
+.pairing-status-title.bad {
+  color: #ef4444;
+}
+
+.pairing-meta {
+  opacity: 0.85;
+}
+
+.pairing-meta.muted {
+  opacity: 0.55;
+  font-size: 12px;
+}
+
+.pairing-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 4px 0;
+}
+
+.pairing-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.pairing-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-direction: row !important;
+}
+
+.pairing-check input {
+  width: auto;
+}
+
+.pairing-hint {
+  font-size: 12px;
+  opacity: 0.6;
+  margin: 10px 0 0;
+}
+
+.bot-card {
+  border: 1px solid var(--set-border, #d9d9d9);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.bot-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.bot-card-sub {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.bot-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9ca3af;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.bot-dot.live {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.55);
+}
+
+.set-chip.warn {
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
+.bot-card-info {
+  font-size: 12px;
+  opacity: 0.65;
+  line-height: 1.8;
+}
+
+.bot-card-error {
+  color: #ef4444;
+  opacity: 1;
+}
+
+.bot-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

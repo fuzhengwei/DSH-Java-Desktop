@@ -3,6 +3,7 @@ import { ArrowLeftIcon, SettingsIcon, ShieldIcon, SlidersIcon } from "./icons";
 import PluginsSettings from "./PluginsSettings";
 import { CliSettings, McpSettings, SkillsSettings } from "./ExtensionsSettings";
 import { DigitalHumansSettings } from "./DigitalHumansSettings";
+import FeishuBotsSettings from "./FeishuBotsSettings";
 import type {
   AgentServiceState,
   ApprovalMode,
@@ -14,7 +15,7 @@ import type {
   WorkspaceEntry,
 } from "../types";
 
-export type SettingsSection = "models" | "digital-humans" | "service" | "preferences" | "plugins" | "skills" | "mcp" | "cli";
+export type SettingsSection = "models" | "digital-humans" | "feishu-bots" | "service" | "preferences" | "plugins" | "skills" | "mcp" | "cli";
 
 type SettingsViewProps = {
   service: AgentServiceState | null;
@@ -124,6 +125,18 @@ function UsersGlyph({ className }: { className?: string }) {
   );
 }
 
+function BotIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect x="4.5" y="8" width="15" height="11" rx="2.5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M12 8V4.5M9.5 4.5h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <circle cx="9" cy="13" r="1.2" fill="currentColor" />
+      <circle cx="15" cy="13" r="1.2" fill="currentColor" />
+      <path d="M9.5 16.2h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function CloseIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" className={className}>
@@ -211,6 +224,7 @@ export default function SettingsView({
   const sections: Array<{ id: SettingsSection; title: string; description: string; badge?: string; icon: ReactNode; group: string }> = [
     { id: "models", title: "模型", description: "管理模型渠道、API Key，切换当前使用的模型", badge: String(modelSettings.length), icon: <SlidersIcon className="icon-16" />, group: "AI 能力" },
     { id: "digital-humans", title: "数字人", description: "管理数字员工：角色、授权、项目归属与健康状态", badge: String(digitalHumans.length), icon: <UsersGlyph className="icon-16" />, group: "AI 能力" },
+    { id: "feishu-bots", title: "飞书 Bot", description: "一键绑定飞书：扫码即建应用，长连接收发、流式回复", icon: <BotIcon className="icon-16" />, group: "AI 能力" },
     { id: "skills", title: "Skills 技能", description: "安装技能包（压缩包 / Git）、启停与删除", icon: <SkillsIcon className="icon-16" />, group: "扩展" },
     { id: "mcp", title: "MCP 服务", description: "添加、测试与管理 MCP server 连接", icon: <McpIcon className="icon-16" />, group: "扩展" },
     { id: "cli", title: "CLI 子智能体", description: "配置 claude / codex / ACP 外部 CLI 命令", icon: <CliIcon className="icon-16" />, group: "扩展" },
@@ -340,6 +354,10 @@ export default function SettingsView({
               onChanged={onDigitalHumansChanged}
               onEditHuman={onEditDigitalHuman}
             />
+          ) : null}
+
+          {activeSection === "feishu-bots" ? (
+            <FeishuBotsSettings servicePort={service?.port ?? null} />
           ) : null}
 
           {activeSection === "plugins" ? (

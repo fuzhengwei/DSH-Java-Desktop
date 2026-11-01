@@ -97,7 +97,7 @@ async function requestOnce<T>(port: number, path: string, init?: RequestInit, ti
   return payload.data as T;
 }
 
-async function request<T>(port: number, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+export async function request<T>(port: number, path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   try {
     return await requestOnce<T>(port, path, init, timeoutMs);
   } catch (error) {
